@@ -70,9 +70,9 @@ Here's a blank template to get started:
 
 ### Built With
 
-- [Javalin framework](https://javalin.io/)
-- [Log4j2](https://logging.apache.org/log4j/2.x/) + [YAML](https://yaml.org/)
-- [Junit 5](https://junit.org/junit5/)
+
+
+
 
 <!-- GETTING STARTED -->
 
