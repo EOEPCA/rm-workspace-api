@@ -190,39 +190,6 @@ def install_workspace_phase2(workspace_name) -> None:
                         "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
                     }
                 },
-                "registrar": {
-                    "configureEOxServer": False,
-                    "schemes": [
-                        {
-                            "type": "stac-item",
-                        },
-                        {
-                            "path": "registrar_pycsw.scheme.CWLRegistrationScheme",
-                        },
-                    ],
-                    "backends": [
-                        {
-                            "path": "registrar.backend.EOxServerBackend",
-                            "schemes": ["stac-item"],
-                            "kwargs": {
-                                "instance_base_path": "/var/www/pvs/dev",
-                                "instance_name": "pvs_instance",
-                                "mapping": {
-                                    "": {
-                                        "": {},
-                                    },
-                                },
-                            },
-                        },
-                        {
-                            "path": "registrar_pycsw.backend.PycswBackend",
-                            "kwargs": {
-                                "repository_database_uri": "postgresql://postgres:mypass@resource-catalogue-db/pycsw",
-                                "ows_url": f"https://{ingress_host}/ows",
-                            },
-                        },
-                    ],
-                },
             },
         },
         "rm-resource-catalogue": {
@@ -237,7 +204,7 @@ def install_workspace_phase2(workspace_name) -> None:
             "ingress": {
                 "host": pycsw_server_url,
                 "tls_host": pycsw_server_url,
-            },
+            }
         },
         "global": {
             "namespace": workspace_name,
@@ -409,8 +376,7 @@ async def register(
     k8s_namespace = workspace_name
     client = await aioredis.create_redis(
         # TODO: make this configurable of better
-        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
-        encoding="utf-8",
+        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT), encoding="utf-8"
     )
 
     # get the URL and extract the path from the S3 URL
