@@ -384,7 +384,10 @@ async def register(
     # get the URL and extract the path from the S3 URL
     try:
         parsed_url = urlparse(product.url)
-        url = parsed_url.netloc + parsed_url.path
+        netloc = parsed_url.netloc
+        if ':' in netloc:
+            netloc = netloc.rpartition(':')[2]
+        url = netloc + parsed_url.path
 
         await client.lpush(config.REGISTER_QUEUE, url)
 
