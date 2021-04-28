@@ -180,14 +180,16 @@ def install_workspace_phase2(workspace_name) -> None:
             "config": {
                 "objectStorage": {
                     "data": {
-                        # TODO: this values are secret, pass them as secret
-                        "access_key_id": base64.b64decode(
-                            secret.data["access"]
-                        ).decode(),
-                        "secret_access_key": base64.b64decode(
-                            secret.data["secret"]
-                        ).decode(),
-                        "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
+                        "data": {
+                            # TODO: this values are secret, pass them as secret
+                            "access_key_id": base64.b64decode(
+                                secret.data["access"]
+                            ).decode(),
+                            "secret_access_key": base64.b64decode(
+                                secret.data["secret"]
+                            ).decode(),
+                            "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
+                        }
                     }
                 },
             },
