@@ -141,7 +141,7 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
-def install_workspace_phase2(workspace_name) -> None:
+def install_workspace_phase2(workspace_name, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
@@ -213,9 +213,15 @@ def install_workspace_phase2(workspace_name) -> None:
         },
     }
 
+    api = k8s_client.CustomObjectsApi()
+    if patch:
+        api.patch_namespaced_custom_object
+    else:
+        api.create_namespaced_custom_object
+
     group = "helm.toolkit.fluxcd.io"
     version = "v2beta1"
-    k8s_client.CustomObjectsApi().create_namespaced_custom_object(
+    install_method(
         group=group,
         plural="helmreleases",
         version=version,
@@ -360,6 +366,19 @@ def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_
             body={"data": {"quota_in_mb": str(storage.quota_in_mb)}},
         )
 
+    return Response(status_code=HTTPStatus.NO_CONTENT)
+
+
+@app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
+def redeploy_workspace(workspace_name: str = workspace_path_type):
+    if not namespace_exists(workspace_name):
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
+
+    background_tasks.add_task(
+        install_workspace_phase2,
+        workspace_name=workspace_name,
+        patch=True
+    )
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
 
