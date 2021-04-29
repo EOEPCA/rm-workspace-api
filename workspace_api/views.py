@@ -370,7 +370,8 @@ def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_
 
 
 @app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
-def redeploy_workspace(workspace_name: str = workspace_path_type):
+def redeploy_workspace(background_tasks: BackgroundTasks,
+                       workspace_name: str = workspace_path_type):
     if not namespace_exists(workspace_name):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
 
