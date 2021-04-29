@@ -215,9 +215,9 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
 
     api = k8s_client.CustomObjectsApi()
     if patch:
-        api.patch_namespaced_custom_object
+        install_method = api.patch_namespaced_custom_object
     else:
-        api.create_namespaced_custom_object
+        install_method = api.create_namespaced_custom_object
 
     group = "helm.toolkit.fluxcd.io"
     version = "v2beta1"
