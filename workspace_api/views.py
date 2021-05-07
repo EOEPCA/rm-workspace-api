@@ -215,35 +215,43 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         },
     }
 
-    api = k8s_client.CustomObjectsApi()
-    if patch:
-        install_method = api.patch_namespaced_custom_object
-    else:
-        install_method = api.create_namespaced_custom_object
-
     group = "helm.toolkit.fluxcd.io"
     version = "v2beta1"
-    install_method(
-        group=group,
-        plural="helmreleases",
-        version=version,
-        namespace=workspace_name,
-        body={
-            "apiVersion": f"{group}/{version}",
-            "kind": "HelmRelease",
-            "metadata": {
-                "name": "workspace",
-                "namespace": workspace_name,
-            },
-            "spec": {
-                "chart": chart,
-                "interval": "1h0m0s",
-                "releaseName": "workspace",
-                "targetNamespace": workspace_name,
-                "values": values,
-            },
+    body = {
+        "apiVersion": f"{group}/{version}",
+        "kind": "HelmRelease",
+        "metadata": {
+            "name": "workspace",
+            "namespace": workspace_name,
         },
-    )
+        "spec": {
+            "chart": chart,
+            "interval": "1h0m0s",
+            "releaseName": "workspace",
+            "targetNamespace": workspace_name,
+            "values": values,
+        },
+    }
+
+    api = k8s_client.CustomObjectsApi()
+
+    if patch:
+        api.patch_namespaced_custom_object(
+            name="workspace",
+            group=group,
+            plural="helmreleases",
+            version=version,
+            namespace=workspace_name,
+            body=body,
+        )
+    else:
+        api.create_namespaced_custom_object(
+            group=group,
+            plural="helmreleases",
+            version=version,
+            namespace=workspace_name,
+            body=body,
+        )
 
 
 def workspace_name_from_preferred_name(preferred_name: str):
