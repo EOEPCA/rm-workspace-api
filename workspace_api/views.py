@@ -199,9 +199,11 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 "namespace": workspace_name,
             },
             "pycsw": {
-                "server": {
-                    "url": f"http://{pycsw_server_url}",
-                }
+                "config": {
+                    "server": {
+                        "url": f"http://{pycsw_server_url}",
+                    },
+                },
             },
             "ingress": {
                 "host": pycsw_server_url,
