@@ -236,22 +236,42 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     api = k8s_client.CustomObjectsApi()
 
     if patch:
-        api.patch_namespaced_custom_object(
-            name="workspace",
+        response = api.list_namespaced_custom_object(
             group=group,
             plural="helmreleases",
             version=version,
             namespace=workspace_name,
-            body=body,
         )
-    else:
-        api.create_namespaced_custom_object(
-            group=group,
-            plural="helmreleases",
-            version=version,
-            namespace=workspace_name,
-            body=body,
-        )
+        found_hr = False
+        for item in response['items']:
+            try:
+                if item['spec']['releaseName'] == 'workspace':
+                    found_hr = True
+                    break
+
+            except KeyError:
+                pass
+
+        # try patching the HR first
+        if found_hr:
+            api.patch_namespaced_custom_object(
+                name="workspace",
+                group=group,
+                plural="helmreleases",
+                version=version,
+                namespace=workspace_name,
+                body=body,
+            )
+            return
+
+    # fallback to (re-)create the HR
+    api.create_namespaced_custom_object(
+        group=group,
+        plural="helmreleases",
+        version=version,
+        namespace=workspace_name,
+        body=body,
+    )
 
 
 def workspace_name_from_preferred_name(preferred_name: str):
