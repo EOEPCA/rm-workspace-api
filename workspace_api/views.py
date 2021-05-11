@@ -189,6 +189,8 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                                 secret.data["secret"]
                             ).decode(),
                             "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
+                            "endpoint_url": config.S3_ENDPOINT,
+                            "region": config.S3_REGION,
                         }
                     }
                 },
