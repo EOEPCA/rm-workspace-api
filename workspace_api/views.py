@@ -344,6 +344,9 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         ),
     )
     """
+    credentials = {k: base64.b64decode(v) for k, v in secret.data.items()}
+    credentials["endpoint"] = config.S3_ENDPOINT
+    credentials["region"] = config.S3_REGION
 
     return Workspace(
         status=WorkspaceStatus.ready,  # only ready workspaces can be serialized
@@ -355,7 +358,7 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
             for ingress in ingresses
         ],
         storage=Storage(
-            credentials={k: base64.b64decode(v) for k, v in secret.data.items()},
+            credentials=credentials,
             # quota_in_mb=int(configmap.data["quota_in_mb"]),
         ),
     )

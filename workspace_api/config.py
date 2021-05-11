@@ -15,6 +15,9 @@ GIT_REPO_RESOURCE_FOR_HELM_CHART_NAMESPACE = os.environ[
 HELM_CHART_NAME = os.environ["HELM_CHART_NAME"]
 HELM_CHART_VERSION = os.environ["HELM_CHART_VERSION"]
 
+S3_ENDPOINT = os.environ["S3_ENDPOINT"]
+S3_REGION = os.environ["S3_REGION"]
+
 # TODO: whitelistings = list of strings (applied to helm chart)
 
 # registration endpoint variables
