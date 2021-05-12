@@ -159,9 +159,16 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         }
     }
 
-    domain = "185.52.193.87.nip.io"
-    ingress_host = f"data-access-{workspace_name}.{domain}"
+    domain = config.WORKSPACE_DOMAIN
+    ingress_host = f"data-access.{workspace_name}.{domain}"
     pycsw_server_url = f"resource-catalogue.{workspace_name}.{domain}"
+    bucket = base64.b64decode(
+        secret.data["bucketname"]
+    ).decode()
+    projectid = base64.b64decode(
+        secret.data["projectid"]
+    ).decode()
+
     values = {
         "vs": {
             "ingress": {
@@ -188,11 +195,39 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                             "secret_access_key": base64.b64decode(
                                 secret.data["secret"]
                             ).decode(),
-                            "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
+                            "bucket": bucket,
                             "endpoint_url": config.S3_ENDPOINT,
                             "region": config.S3_REGION,
-                        }
-                    }
+                        },
+                    },
+                },
+                "registrar": {
+                    "backends": [{
+                        "path": "registrar.backend.EOxServerBackend",
+                        "schemes": [
+                            "stac-item"
+                        ],
+                        "kwargs": {
+                            "instance_base_path": "/var/www/pvs/dev",
+                            "instance_name": "pvs_instance",
+                            "mapping": {
+                                '': {
+                                    '': {},
+                                }
+                            },
+                        },
+                    }, {
+                        "path": "registrar_pycsw.backend.PycswBackend",
+                        "kwargs": {
+                            "repository_database_uri": (
+                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                            ),
+                            "ows_url": f"https://{ingress_host}/ows",
+                            "public_s3_url": (
+                                f'{config.S3_ENDPOINT}/{projectid}:{bucket}'
+                            ),
+                        },
+                    }],
                 },
             },
         },
