@@ -213,8 +213,8 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                             # TODO: delete this mapping after the Demo and
                             # figure out a better way to go forward
                             "mapping": {
-                                None: {
-                                    None: {
+                                '': {
+                                    '': {
                                         'product_type_name': \
                                         'nhi1_nhi1_bitmask_nhi2_nhi2_bitmask',
                                         'coverages': {
