@@ -210,9 +210,21 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                         "kwargs": {
                             "instance_base_path": "/var/www/pvs/dev",
                             "instance_name": "pvs_instance",
+                            # TODO: delete this mapping after the Demo and
+                            # figure out a better way to go forward
                             "mapping": {
-                                '': {
-                                    '': {},
+                                None: {
+                                    None: {
+                                        'product_type_name': \
+                                        'nhi1_nhi1_bitmask_nhi2_nhi2_bitmask',
+                                        'coverages': {
+                                            'nhi1': 'nhi1',
+                                            'nhi1_bitmask': 'nhi1_bitmask',
+                                            'nhi2': 'nhi2',
+                                            'nhi2_bitmask': 'nhi2_bitmask',
+                                        },
+                                        'collections': ['DATA']
+                                    },
                                 }
                             },
                         },
