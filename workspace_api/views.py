@@ -8,6 +8,7 @@ from typing import cast, Optional, List, Dict
 import asyncio
 from urllib.parse import urlparse
 import logging
+import json
 
 from fastapi import HTTPException, Path, Response, Request, BackgroundTasks
 from fastapi.responses import JSONResponse
@@ -474,13 +475,14 @@ class Product(BaseModel):
 
 
 @app.post("/workspaces/{workspace_name}/register")
-async def register(
-    product: Product, request: Request, workspace_name: str = workspace_path_type
-):
+async def register(product: Product,
+                   workspace_name: str = workspace_path_type):
+
     k8s_namespace = workspace_name
     client = await aioredis.create_redis(
         # TODO: make this configurable of better
-        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT), encoding="utf-8"
+        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
+        encoding="utf-8"
     )
 
     # get the URL and extract the path from the S3 URL
@@ -522,3 +524,39 @@ async def register(
     except Exception as e:
         message = {"message": f"Registration failed: {e}"}
         return JSONResponse(status_code=400, content=message)
+
+
+class DeregisterProduct(BaseModel):
+    identifier: Optional[str]
+    url: Optional[str]
+
+
+@app.post("/workspaces/{workspace_name}/deregister")
+async def deregister(deregister_product: DeregisterProduct,
+                     workspace_name: str = workspace_path_type):
+
+    k8s_namespace = workspace_name
+    client = await aioredis.create_redis(
+        # TODO: make this configurable of better
+        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
+        encoding="utf-8"
+    )
+
+    if deregister_product.url:
+        parsed_url = urlparse(deregister_product.url)
+        netloc = parsed_url.netloc
+        if ':' in netloc:
+            netloc = netloc.rpartition(':')[2]
+        url = netloc + parsed_url.path
+        data = {'url': url}
+    elif deregister_product.identifier:
+        data = {'identifier': deregister_product.identifier}
+    else:
+        # TODO: return exception
+        pass
+
+    await client.lpush(config.DEREGISTER_QUEUE, json.dumps(data))
+    # TODO: get result?
+
+    message = {"message": f"Item '{data}' was successfully de-registered"}
+    return JSONResponse(status_code=200, content=message)

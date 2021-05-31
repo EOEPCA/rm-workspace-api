@@ -27,6 +27,7 @@ REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "register_queue")
 PROGRESS_SET = os.environ.get("REDIS_REGISTER_PROGRESS_KEY", "registering_set")
 SUCCESS_SET = os.environ.get("REDIS_REGISTER_SUCCESS_KEY", "register-success_set")
 FAILURE_SET = os.environ.get("REDIS_REGISTER_FAILURE_KEY", "register-failure_set")
+DEREGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "deregister_queue")
 REGISTRATION_CHECK_INTERVAL = float(
     os.environ.get("REGISTRATION_CHECK_INTERVAL", "0.3")
 )
