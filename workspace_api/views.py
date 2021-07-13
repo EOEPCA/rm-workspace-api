@@ -153,7 +153,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
             "chart": config.HELM_CHART_NAME,
             "version": config.HELM_CHART_VERSION,
             "sourceRef": {
-                "kind": "GitRepository",
+                "kind": "HelmRepository",
                 "name": config.GIT_REPO_RESOURCE_FOR_HELM_CHART_NAME,
                 "namespace": config.GIT_REPO_RESOURCE_FOR_HELM_CHART_NAMESPACE,
             },
