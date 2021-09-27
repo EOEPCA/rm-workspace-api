@@ -142,9 +142,18 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
+def create_uma_client_secret(client_id: str, client_secret: str) -> V1Secret:
+    # TODO create a sealed secret here
+    pass
+
+
 def install_workspace_phase2(workspace_name, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
+
+    uma_client_secret = create_uma_client_secret(
+        config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET
+    )
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
@@ -259,6 +268,60 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 "host": pycsw_server_url,
                 "tls_host": pycsw_server_url,
             }
+        },
+        "resource-guard": {
+            "global": {
+                "pep": "resource-catalogue-pep",
+                "domain": "demo.eoepca.org",
+                "nginxIp": "185.52.195.19",
+                "certManager": {
+                    "clusterIssuer": "letsencrypt",
+                },
+            },
+            "pep-engine": {
+                "context": "",  # TODO: user resource management
+                "configMap": {
+                    "workingMode": "PARTIAL",
+                    "asHostname": "test",
+                    "pdpHostname": "test",
+                },
+                "nginxIntegration": {
+                    "enabled": False
+                    # hostname: resource-catalogue-auth
+                },
+                # image:
+                #   pullPolicy: Always
+                "volumeClaim": {
+                    "name": "eoepca-resman-pvc",  # TODO: volume claim? automatic?
+                    "create": "false",
+                },
+            },
+            "uma-user-agent": {
+                "fullnameOverride": "",  # TODO
+                # image:
+                #   tag: latest
+                #   pullPolicy: Always
+                "nginxIntegration": {
+                    "enabled": True,
+                    "hostname": "resource-catalogue",  # TODO: multiple endpoints?
+                    "paths": [{
+                        "path": "/",
+                        "service": {
+                            "name": "resource-catalogue-service",
+                            "port": 80,
+                        }
+                    }]
+                },
+                "client": {
+                    "credentialsSecretName": "rm-uma-user-agent",  # TODO: dynamically create
+                },
+                "logging": {
+                    "level": "debug",
+                },
+                "unauthorizedResponse": 'Bearer realm="https://portal.demo.eoepca.org/oidc/authenticate/"', #  TODO: correct domain
+                "openAccess": True
+            },
+
         },
         "global": {
             "namespace": workspace_name,

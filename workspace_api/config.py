@@ -33,3 +33,7 @@ REGISTRATION_CHECK_INTERVAL = float(
 )
 REGISTRATION_TIME_OUT = int(os.environ.get("REGISTRATION_TIME_OUT", "300"))
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+
+# Guard specific values
+UMA_CLIENT_ID = os.environ["UMA_CLIENT_ID"]
+UMA_CLIENT_SECRET = os.environ["UMA_CLIENT_SECRET"]
