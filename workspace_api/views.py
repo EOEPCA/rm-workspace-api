@@ -271,15 +271,15 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         },
         "resource-guard": {
             "global": {
-                "pep": "resource-catalogue-pep",
-                "domain": "demo.eoepca.org",
+                "pep": f"{workspace_name}-resource-guard",
+                "domain": config.WORKSPACE_DOMAIN,
                 "nginxIp": "185.52.195.19",
                 "certManager": {
                     "clusterIssuer": "letsencrypt",
                 },
             },
             "pep-engine": {
-                "context": "",  # TODO: user resource management
+                "context": f"{workspace_name}-pep-engine",
                 "configMap": {
                     "workingMode": "PARTIAL",
                     "asHostname": "test",
@@ -292,8 +292,8 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 # image:
                 #   pullPolicy: Always
                 "volumeClaim": {
-                    "name": "eoepca-resman-pvc",  # TODO: volume claim? automatic?
-                    "create": "false",
+                    "name": f"eoepca-resman-pvc-{workspace_name}",
+                    "create": "true",
                 },
             },
             "uma-user-agent": {
@@ -303,22 +303,62 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 #   pullPolicy: Always
                 "nginxIntegration": {
                     "enabled": True,
-                    "hostname": "resource-catalogue",  # TODO: multiple endpoints?
-                    "paths": [{
-                        "path": "/",
-                        "service": {
-                            "name": "resource-catalogue-service",
-                            "port": 80,
-                        }
-                    }]
+                    "hosts": [{
+                        "host": "resource-catalogue",
+                        "paths": [{
+                            "path": "/",
+                            "service": {
+                                "name": "resource-catalogue-service",
+                                "port": 80,
+                            }
+                        }]
+                    }, {
+                        "host": "data-access",
+                        "paths": [{
+                            "path": "/(ows.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(opensearch.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(admin.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/cache/(.*)",
+                            "service": {
+                                "name": "data-access-vs-cache",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(.*)",
+                            "service": {
+                                "name": "data-access-vs-client",
+                                "port": 80,
+                            }
+                        }],
+                    }],
+                    "annotations": {
+                        "nginx.ingress.kubernetes.io/proxy-read-timeout": "600",
+                        "nginx.ingress.kubernetes.io/enable-cors": "true",
+                        "nginx.ingress.kubernetes.io/rewrite-target": "/$1",
+                    },
                 },
                 "client": {
-                    "credentialsSecretName": "rm-uma-user-agent",  # TODO: dynamically create
+                    "credentialsSecretName": "rm-uma-user-agent",  # TODO: use dynamically created secret name
                 },
                 "logging": {
                     "level": "debug",
                 },
-                "unauthorizedResponse": 'Bearer realm="https://portal.demo.eoepca.org/oidc/authenticate/"', #  TODO: correct domain
+                "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"', #  TODO: correct domain
                 "openAccess": True
             },
 
