@@ -142,9 +142,18 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
+def create_uma_client_secret(client_id: str, client_secret: str) -> V1Secret:
+    # TODO create a sealed secret here
+    pass
+
+
 def install_workspace_phase2(workspace_name, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
+
+    uma_client_secret = create_uma_client_secret(
+        config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET
+    )
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
@@ -259,6 +268,100 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 "host": pycsw_server_url,
                 "tls_host": pycsw_server_url,
             }
+        },
+        "resource-guard": {
+            "global": {
+                "pep": f"{workspace_name}-resource-guard",
+                "domain": config.WORKSPACE_DOMAIN,
+                "nginxIp": "185.52.195.19",
+                "certManager": {
+                    "clusterIssuer": "letsencrypt",
+                },
+            },
+            "pep-engine": {
+                "context": f"{workspace_name}-pep-engine",
+                "configMap": {
+                    "workingMode": "PARTIAL",
+                    "asHostname": "test",
+                    "pdpHostname": "test",
+                },
+                "nginxIntegration": {
+                    "enabled": False
+                    # hostname: resource-catalogue-auth
+                },
+                # image:
+                #   pullPolicy: Always
+                "volumeClaim": {
+                    "name": f"eoepca-resman-pvc-{workspace_name}",
+                    "create": "true",
+                },
+            },
+            "uma-user-agent": {
+                "fullnameOverride": "",  # TODO
+                # image:
+                #   tag: latest
+                #   pullPolicy: Always
+                "nginxIntegration": {
+                    "enabled": True,
+                    "hosts": [{
+                        "host": "resource-catalogue",
+                        "paths": [{
+                            "path": "/",
+                            "service": {
+                                "name": "resource-catalogue-service",
+                                "port": 80,
+                            }
+                        }]
+                    }, {
+                        "host": "data-access",
+                        "paths": [{
+                            "path": "/(ows.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(opensearch.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(admin.*)",
+                            "service": {
+                                "name": "data-access-vs-renderer",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/cache/(.*)",
+                            "service": {
+                                "name": "data-access-vs-cache",
+                                "port": 80,
+                            }
+                        }, {
+                            "path": "/(.*)",
+                            "service": {
+                                "name": "data-access-vs-client",
+                                "port": 80,
+                            }
+                        }],
+                    }],
+                    "annotations": {
+                        "nginx.ingress.kubernetes.io/proxy-read-timeout": "600",
+                        "nginx.ingress.kubernetes.io/enable-cors": "true",
+                        "nginx.ingress.kubernetes.io/rewrite-target": "/$1",
+                    },
+                },
+                "client": {
+                    "credentialsSecretName": "rm-uma-user-agent",  # TODO: use dynamically created secret name
+                },
+                "logging": {
+                    "level": "debug",
+                },
+                "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"', #  TODO: correct domain
+                "openAccess": True
+            },
+
         },
         "global": {
             "namespace": workspace_name,
