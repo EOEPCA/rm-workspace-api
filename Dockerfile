@@ -11,7 +11,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 ADD . .
 
-USER www-data
+RUN apt install wget && \
+    wget https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.16.0/kubeseal-linux-amd64 -O kubeseal && \
+    install -m 755 kubeseal /usr/local/bin/kubeseal
 
+USER www-data
 
 CMD ["gunicorn", "--bind=0.0.0.0:8080", "--config", "gunicorn.conf.py", "--workers=3", "-k", "uvicorn.workers.UvicornWorker", "--log-level=INFO", "workspace_api:app"]
