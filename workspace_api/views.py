@@ -277,9 +277,9 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 "certManager": {
                     "clusterIssuer": "letsencrypt",
                 },
+                "context": f"{workspace_name}-pep-engine",
             },
             "pep-engine": {
-                "context": f"{workspace_name}-pep-engine",
                 "configMap": {
                     "workingMode": "PARTIAL",
                     "asHostname": "test",
@@ -297,14 +297,14 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 },
             },
             "uma-user-agent": {
-                "fullnameOverride": "",  # TODO
+                "fullnameOverride": f"{workspace_name}-agent",
                 # image:
                 #   tag: latest
                 #   pullPolicy: Always
                 "nginxIntegration": {
                     "enabled": True,
                     "hosts": [{
-                        "host": "resource-catalogue",
+                        "host": f"resource-catalogue.{workspace_name}",
                         "paths": [{
                             "path": "/",
                             "service": {
@@ -313,7 +313,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                             }
                         }]
                     }, {
-                        "host": "data-access",
+                        "host": f"data-access.{workspace_name}",
                         "paths": [{
                             "path": "/(ows.*)",
                             "service": {
