@@ -170,8 +170,10 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     }
 
     domain = config.WORKSPACE_DOMAIN
-    ingress_host = f"data-access.{workspace_name}.{domain}"
-    pycsw_server_url = f"resource-catalogue.{workspace_name}.{domain}"
+    data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
+    data_access_host = f"data-access.{workspace_name}.{domain}"
+    catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
+    catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
     bucket = base64.b64decode(
         secret.data["bucketname"]
     ).decode()
@@ -184,12 +186,12 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
             "ingress": {
                 "hosts": [
                     {
-                        "host": ingress_host,
+                        "host": data_access_open_host,
                     },
                 ],
                 "tls": [
                     {
-                        "hosts": [ingress_host],
+                        "hosts": [data_access_open_host],
                         "secretName": "data-access-tls",
                     }
                 ],
@@ -244,7 +246,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                             "repository_database_uri": (
                                 "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
                             ),
-                            "ows_url": f"https://{ingress_host}/ows",
+                            "ows_url": f"https://{data_access_host}/ows",
                             "public_s3_url": (
                                 f'{config.S3_ENDPOINT}/{projectid}:{bucket}'
                             ),
@@ -260,13 +262,13 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
             "pycsw": {
                 "config": {
                     "server": {
-                        "url": f"http://{pycsw_server_url}",
+                        "url": f"http://{catalog_host}",
                     },
                 },
             },
             "ingress": {
-                "host": pycsw_server_url,
-                "tls_host": pycsw_server_url,
+                "host": catalog_open_host,
+                "tls_host": catalog_open_host,
             }
         },
         "resource-guard": {
