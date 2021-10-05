@@ -319,31 +319,31 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                         "paths": [{
                             "path": "/(ows.*)",
                             "service": {
-                                "name": "data-access-vs-renderer",
+                                "name": "workspace-vs-renderer",
                                 "port": 80,
                             }
                         }, {
                             "path": "/(opensearch.*)",
                             "service": {
-                                "name": "data-access-vs-renderer",
+                                "name": "workspace-vs-renderer",
                                 "port": 80,
                             }
                         }, {
                             "path": "/(admin.*)",
                             "service": {
-                                "name": "data-access-vs-renderer",
+                                "name": "workspace-vs-renderer",
                                 "port": 80,
                             }
                         }, {
                             "path": "/cache/(.*)",
                             "service": {
-                                "name": "data-access-vs-cache",
+                                "name": "workspace-vs-cache",
                                 "port": 80,
                             }
                         }, {
                             "path": "/(.*)",
                             "service": {
-                                "name": "data-access-vs-client",
+                                "name": "workspace-vs-client",
                                 "port": 80,
                             }
                         }],
