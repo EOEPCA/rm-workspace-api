@@ -6,13 +6,5 @@ services:
         - 5000:5000
         volumes:
         - .:/srv/service
-        environment:
-          PREFIX_FOR_NAME: "foo"
-          WORKSPACE_SECRET_NAME: ""
-          WORKSPACE_CONFIG_MAP_NAME: ""
-          NAMESPACE_FOR_BUCKET_RESOURCE: ""
-          GIT_REPO_RESOURCE_FOR_HELM_CHART_NAME: ""
-          GIT_REPO_RESOURCE_FOR_HELM_CHART_NAMESPACE: ""
-          HELM_CHART_NAME: ""
-          HELM_CHART_VERSION: ""
+        env_file: test_environment.env
         command: uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app

@@ -18,3 +18,4 @@ mypy
 black
 ipdb
 requests-mock
+types-python-slugify

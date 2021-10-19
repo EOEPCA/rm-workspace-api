@@ -4,13 +4,13 @@ import base64
 import enum
 from http import HTTPStatus
 import uuid
-from typing import cast, Optional, List, Dict
+from typing import cast, Optional, List, Dict, Any
 import asyncio
 from urllib.parse import urlparse
 import logging
 import json
 
-from fastapi import HTTPException, Path, Response, Request, BackgroundTasks
+from fastapi import HTTPException, Path, Response, BackgroundTasks
 from fastapi.responses import JSONResponse
 from kubernetes.client.models.v1_secret import V1Secret
 import kubernetes.client.rest
@@ -151,7 +151,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
-    uma_client_secret = create_uma_client_secret(
+    create_uma_client_secret(
         config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET
     )
 
@@ -174,12 +174,8 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     data_access_host = f"data-access.{workspace_name}.{domain}"
     catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
     catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
-    bucket = base64.b64decode(
-        secret.data["bucketname"]
-    ).decode()
-    projectid = base64.b64decode(
-        secret.data["projectid"]
-    ).decode()
+    bucket = base64.b64decode(secret.data["bucketname"]).decode()
+    projectid = base64.b64decode(secret.data["projectid"]).decode()
 
     values = {
         "vs": {
@@ -214,44 +210,44 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                     },
                 },
                 "registrar": {
-                    "backends": [{
-                        "path": "registrar.backend.EOxServerBackend",
-                        "schemes": [
-                            "stac-item"
-                        ],
-                        "kwargs": {
-                            "instance_base_path": "/var/www/pvs/dev",
-                            "instance_name": "pvs_instance",
-                            # TODO: delete this mapping after the Demo and
-                            # figure out a better way to go forward
-                            "mapping": {
-                                '': {
-                                    '': {
-                                        'product_type_name': \
-                                        'nhi1_nhi1_bitmask_nhi2_nhi2_bitmask',
-                                        'coverages': {
-                                            'nhi1': 'nhi1',
-                                            'nhi1_bitmask': 'nhi1_bitmask',
-                                            'nhi2': 'nhi2',
-                                            'nhi2_bitmask': 'nhi2_bitmask',
+                    "backends": [
+                        {
+                            "path": "registrar.backend.EOxServerBackend",
+                            "schemes": ["stac-item"],
+                            "kwargs": {
+                                "instance_base_path": "/var/www/pvs/dev",
+                                "instance_name": "pvs_instance",
+                                # TODO: delete this mapping after the Demo and
+                                # figure out a better way to go forward
+                                "mapping": {
+                                    "": {
+                                        "": {
+                                            "product_type_name": "nhi1_nhi1_bitmask_nhi2_nhi2_bitmask",
+                                            "coverages": {
+                                                "nhi1": "nhi1",
+                                                "nhi1_bitmask": "nhi1_bitmask",
+                                                "nhi2": "nhi2",
+                                                "nhi2_bitmask": "nhi2_bitmask",
+                                            },
+                                            "collections": ["DATA"],
                                         },
-                                        'collections': ['DATA']
-                                    },
-                                }
+                                    }
+                                },
                             },
                         },
-                    }, {
-                        "path": "registrar_pycsw.backend.PycswBackend",
-                        "kwargs": {
-                            "repository_database_uri": (
-                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                            ),
-                            "ows_url": f"https://{data_access_host}/ows",
-                            "public_s3_url": (
-                                f'{config.S3_ENDPOINT}/{projectid}:{bucket}'
-                            ),
+                        {
+                            "path": "registrar_pycsw.backend.PycswBackend",
+                            "kwargs": {
+                                "repository_database_uri": (
+                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                                ),
+                                "ows_url": f"https://{data_access_host}/ows",
+                                "public_s3_url": (
+                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
+                                ),
+                            },
                         },
-                    }],
+                    ],
                 },
             },
         },
@@ -269,7 +265,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
             "ingress": {
                 "host": catalog_open_host,
                 "tls_host": catalog_open_host,
-            }
+            },
         },
         "resource-guard": {
             "global": {
@@ -305,49 +301,60 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 #   pullPolicy: Always
                 "nginxIntegration": {
                     "enabled": True,
-                    "hosts": [{
-                        "host": f"resource-catalogue.{workspace_name}",
-                        "paths": [{
-                            "path": "/",
-                            "service": {
-                                "name": "resource-catalogue-service",
-                                "port": 80,
-                            }
-                        }]
-                    }, {
-                        "host": f"data-access.{workspace_name}",
-                        "paths": [{
-                            "path": "/(ows.*)",
-                            "service": {
-                                "name": "workspace-vs-renderer",
-                                "port": 80,
-                            }
-                        }, {
-                            "path": "/(opensearch.*)",
-                            "service": {
-                                "name": "workspace-vs-renderer",
-                                "port": 80,
-                            }
-                        }, {
-                            "path": "/(admin.*)",
-                            "service": {
-                                "name": "workspace-vs-renderer",
-                                "port": 80,
-                            }
-                        }, {
-                            "path": "/cache/(.*)",
-                            "service": {
-                                "name": "workspace-vs-cache",
-                                "port": 80,
-                            }
-                        }, {
-                            "path": "/(.*)",
-                            "service": {
-                                "name": "workspace-vs-client",
-                                "port": 80,
-                            }
-                        }],
-                    }],
+                    "hosts": [
+                        {
+                            "host": f"resource-catalogue.{workspace_name}",
+                            "paths": [
+                                {
+                                    "path": "/",
+                                    "service": {
+                                        "name": "resource-catalogue-service",
+                                        "port": 80,
+                                    },
+                                }
+                            ],
+                        },
+                        {
+                            "host": f"data-access.{workspace_name}",
+                            "paths": [
+                                {
+                                    "path": "/(ows.*)",
+                                    "service": {
+                                        "name": "workspace-vs-renderer",
+                                        "port": 80,
+                                    },
+                                },
+                                {
+                                    "path": "/(opensearch.*)",
+                                    "service": {
+                                        "name": "workspace-vs-renderer",
+                                        "port": 80,
+                                    },
+                                },
+                                {
+                                    "path": "/(admin.*)",
+                                    "service": {
+                                        "name": "workspace-vs-renderer",
+                                        "port": 80,
+                                    },
+                                },
+                                {
+                                    "path": "/cache/(.*)",
+                                    "service": {
+                                        "name": "workspace-vs-cache",
+                                        "port": 80,
+                                    },
+                                },
+                                {
+                                    "path": "/(.*)",
+                                    "service": {
+                                        "name": "workspace-vs-client",
+                                        "port": 80,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
                     "annotations": {
                         "nginx.ingress.kubernetes.io/proxy-read-timeout": "600",
                         "nginx.ingress.kubernetes.io/enable-cors": "true",
@@ -360,10 +367,9 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                 "logging": {
                     "level": "debug",
                 },
-                "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"', #  TODO: correct domain
-                "openAccess": True
+                "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"',  # TODO: correct domain
+                "openAccess": True,
             },
-
         },
         "global": {
             "namespace": workspace_name,
@@ -398,9 +404,9 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
             namespace=workspace_name,
         )
         found_hr = False
-        for item in response['items']:
+        for item in response["items"]:
             try:
-                if item['spec']['releaseName'] == 'workspace':
+                if item["spec"]["releaseName"] == "workspace":
                     found_hr = True
                     break
 
@@ -499,7 +505,7 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         ),
     )
     """
-    credentials = {k: base64.b64decode(v) for k, v in secret.data.items()}
+    credentials: dict[str, Any] = {k: base64.b64decode(v) for k, v in secret.data.items()}
     credentials["endpoint"] = config.S3_ENDPOINT
     credentials["region"] = config.S3_REGION
 
@@ -546,7 +552,7 @@ class WorkspaceUpdate(BaseModel):
 
 @app.patch("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
 def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_type):
-    if (storage := data.storage) :  # noqa: E203
+    if storage := data.storage:  # noqa: E203
         k8s_client.CoreV1Api().patch_namespaced_config_map(
             name=config.WORKSPACE_CONFIG_MAP_NAME,
             namespace=workspace_name,
@@ -558,15 +564,14 @@ def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_
 
 
 @app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
-def redeploy_workspace(background_tasks: BackgroundTasks,
-                       workspace_name: str = workspace_path_type):
+def redeploy_workspace(
+    background_tasks: BackgroundTasks, workspace_name: str = workspace_path_type
+):
     if not namespace_exists(workspace_name):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
 
     background_tasks.add_task(
-        install_workspace_phase2,
-        workspace_name=workspace_name,
-        patch=True
+        install_workspace_phase2, workspace_name=workspace_name, patch=True
     )
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
@@ -580,22 +585,21 @@ class Product(BaseModel):
 
 
 @app.post("/workspaces/{workspace_name}/register")
-async def register(product: Product,
-                   workspace_name: str = workspace_path_type):
+async def register(product: Product, workspace_name: str = workspace_path_type):
 
     k8s_namespace = workspace_name
     client = await aioredis.create_redis(
         # TODO: make this configurable of better
         (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     # get the URL and extract the path from the S3 URL
     try:
         parsed_url = urlparse(product.url)
         netloc = parsed_url.netloc
-        if ':' in netloc:
-            netloc = netloc.rpartition(':')[2]
+        if ":" in netloc:
+            netloc = netloc.rpartition(":")[2]
         url = netloc + parsed_url.path
 
         await client.lpush(config.REGISTER_QUEUE, url)
@@ -637,25 +641,26 @@ class DeregisterProduct(BaseModel):
 
 
 @app.post("/workspaces/{workspace_name}/deregister")
-async def deregister(deregister_product: DeregisterProduct,
-                     workspace_name: str = workspace_path_type):
+async def deregister(
+    deregister_product: DeregisterProduct, workspace_name: str = workspace_path_type
+):
 
     k8s_namespace = workspace_name
     client = await aioredis.create_redis(
         # TODO: make this configurable of better
         (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     if deregister_product.url:
         parsed_url = urlparse(deregister_product.url)
         netloc = parsed_url.netloc
-        if ':' in netloc:
-            netloc = netloc.rpartition(':')[2]
+        if ":" in netloc:
+            netloc = netloc.rpartition(":")[2]
         url = netloc + parsed_url.path
-        data = {'url': url}
+        data = {"url": url}
     elif deregister_product.identifier:
-        data = {'identifier': deregister_product.identifier}
+        data = {"identifier": deregister_product.identifier}
     else:
         # TODO: return exception
         pass

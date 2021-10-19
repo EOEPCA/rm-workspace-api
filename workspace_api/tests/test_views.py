@@ -120,6 +120,7 @@ def mock_wait_for_secret():
         data={
             "access": "",
             "bucketname": "",
+            "projectid": "",
             "secret": base64.b64encode(b"supersecret"),
             # actual secrets also have 'projectid', but we don't use that now
         }
@@ -224,7 +225,7 @@ def test_install_workspace_phase2_sets_values(
     values = mock_create_custom_object.mock_calls[0].kwargs["body"]["spec"]["values"]
     assert values["vs"]["ingress"]["hosts"][0]["host"].startswith("data-acc")
     assert (
-        values["vs"]["config"]["objectStorage"]["data"]["secret_access_key"]
+        values["vs"]["config"]["objectStorage"]["data"]["data"]["secret_access_key"]
         == "supersecret"
     )
 
@@ -263,7 +264,11 @@ def test_get_workspace_returns_ready(
     assert response.json()["status"] == "ready"
     assert response.json()["endpoints"] == [{"id": "myingress", "url": "example.com"}]
     assert response.json()["storage"] == {
-        "credentials": {"key": "youllneverguess"},
+        "credentials": {
+            "key": "youllneverguess",
+            "endpoint": "",
+            "region": "",
+        },
         # "quota_in_mb": 123,
     }
 
