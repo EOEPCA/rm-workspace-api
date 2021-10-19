@@ -7,6 +7,8 @@ import uuid
 from typing import cast, Optional, List, Dict, Any
 import asyncio
 from urllib.parse import urlparse
+import string
+import secrets
 import logging
 import json
 
@@ -16,6 +18,7 @@ from kubernetes.client.models.v1_secret import V1Secret
 import kubernetes.client.rest
 import kubernetes.watch
 from kubernetes import config as k8s_config, client as k8s_client
+import requests
 from slugify import slugify
 from pydantic import BaseModel
 import aioredis
@@ -89,6 +92,8 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
 
     create_bucket(workspace_name=workspace_name)
 
+    create_harbor_user(workspace_name=workspace_name)
+
     background_tasks.add_task(
         install_workspace_phase2,
         workspace_name=workspace_name,
@@ -123,6 +128,38 @@ def create_bucket(workspace_name: str) -> None:
     )
 
 
+def create_harbor_user(workspace_name: str) -> None:
+    """Create user in harbor via api and store credentials in secret"""
+    alphabet = string.ascii_letters + string.digits
+    harbor_user_password = "".join(secrets.choice(alphabet) for i in range(30))
+
+    k8s_client.CoreV1Api().create_namespaced_secret(
+        namespace=workspace_name,
+        body=k8s_client.V1Secret(
+            metadata=k8s_client.V1ObjectMeta(
+                name="container-registry",
+            ),
+            data={
+                "user": base64.b64encode(workspace_name.encode()).decode(),
+                "password": base64.b64encode(harbor_user_password.encode()).decode(),
+            },
+        ),
+    )
+
+    response = requests.post(
+        f"{config.HARBOR_URL}/api/v2.0/users",
+        json={
+            "username": workspace_name,
+            "password": harbor_user_password,
+            "email": f"{workspace_name}@example.com",
+            "realname": workspace_name,
+            "comment": "Auto-created by workspace api",
+        },
+        auth=(config.HARBOR_ADMIN_USER, config.HARBOR_ADMIN_PASSWORD),
+    )
+    response.raise_for_status()
+
+
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
     watch = kubernetes.watch.Watch()
     for event in watch.stream(
@@ -151,9 +188,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
-    create_uma_client_secret(
-        config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET
-    )
+    create_uma_client_secret(config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET)
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
@@ -505,7 +540,9 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         ),
     )
     """
-    credentials: dict[str, Any] = {k: base64.b64decode(v) for k, v in secret.data.items()}
+    credentials: dict[str, Any] = {
+        k: base64.b64decode(v) for k, v in secret.data.items()
+    }
     credentials["endpoint"] = config.S3_ENDPOINT
     credentials["region"] = config.S3_REGION
 
@@ -670,3 +707,7 @@ async def deregister(
 
     message = {"message": f"Item '{data}' was successfully de-registered"}
     return JSONResponse(status_code=200, content=message)
+
+
+def current_namespace() -> str:
+    return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()

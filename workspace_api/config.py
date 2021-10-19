@@ -37,3 +37,7 @@ REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 # Guard specific values
 UMA_CLIENT_ID = os.environ["UMA_CLIENT_ID"]
 UMA_CLIENT_SECRET = os.environ["UMA_CLIENT_SECRET"]
+
+HARBOR_URL = os.environ["HARBOR_URL"]
+HARBOR_ADMIN_USER = os.environ["HARBOR_ADMIN_USER"]
+HARBOR_ADMIN_PASSWORD = os.environ["HARBOR_ADMIN_PASSWORD"]

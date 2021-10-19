@@ -2,6 +2,9 @@
 all:
 	docker-compose run workspace-api bash -c "pytest && flake8 && mypy ."
 
+build:
+	docker-compose build
+
 test:
 	docker-compose run workspace-api pytest -s
 

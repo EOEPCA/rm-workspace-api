@@ -67,6 +67,30 @@ spec:
           value: "dummy"
         - name: HELM_CHART_VERSION
           value: "dummy"
+        - name: HARBOR_URL
+          value: "http://dev-harbor.hub.eox.at"
+        - name: HARBOR_ADMIN_USER
+          valueFrom:
+            secretKeyRef:
+              name: container-registry-admin
+              key: user
+        - name: HARBOR_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: container-registry-admin
+              key: password
+        - name: WORKSPACE_DOMAIN
+          value: ""
+        - name: S3_ENDPOINT
+          value: ""
+        - name: S3_REGION
+          value: ""
+        - name: UMA_CLIENT
+          value: ""
+        - name: UMA_CLIENT_ID
+          value: ""
+        - name: UMA_CLIENT_SECRET
+          value: ""
         resources:
           limits:
             cpu: 0.5

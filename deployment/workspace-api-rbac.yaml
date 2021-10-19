@@ -10,7 +10,7 @@ metadata:
   name: workspace-api
 rules:
   - apiGroups: [""]
-    verbs: ["get", "watch"]
+    verbs: ["get", "watch", "create"]
     resources:
       - secrets
   - apiGroups: [""]

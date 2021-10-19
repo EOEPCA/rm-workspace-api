@@ -16,6 +16,15 @@ from workspace_api.views import (
 )
 
 
+@pytest.fixture(autouse=True)
+def mock_k8s_base():
+    with mock.patch(
+        "workspace_api.views.current_namespace",
+        return_value="some-namespace",
+    ):
+        yield
+
+
 @pytest.fixture()
 def mock_read_namespace():
     # NOTE: if preferred name is a status, we mock the respective behavior
@@ -35,6 +44,8 @@ def mock_read_namespace():
 @pytest.fixture()
 def mock_read_secret():
     def new_read_namespaced_secret(name: str, namespace: str, **kwargs):
+        if name == "container-registry-admin":
+            return k8s_client.V1Secret(data={"user": "", "password": ""})
         if not namespace.endswith(WorkspaceStatus.provisioning.value):
             return k8s_client.V1Secret(data={"key": "eW91bGxuZXZlcmd1ZXNz"})
         else:
@@ -45,6 +56,14 @@ def mock_read_secret():
         side_effect=new_read_namespaced_secret,
     ):
         yield
+
+
+@pytest.fixture()
+def mock_create_secret():
+    with mock.patch(
+        "workspace_api.views.k8s_client.CoreV1Api.create_namespaced_secret"
+    ) as mocker:
+        yield mocker
 
 
 @pytest.fixture()
@@ -132,10 +151,18 @@ def mock_wait_for_secret():
         yield
 
 
+@pytest.fixture()
+def mock_create_harbor_user():
+    with mock.patch("requests.post") as mocker:
+        yield mocker
+
+
 def test_create_workspace_invents_name_if_missing(
     client: TestClient,
     mock_read_namespace,
     mock_create_custom_object,
+    mock_create_secret,
+    mock_create_harbor_user,
     mock_create_namespace,
     mock_wait_for_secret,
 ):
@@ -150,6 +177,8 @@ def test_create_workspace_invents_name_invalid_if_no_proper_name_given(
     client: TestClient,
     mock_read_namespace,
     mock_create_custom_object,
+    mock_create_secret,
+    mock_create_harbor_user,
     mock_create_namespace,
     mock_wait_for_secret,
 ):
@@ -165,6 +194,8 @@ def test_create_workspace_returns_sanitized_name(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_namespace,
+    mock_create_secret,
+    mock_create_harbor_user,
     mock_wait_for_secret,
 ):
     response = client.post(
@@ -192,8 +223,11 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     client: TestClient,
     mock_read_namespace,
     mock_create_custom_object,
+    mock_read_secret,
+    mock_create_secret,
     mock_create_namespace,
     mock_wait_for_secret,
+    mock_create_harbor_user,
 ):
     name = "tklayafg"
     client.post("/workspaces", json={"preferred_name": name})
@@ -213,6 +247,27 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     assert name in params["namespace"]
     assert params["body"]["kind"] == "HelmRelease"
     assert name in params["body"]["metadata"]["namespace"]
+
+    # create harbor credentials via api
+    mock_create_harbor_user.assert_called_once()
+    assert name in mock_create_harbor_user.mock_calls[0].kwargs["json"]["username"]
+
+    # store harbor credentials in secret
+    mock_create_secret.assert_called_once()
+    assert (
+        name
+        in base64.b64decode(
+            mock_create_secret.mock_calls[0].kwargs["body"].data["user"]
+        ).decode()
+    )
+
+
+def test_create_respository_in_container_registry_calls_harbor():
+    raise 4
+
+
+def test_grant_access_to_repository_calls_harbor():
+    raise 4
 
 
 def test_install_workspace_phase2_sets_values(
