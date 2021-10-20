@@ -756,24 +756,51 @@ def create_container_registry_repository(
                 status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
                 detail={"error": "Repository already exists"},
             )
+        elif e.response.status_code == HTTPStatus.BAD_REQUEST:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail={"error": e.response.json().get("errors", [])},
+            )
         else:
             raise
 
-    project_href = response.headers["location"]
-    # project href is something like /api/v2.0/projects/7
-    project_id = project_href.split("/")[-1]
-
     # add workspace user as developer so they can push right away
+    grant_container_registry_access(
+        username=workspace_name,
+        project_name=data.repository_name,
+        role_id=2,  # Developer
+    )
+
+    return JSONResponse(status_code=HTTPStatus.NO_CONTENT)
+
+
+def grant_container_registry_access(
+    username: str, project_name: str, role_id: int
+) -> None:
     response = requests.post(
-        f"{config.HARBOR_URL}/api/v2.0/projects/{project_id}/members",
+        f"{config.HARBOR_URL}/api/v2.0/projects/{project_name}/members",
         json={
-            "member_user": {"username": workspace_name},
-            "role_id": 2,  # Developer
+            "member_user": {"username": username},
+            "role_id": role_id,
         },
         auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
     )
     response.raise_for_status()
 
+
+class GrantAccess(BaseModel):
+    repository_name: str
+    username: str
+
+
+@app.post("/grant-access-to-container-registry-repository")
+def grant_container_registry_access_view(data: GrantAccess):
+    # TODO: do we need more error handling?
+    grant_container_registry_access(
+        username=data.username,
+        project_name=data.repository_name,
+        role_id=5,  # limited guest
+    )
     return JSONResponse(status_code=HTTPStatus.NO_CONTENT)
 
 

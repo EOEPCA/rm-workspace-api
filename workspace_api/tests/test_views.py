@@ -271,24 +271,21 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     )
 
 
-def test_create_repository_in_container_registry_calls_harbor(client):
-    response = requests.Response()
-    response.headers["Location"] = "/api/v2.0/projects/7"
-    response.status_code = HTTPStatus.CREATED
-    with mock.patch("requests.post", return_value=response) as mocker:
-        response = client.post(
-            f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
-            "/create-container-registry-repository",
-            json={"repository_name": "asdf"},
-        )
+def test_create_repository_in_container_registry_calls_harbor(
+    client, mock_post_harbor_api
+):
+    response = client.post(
+        f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
+        "/create-container-registry-repository",
+        json={"repository_name": "asdf"},
+    )
 
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert mocker.mock_calls[0].kwargs["json"]["project_name"] == "asdf"
-    assert mocker.mock_calls[1].kwargs["json"]["role_id"] == 2
+    assert mock_post_harbor_api.mock_calls[0].kwargs["json"]["project_name"] == "asdf"
+    assert mock_post_harbor_api.mock_calls[2].kwargs["json"]["role_id"] == 2
 
 
 def test_create_repository_in_container_registry_returns_error_on_conflict(client):
-
     with mock.patch(
         "requests.post",
         side_effect=requests.exceptions.HTTPError(
@@ -303,8 +300,37 @@ def test_create_repository_in_container_registry_returns_error_on_conflict(clien
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
-def test_grant_access_to_repository_calls_harbor():
-    raise 4
+def test_create_repository_in_container_registry_forwards_error_on_bad_request(client):
+    response = requests.Response()
+    response.status_code = HTTPStatus.BAD_REQUEST
+    response.json = lambda: {
+        "errors": [{"code": "BAD_REQUEST", "message": "project name bad"}]
+    }
+    with mock.patch(
+        "requests.post",
+        side_effect=requests.exceptions.HTTPError(response=response),
+    ):
+        response = client.post(
+            f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
+            "/create-container-registry-repository",
+            json={"repository_name": "asdf"},
+        )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert "name bad" in response.text
+
+
+def test_grant_access_to_repository_calls_harbor(client, mock_post_harbor_api):
+    response = client.post(
+        "/grant-access-to-container-registry-repository",
+        json={"repository_name": "asdf", "username": "jkl"},
+    )
+
+    assert response.status_code == HTTPStatus.NO_CONTENT
+    assert "asdf" in mock_post_harbor_api.mock_calls[0].args[0]
+    assert (
+        mock_post_harbor_api.mock_calls[0].kwargs["json"]["member_user"]["username"]
+        == "jkl"
+    )
 
 
 def test_install_workspace_phase2_sets_values(
