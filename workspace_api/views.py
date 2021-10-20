@@ -19,6 +19,7 @@ import kubernetes.client.rest
 import kubernetes.watch
 from kubernetes import config as k8s_config, client as k8s_client
 import requests
+import requests.exceptions
 from slugify import slugify
 from pydantic import BaseModel
 import aioredis
@@ -575,8 +576,8 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
             # quota_in_mb=int(configmap.data["quota_in_mb"]),
         ),
         container_registry=ContainerRegistryCredentials(
-            username=base64.b64decode(container_registry_secret.data['username']),
-            password=base64.b64decode(container_registry_secret.data['password']),
+            username=base64.b64decode(container_registry_secret.data["username"]),
+            password=base64.b64decode(container_registry_secret.data["password"]),
         ),
     )
 
@@ -726,6 +727,54 @@ async def deregister(
 
     message = {"message": f"Item '{data}' was successfully de-registered"}
     return JSONResponse(status_code=200, content=message)
+
+
+class CreateContainerRegistryRepository(BaseModel):
+    repository_name: str
+
+
+@app.post("/workspaces/{workspace_name}/create-container-registry-repository")
+def create_container_registry_repository(
+    data: CreateContainerRegistryRepository,
+    workspace_name: str = workspace_path_type,
+):
+    # technically we only create a project, but repositories are autocreated when
+    # you just push your docker image
+
+    try:
+        response = requests.post(
+            f"{config.HARBOR_URL}/api/v2.0/projects",
+            json={
+                "project_name": data.repository_name,
+            },
+            auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
+        )
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == HTTPStatus.CONFLICT:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail={"error": "Repository already exists"},
+            )
+        else:
+            raise
+
+    project_href = response.headers["location"]
+    # project href is something like /api/v2.0/projects/7
+    project_id = project_href.split("/")[-1]
+
+    # add workspace user as developer so they can push right away
+    response = requests.post(
+        f"{config.HARBOR_URL}/api/v2.0/projects/{project_id}/members",
+        json={
+            "member_user": {"username": workspace_name},
+            "role_id": 2,  # Developer
+        },
+        auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
+    )
+    response.raise_for_status()
+
+    return JSONResponse(status_code=HTTPStatus.NO_CONTENT)
 
 
 def current_namespace() -> str:

@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 import kubernetes.client.rest
 from kubernetes import client as k8s_client
 import pytest
+import requests
+import requests.exceptions
 
 from workspace_api import config
 from workspace_api.views import (
@@ -159,7 +161,7 @@ def mock_wait_for_secret():
 
 
 @pytest.fixture()
-def mock_create_harbor_user():
+def mock_post_harbor_api():
     with mock.patch("requests.post") as mocker:
         yield mocker
 
@@ -169,7 +171,7 @@ def test_create_workspace_invents_name_if_missing(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_secret,
-    mock_create_harbor_user,
+    mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
 ):
@@ -185,7 +187,7 @@ def test_create_workspace_invents_name_invalid_if_no_proper_name_given(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_secret,
-    mock_create_harbor_user,
+    mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
 ):
@@ -202,7 +204,7 @@ def test_create_workspace_returns_sanitized_name(
     mock_create_custom_object,
     mock_create_namespace,
     mock_create_secret,
-    mock_create_harbor_user,
+    mock_post_harbor_api,
     mock_wait_for_secret,
 ):
     response = client.post(
@@ -234,7 +236,7 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     mock_create_secret,
     mock_create_namespace,
     mock_wait_for_secret,
-    mock_create_harbor_user,
+    mock_post_harbor_api,
 ):
     name = "tklayafg"
     client.post("/workspaces", json={"preferred_name": name})
@@ -256,8 +258,8 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     assert name in params["body"]["metadata"]["namespace"]
 
     # create harbor credentials via api
-    mock_create_harbor_user.assert_called_once()
-    assert name in mock_create_harbor_user.mock_calls[0].kwargs["json"]["username"]
+    mock_post_harbor_api.assert_called_once()
+    assert name in mock_post_harbor_api.mock_calls[0].kwargs["json"]["username"]
 
     # store harbor credentials in secret
     mock_create_secret.assert_called_once()
@@ -269,8 +271,36 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     )
 
 
-def test_create_respository_in_container_registry_calls_harbor():
-    raise 4
+def test_create_repository_in_container_registry_calls_harbor(client):
+    response = requests.Response()
+    response.headers["Location"] = "/api/v2.0/projects/7"
+    response.status_code = HTTPStatus.CREATED
+    with mock.patch("requests.post", return_value=response) as mocker:
+        response = client.post(
+            f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
+            "/create-container-registry-repository",
+            json={"repository_name": "asdf"},
+        )
+
+    assert response.status_code == HTTPStatus.NO_CONTENT
+    assert mocker.mock_calls[0].kwargs["json"]["project_name"] == "asdf"
+    assert mocker.mock_calls[1].kwargs["json"]["role_id"] == 2
+
+
+def test_create_repository_in_container_registry_returns_error_on_conflict(client):
+
+    with mock.patch(
+        "requests.post",
+        side_effect=requests.exceptions.HTTPError(
+            response=mock.MagicMock(status_code=HTTPStatus.CONFLICT)
+        ),
+    ):
+        response = client.post(
+            f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
+            "/create-container-registry-repository",
+            json={"repository_name": "asdf"},
+        )
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
 
 
 def test_grant_access_to_repository_calls_harbor():
