@@ -69,11 +69,11 @@ spec:
           value: "dummy"
         - name: HARBOR_URL
           value: "http://dev-harbor.hub.eox.at"
-        - name: HARBOR_ADMIN_USER
+        - name: HARBOR_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:
               name: container-registry-admin
-              key: user
+              key: username
         - name: HARBOR_ADMIN_PASSWORD
           valueFrom:
             secretKeyRef:

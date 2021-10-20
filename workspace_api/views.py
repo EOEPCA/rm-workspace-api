@@ -29,6 +29,8 @@ from workspace_api import app, config
 # TODO: fix logging output with gunicorn
 logger = logging.getLogger(__name__)
 
+CONTAINER_REGISTRY_SECRET_NAME = "container-registry"
+
 
 @app.on_event("startup")
 async def load_k8s_config():
@@ -137,10 +139,10 @@ def create_harbor_user(workspace_name: str) -> None:
         namespace=workspace_name,
         body=k8s_client.V1Secret(
             metadata=k8s_client.V1ObjectMeta(
-                name="container-registry",
+                name=CONTAINER_REGISTRY_SECRET_NAME,
             ),
             data={
-                "user": base64.b64encode(workspace_name.encode()).decode(),
+                "username": base64.b64encode(workspace_name.encode()).decode(),
                 "password": base64.b64encode(harbor_user_password.encode()).decode(),
             },
         ),
@@ -155,7 +157,7 @@ def create_harbor_user(workspace_name: str) -> None:
             "realname": workspace_name,
             "comment": "Auto-created by workspace api",
         },
-        auth=(config.HARBOR_ADMIN_USER, config.HARBOR_ADMIN_PASSWORD),
+        auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
     )
     response.raise_for_status()
 
@@ -494,12 +496,19 @@ class Storage(BaseModel):
     # quota_in_mb: int
 
 
+class ContainerRegistryCredentials(BaseModel):
+    username: str
+    password: str
+
+
 class Workspace(BaseModel):
     status: WorkspaceStatus
 
     # NOTE: these are defined iff the workspace is ready
     endpoints: List[Endpoint] = []
     storage: Optional[Storage]
+
+    container_registry: Optional[ContainerRegistryCredentials]
 
 
 # only allow workspaces starting with the prefix for actions
@@ -546,6 +555,12 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
     credentials["endpoint"] = config.S3_ENDPOINT
     credentials["region"] = config.S3_REGION
 
+    container_registry_secret: k8s_client.V1Secret = (
+        k8s_client.CoreV1Api().read_namespaced_secret(
+            name=CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
+        )
+    )
+
     return Workspace(
         status=WorkspaceStatus.ready,  # only ready workspaces can be serialized
         endpoints=[
@@ -558,6 +573,10 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         storage=Storage(
             credentials=credentials,
             # quota_in_mb=int(configmap.data["quota_in_mb"]),
+        ),
+        container_registry=ContainerRegistryCredentials(
+            username=base64.b64decode(container_registry_secret.data['username']),
+            password=base64.b64decode(container_registry_secret.data['password']),
         ),
     )
 

@@ -45,8 +45,15 @@ def mock_read_namespace():
 def mock_read_secret():
     def new_read_namespaced_secret(name: str, namespace: str, **kwargs):
         if name == "container-registry-admin":
-            return k8s_client.V1Secret(data={"user": "", "password": ""})
-        if not namespace.endswith(WorkspaceStatus.provisioning.value):
+            return k8s_client.V1Secret(data={"username": "", "password": ""})
+        elif name == "container-registry":
+            return k8s_client.V1Secret(
+                data={
+                    "username": base64.b64encode(b"container-registry-user"),
+                    "password": "",
+                }
+            )
+        elif not namespace.endswith(WorkspaceStatus.provisioning.value):
             return k8s_client.V1Secret(data={"key": "eW91bGxuZXZlcmd1ZXNz"})
         else:
             raise kubernetes.client.rest.ApiException(status=HTTPStatus.NOT_FOUND)
@@ -257,7 +264,7 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     assert (
         name
         in base64.b64decode(
-            mock_create_secret.mock_calls[0].kwargs["body"].data["user"]
+            mock_create_secret.mock_calls[0].kwargs["body"].data["username"]
         ).decode()
     )
 
@@ -326,6 +333,9 @@ def test_get_workspace_returns_ready(
         },
         # "quota_in_mb": 123,
     }
+    assert (
+        response.json()["container_registry"]["username"] == "container-registry-user"
+    )
 
 
 def test_get_workspace_only_works_on_prefixed_path(client: TestClient):
