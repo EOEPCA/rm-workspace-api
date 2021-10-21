@@ -556,10 +556,8 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
     credentials["endpoint"] = config.S3_ENDPOINT
     credentials["region"] = config.S3_REGION
 
-    container_registry_secret: k8s_client.V1Secret = (
-        k8s_client.CoreV1Api().read_namespaced_secret(
-            name=CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
-        )
+    container_registry_secret = fetch_secret(
+        CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
     )
 
     return Workspace(
@@ -578,7 +576,9 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         container_registry=ContainerRegistryCredentials(
             username=base64.b64decode(container_registry_secret.data["username"]),
             password=base64.b64decode(container_registry_secret.data["password"]),
-        ),
+        )
+        if container_registry_secret
+        else None,
     )
 
 
