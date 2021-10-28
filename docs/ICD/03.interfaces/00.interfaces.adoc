@@ -35,7 +35,7 @@ Returns a small info document for readyness/liveness probes
 
 ===== Description
 
-This creates a new Workspace for a user. Internally, this creates a new Kubernetes namespace into which a Data Access, a Ressource Catalogue and a Policy Enforcement Point are installed and configured. Upon success, this endpoint returns immediatly with a 201 response, but the services are not available immediatly but eventually.
+This creates a new Workspace for a user. Internally, this creates a new Kubernetes namespace into which a Data Access, a Resource Catalogue, Container Registry Credentials and a Policy Enforcement Point are installed and configured. Upon success, this endpoint returns immediatly with a 201 response, but the services are not available immediatly but eventually.
 
 Additionally, an Operator will create an Object Storage Bucket to store user data.
 
@@ -102,6 +102,10 @@ This method returns the details of a specific workspace, including its operation
       "projectid": "...",
       "secret": "rm-user-test-..."
     }
+  },
+  "container_registry": {
+      username: "",
+      password: ""
   }
 }
 ```
@@ -312,6 +316,116 @@ This method registers a product from the workspace Object Storage into the worsp
 | 422
 | A description of a Validation Error
 | application/json
+
+|===
+
+
+
+==== Create Container Registry Repository
+
+`POST /workspaces/{workspace_name}/create-container-registry-repository`
+
+===== Description
+
+This method creates a repository in the container registry for the user. The workspace user will have full read and write access.
+```
+{
+  "repository_name": "project-xyz"
+}
+```
+
+===== Parameters
+
+====== Path Parameters
+
+[cols="2,3,1"]
+|===
+| Name | Description | Required
+
+| workspace_name
+| The name of the workspace to register a product for.
+| X
+
+|===
+
+====== JSON Body Parameters
+
+[cols="2,3,1"]
+|===
+| Name | Description | Required
+
+| repository_name
+| The name of the repository
+| X
+
+|===
+
+===== Content Type
+
+* application/json
+
+===== Responses
+
+[cols="2,3,1"]
+|===
+| Code | Message | Datatype
+
+| 204
+| The repository has been created successfully
+|
+
+| 422
+| A description of a Validation Error
+| application/json
+
+|===
+
+
+
+
+==== Grant Access to Container Registry Repository
+
+`POST /grant-access-to-container-registry-repository`
+
+===== Description
+
+This method grants read access to a repository in the container registry to a specific user.
+```
+{
+  "repository_name": "project-xyz",
+  "username": "user-abc"
+}
+```
+
+====== JSON Body Parameters
+
+[cols="2,3,1"]
+|===
+| Name | Description | Required
+
+| repository_name
+| The name of the repository
+| X
+
+| username
+| The name of the user to grant access to
+| X
+
+|===
+
+===== Content Type
+
+* application/json
+
+===== Responses
+
+[cols="2,3,1"]
+|===
+| Code | Message | Datatype
+
+| 204
+| Access has been granted successfully.
+|
 
 |===
 
