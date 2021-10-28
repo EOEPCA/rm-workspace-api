@@ -133,6 +133,7 @@ def create_bucket(workspace_name: str) -> None:
 
 def create_harbor_user(workspace_name: str) -> None:
     """Create user in harbor via api and store credentials in secret"""
+    logger.info(f"Creating container registry user {workspace_name}")
     alphabet = string.ascii_letters + string.digits
     harbor_user_password = "".join(secrets.choice(alphabet) for i in range(30))
 
@@ -741,6 +742,7 @@ def create_container_registry_repository(
     # technically we only create a project, but repositories are autocreated when
     # you just push your docker image
 
+    logger.info(f"Creating container repository {data.repository_name}")
     try:
         response = requests.post(
             f"{config.HARBOR_URL}/api/v2.0/projects",
@@ -777,6 +779,7 @@ def create_container_registry_repository(
 def grant_container_registry_access(
     username: str, project_name: str, role_id: int
 ) -> None:
+    logger.info(f"Granting container registry access to {username} for {project_name}")
     response = requests.post(
         f"{config.HARBOR_URL}/api/v2.0/projects/{project_name}/members",
         json={
