@@ -106,6 +106,7 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
 
 
 def create_bucket(workspace_name: str) -> None:
+    logger.info(f"Creating bucket in namespace {workspace_name}")
     group = "epca.eo"
     version = "v1alpha1"
     k8s_client.CustomObjectsApi().create_namespaced_custom_object(
