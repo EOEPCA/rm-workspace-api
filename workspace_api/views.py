@@ -72,6 +72,7 @@ def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secr
 
 class WorkspaceCreate(BaseModel):
     preferred_name: str = ""
+    default_owner: str = ""
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
@@ -100,6 +101,7 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
     background_tasks.add_task(
         install_workspace_phase2,
         workspace_name=workspace_name,
+        default_owner=data.default_owner,
     )
 
     return {"name": workspace_name}
@@ -189,7 +191,7 @@ def create_uma_client_secret(client_id: str, client_secret: str) -> V1Secret:
     pass
 
 
-def install_workspace_phase2(workspace_name, patch=False) -> None:
+def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
@@ -209,6 +211,10 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         }
     }
 
+    api = k8s_client.CustomObjectsApi()
+    group = "helm.toolkit.fluxcd.io"
+    version = "v2beta1"
+
     domain = config.WORKSPACE_DOMAIN
     data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
     data_access_host = f"data-access.{workspace_name}.{domain}"
@@ -216,6 +222,25 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
     catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
     bucket = base64.b64decode(secret.data["bucketname"]).decode()
     projectid = base64.b64decode(secret.data["projectid"]).decode()
+
+    found_hr = False
+    if patch:
+        response = api.list_namespaced_custom_object(
+            group=group,
+            plural="helmreleases",
+            version=version,
+            namespace=workspace_name,
+        )
+        found_hr = False
+        for item in response["items"]:
+            try:
+                if item["spec"]["releaseName"] == "workspace":
+                    found_hr = True
+                    default_owner = item["spec"]["values"]["resource-guard"]["pep-engine"]["customDefaultResources"][0]["default_owner"]
+                    break
+
+            except KeyError:
+                pass
 
     values = {
         "vs": {
@@ -333,6 +358,13 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                     "name": f"eoepca-resman-pvc-{workspace_name}",
                     "create": "true",
                 },
+                "customDefaultResources": [{
+                    "name": f"Workspace {workspace_name}",
+                    "description": "Root URL of a users workspace",
+                    "resource_uri": "/",
+                    "scopes": [],
+                    "default_owner": default_owner,
+                }],
             },
             "uma-user-agent": {
                 "fullnameOverride": f"{workspace_name}-agent",
@@ -343,20 +375,15 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                     "enabled": True,
                     "hosts": [
                         {
-                            "host": f"resource-catalogue.{workspace_name}",
+                            "host": f"{workspace_name}",
                             "paths": [
                                 {
-                                    "path": "/",
+                                    "path": "/catalogue",
                                     "service": {
                                         "name": "resource-catalogue-service",
                                         "port": 80,
                                     },
-                                }
-                            ],
-                        },
-                        {
-                            "host": f"data-access.{workspace_name}",
-                            "paths": [
+                                },
                                 {
                                     "path": "/(ows.*)",
                                     "service": {
@@ -408,7 +435,7 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
                     "level": "debug",
                 },
                 "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"',  # TODO: correct domain
-                "openAccess": True,
+                # "openAccess": True,
             },
         },
         "global": {
@@ -416,8 +443,6 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         },
     }
 
-    group = "helm.toolkit.fluxcd.io"
-    version = "v2beta1"
     body = {
         "apiVersion": f"{group}/{version}",
         "kind": "HelmRelease",
@@ -434,45 +459,25 @@ def install_workspace_phase2(workspace_name, patch=False) -> None:
         },
     }
 
-    api = k8s_client.CustomObjectsApi()
-
-    if patch:
-        response = api.list_namespaced_custom_object(
+    # try patching the HR first
+    if found_hr:
+        api.patch_namespaced_custom_object(
+            name="workspace",
             group=group,
             plural="helmreleases",
             version=version,
             namespace=workspace_name,
+            body=body,
         )
-        found_hr = False
-        for item in response["items"]:
-            try:
-                if item["spec"]["releaseName"] == "workspace":
-                    found_hr = True
-                    break
-
-            except KeyError:
-                pass
-
-        # try patching the HR first
-        if found_hr:
-            api.patch_namespaced_custom_object(
-                name="workspace",
-                group=group,
-                plural="helmreleases",
-                version=version,
-                namespace=workspace_name,
-                body=body,
-            )
-            return
-
-    # fallback to (re-)create the HR
-    api.create_namespaced_custom_object(
-        group=group,
-        plural="helmreleases",
-        version=version,
-        namespace=workspace_name,
-        body=body,
-    )
+    else:
+        # fallback to (re-)create the HR
+        api.create_namespaced_custom_object(
+            group=group,
+            plural="helmreleases",
+            version=version,
+            namespace=workspace_name,
+            body=body,
+        )
 
 
 def workspace_name_from_preferred_name(preferred_name: str):
