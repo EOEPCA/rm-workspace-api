@@ -96,6 +96,8 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
 
     create_bucket(workspace_name=workspace_name)
 
+    create_uma_client_credentials_secret(workspace_name=workspace_name)
+
     create_harbor_user(workspace_name=workspace_name)
 
     background_tasks.add_task(
@@ -167,6 +169,23 @@ def create_harbor_user(workspace_name: str) -> None:
     response.raise_for_status()
 
 
+def create_uma_client_credentials_secret(workspace_name: str):
+    logger.info("Creating uma client credentials secret")
+    original_secret = k8s_client.CoreV1Api().read_namespaced_secret(
+        name=config.UMA_CLIENT_SECRET_NAME,
+        namespace=config.UMA_CLIENT_SECRET_NAMESPACE,
+    )
+    k8s_client.CoreV1Api().create_namespaced_secret(
+        namespace=workspace_name,
+        body=k8s_client.V1Secret(
+            metadata=k8s_client.V1ObjectMeta(
+                name=config.UMA_CLIENT_SECRET_NAME,
+            ),
+            data=original_secret.data,
+        ),
+    )
+
+
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
     watch = kubernetes.watch.Watch()
     for event in watch.stream(
@@ -186,16 +205,9 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
-def create_uma_client_secret(client_id: str, client_secret: str) -> V1Secret:
-    # TODO create a sealed secret here
-    pass
-
-
 def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
-
-    create_uma_client_secret(config.UMA_CLIENT_ID, config.UMA_CLIENT_SECRET)
 
     logger.info(f"Install phase 2 for {workspace_name}")
 

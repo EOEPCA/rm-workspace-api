@@ -85,12 +85,10 @@ spec:
           value: ""
         - name: S3_REGION
           value: ""
-        - name: UMA_CLIENT
-          value: ""
-        - name: UMA_CLIENT_ID
-          value: ""
-        - name: UMA_CLIENT_SECRET
-          value: ""
+        - name: UMA_CLIENT_SECRET_NAME
+          value: "uma"
+        - name: UMA_CLIENT_SECRET_NAMESPACE
+          value: "uma"
         resources:
           limits:
             cpu: 0.5

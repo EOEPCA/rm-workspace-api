@@ -55,6 +55,8 @@ def mock_read_secret():
                     "password": "",
                 }
             )
+        elif name == config.UMA_CLIENT_SECRET_NAME:
+            return k8s_client.V1Secret(data={"uma": "dW1h"})
         elif not namespace.endswith(WorkspaceStatus.provisioning.value):
             return k8s_client.V1Secret(data={"key": "eW91bGxuZXZlcmd1ZXNz"})
         else:
@@ -171,6 +173,7 @@ def test_create_workspace_invents_name_if_missing(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_secret,
+    mock_read_secret,
     mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
@@ -187,6 +190,7 @@ def test_create_workspace_invents_name_invalid_if_no_proper_name_given(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_secret,
+    mock_read_secret,
     mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
@@ -203,6 +207,7 @@ def test_create_workspace_returns_sanitized_name(
     mock_read_namespace,
     mock_create_custom_object,
     mock_create_namespace,
+    mock_read_secret,
     mock_create_secret,
     mock_post_harbor_api,
     mock_wait_for_secret,
@@ -257,16 +262,23 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     assert params["body"]["kind"] == "HelmRelease"
     assert name in params["body"]["metadata"]["namespace"]
 
+    # create uma secret
+    assert (
+        base64.b64decode(
+            mock_create_secret.mock_calls[0].kwargs["body"].data["uma"]
+        ).decode()
+        == "uma"
+    )
+
     # create harbor credentials via api
     mock_post_harbor_api.assert_called_once()
     assert name in mock_post_harbor_api.mock_calls[0].kwargs["json"]["username"]
 
     # store harbor credentials in secret
-    mock_create_secret.assert_called_once()
     assert (
         name
         in base64.b64decode(
-            mock_create_secret.mock_calls[0].kwargs["body"].data["username"]
+            mock_create_secret.mock_calls[1].kwargs["body"].data["username"]
         ).decode()
     )
 
