@@ -236,7 +236,9 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
             try:
                 if item["spec"]["releaseName"] == "workspace":
                     found_hr = True
-                    default_owner = item["spec"]["values"]["resource-guard"]["pep-engine"]["customDefaultResources"][0]["default_owner"]
+                    default_owner = item["spec"]["values"]["resource-guard"][
+                        "pep-engine"
+                    ]["customDefaultResources"][0]["default_owner"]
                     break
 
             except KeyError:
@@ -358,13 +360,15 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                     "name": f"eoepca-resman-pvc-{workspace_name}",
                     "create": "true",
                 },
-                "customDefaultResources": [{
-                    "name": f"Workspace {workspace_name}",
-                    "description": "Root URL of a users workspace",
-                    "resource_uri": "/",
-                    "scopes": [],
-                    "default_owner": default_owner,
-                }],
+                "customDefaultResources": [
+                    {
+                        "name": f"Workspace {workspace_name}",
+                        "description": "Root URL of a users workspace",
+                        "resource_uri": "/",
+                        "scopes": [],
+                        "default_owner": default_owner,
+                    }
+                ],
             },
             "uma-user-agent": {
                 "fullnameOverride": f"{workspace_name}-agent",
