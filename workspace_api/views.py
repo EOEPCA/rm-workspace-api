@@ -706,7 +706,9 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
             json.dumps({
                 "name": config.BUCKET_CATALOG_HARVESTER,
                 "values": {
-                    "root_path": url
+                    "resource": {
+                        "root_path": url
+                    }
                 }
             })
         )
