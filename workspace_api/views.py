@@ -701,7 +701,7 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
 
     # TODO:
     if product.type == "stac-item":
-        client.lpush(
+        await client.lpush(
             config.HARVESTER_QUEUE,
             json.dumps({
                 "name": config.BUCKET_CATALOG_HARVESTER,
