@@ -228,7 +228,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
     version = "v2beta1"
 
     domain = config.WORKSPACE_DOMAIN
-    data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
+    # data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
     data_access_host = f"data-access.{workspace_name}.{domain}"
     catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
     catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
@@ -255,79 +255,93 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
 
             except KeyError:
                 pass
-
+    access_key_id = base64.b64decode(secret.data["access"]).decode()
+    secret_access_key = base64.b64decode(secret.data["secret"]).decode()
     values = {
         "vs": {
-            "ingress": {
-                "hosts": [
-                    {
-                        "host": data_access_open_host,
-                    },
-                ],
-                "tls": [
-                    {
-                        "hosts": [data_access_open_host],
-                        "secretName": "data-access-tls",
-                    }
-                ],
-            },
-            "config": {
-                "objectStorage": {
+            # open ingresses are now disabled
+            # "ingress": {
+            #     "hosts": [
+            #         {
+            #             "host": data_access_open_host,
+            #         },
+            #     ],
+            #     "tls": [
+            #         {
+            #             "hosts": [data_access_open_host],
+            #             "secretName": "data-access-tls",
+            #         }
+            #     ],
+            # },
+            "global": {
+                "storage": {
                     "data": {
                         "data": {
                             # TODO: this values are secret, pass them as secret
-                            "access_key_id": base64.b64decode(
-                                secret.data["access"]
-                            ).decode(),
-                            "secret_access_key": base64.b64decode(
-                                secret.data["secret"]
-                            ).decode(),
+                            "access_key_id": access_key_id,
+                            "secret_access_key": secret_access_key,
                             "bucket": bucket,
                             "endpoint_url": config.S3_ENDPOINT,
                             "region": config.S3_REGION,
                         },
                     },
                 },
-                "registrar": {
-                    "backends": [
-                        {
-                            "path": "registrar.backend.EOxServerBackend",
-                            "schemes": ["stac-item"],
-                            "kwargs": {
-                                "instance_base_path": "/var/www/pvs/dev",
-                                "instance_name": "pvs_instance",
-                                # TODO: delete this mapping after the Demo and
-                                # figure out a better way to go forward
-                                "mapping": {
-                                    "": {
-                                        "": {
-                                            "product_type_name": "nhi1_nhi1_bitmask_nhi2_nhi2_bitmask",
-                                            "coverages": {
-                                                "nhi1": "nhi1",
-                                                "nhi1_bitmask": "nhi1_bitmask",
-                                                "nhi2": "nhi2",
-                                                "nhi2_bitmask": "nhi2_bitmask",
-                                            },
-                                            "collections": ["DATA"],
-                                        },
-                                    }
-                                },
-                            },
+            },
+            "harvester": {
+                "harvesters": [
+                    {
+                        "name": config.BUCKET_CATALOG_HARVESTER,
+                        "type": "STACCatalog",
+                        "source": {
+                            "bucket": bucket,
+                            "access_key_id": access_key_id,
+                            "secret_access_key": secret_access_key,
+                            "endpoint_url": config.S3_ENDPOINT,
+                            "region_name": config.S3_REGION,
+                            "validate_bucket_name": False,
+                            "public": False,
                         },
-                        {
-                            "path": "registrar_pycsw.backend.PycswBackend",
-                            "kwargs": {
-                                "repository_database_uri": (
-                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                                ),
-                                "ows_url": f"https://{data_access_host}/ows",
-                                "public_s3_url": (
-                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
-                                ),
-                            },
+                        "queue": "register_queue",
+                    }
+                ]
+            },
+            "registrar": {
+                "backends": [
+                    {
+                        "path": "registrar.backend.EOxServerBackend",
+                        "kwargs": {
+                            "instance_base_path": "/var/www/pvs/dev",
+                            "instance_name": "pvs_instance",
+                            "auto_create_product_types": True,
+                        }
+                    },
+                    {
+                        "path": "registrar_pycsw.backend.PycswItemBackend",
+                        "kwargs": {
+                            "repository_database_uri": (
+                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                            ),
+                            "ows_url": f"https://{data_access_host}/ows",
+                            "public_s3_url": (
+                                f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
+                            ),
                         },
-                    ],
-                },
+                    },
+                ],
+                "pathBackends": [
+                    {
+                        "path": "registrar_pycsw.backend.PycswCWLBackend",
+                        "kwargs": {
+                            "repository_database_uri": (
+                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                            ),
+                            "ows_url": f"https://{data_access_host}/ows",
+                            "public_s3_url": (
+                                f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
+                            ),
+                        },
+                    },
+                ]
             },
         },
         "rm-resource-catalogue": {
@@ -681,12 +695,31 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
         if ":" in netloc:
             netloc = netloc.rpartition(":")[2]
         url = netloc + parsed_url.path
+    except Exception as e:
+        message = {"message": f"Registration failed: {e}"}
+        return JSONResponse(status_code=400, content=message)
 
-        await client.lpush(config.REGISTER_QUEUE, url)
+    # TODO:
+    if product.type == "stac-item":
+        client.lpush(
+            config.HARVESTER_QUEUE,
+            json.dumps({
+                "name": config.BUCKET_CATALOG_HARVESTER,
+                "values": {
+                    "root_path": url
+                }
+            })
+        )
+        logger.info(f"STAC Catalog '{url}' was accepted for harvesting")
+        message = {"message": f"STAC Catalog '{url}' was accepted for harvesting"}
+        return JSONResponse(status_code=202, content=message)
 
+    # Register CWL applications
+    try:
+        await client.lpush(config.REGISTER_PATH_QUEUE, url)
         time_index = 0.0
         while True:
-            logger.info("Product '%s' is being proccessed!" % url)
+            logger.info("CWL file '%s' is being proccessed!" % url)
             await asyncio.sleep(config.REGISTRATION_CHECK_INTERVAL)
             time_index += config.REGISTRATION_CHECK_INTERVAL
             if (
@@ -701,13 +734,13 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
             return JSONResponse(status_code=400, content=message)
 
         if await client.sismember(config.SUCCESS_SET, url):
-            logger.info("Item '%s' was successfully registered" % url)
-            message = {"message": f"Item '{url}' was successfully registered"}
+            logger.info("CWL file '%s' was successfully registered" % url)
+            message = {"message": f"CWL file '{url}' was successfully registered"}
             return JSONResponse(status_code=200, content=message)
 
         elif await client.sismember(config.FAILURE_SET, url):
-            logger.info("Failed to register product %s" % url)
-            message = {"message": f"Failed to register product {url}"}
+            logger.info("Failed to register CWL file %s" % url)
+            message = {"message": f"Failed to register CWL file {url}"}
             return JSONResponse(status_code=400, content=message)
 
     except Exception as e:

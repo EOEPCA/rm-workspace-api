@@ -24,6 +24,8 @@ S3_REGION = os.environ["S3_REGION"]
 
 # registration endpoint variables
 REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "register_queue")
+REGISTER_PATH_QUEUE = os.environ.get("REDIS_REGISTER_PATH_QUEUE_KEY", "register_path_queue")
+HARVESTER_QUEUE = os.environ.get("REDIS_HARVESTER_QUEUE_KEY", "harvester_queue")
 PROGRESS_SET = os.environ.get("REDIS_REGISTER_PROGRESS_KEY", "registering_set")
 SUCCESS_SET = os.environ.get("REDIS_REGISTER_SUCCESS_KEY", "register-success_set")
 FAILURE_SET = os.environ.get("REDIS_REGISTER_FAILURE_KEY", "register-failure_set")
@@ -41,3 +43,9 @@ UMA_CLIENT_SECRET_NAMESPACE = os.environ["UMA_CLIENT_SECRET_NAMESPACE"]
 HARBOR_URL = os.environ["HARBOR_URL"]
 HARBOR_ADMIN_USERNAME = os.environ["HARBOR_ADMIN_USERNAME"]
 HARBOR_ADMIN_PASSWORD = os.environ["HARBOR_ADMIN_PASSWORD"]
+
+
+BUCKET_CATALOG_HARVESTER = os.environ.get(
+    "BUCKET_CATALOG_HARVESTER",
+    "harvest-bucket-catalog"
+)
