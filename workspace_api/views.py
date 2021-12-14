@@ -698,11 +698,12 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
 
     # get the URL and extract the path from the S3 URL
     try:
-        parsed_url = urlparse(product.url)
-        netloc = parsed_url.netloc
-        # if ":" in netloc:
-        #     netloc = netloc.rpartition(":")[2]
-        url = netloc + parsed_url.path
+        # parsed_url = urlparse(product.url)
+        # netloc = parsed_url.netloc
+        # # if ":" in netloc:
+        # #     netloc = netloc.rpartition(":")[2]
+        # url = netloc + parsed_url.path
+        url = product.url
     except Exception as e:
         message = {"message": f"Registration failed: {e}"}
         return JSONResponse(status_code=400, content=message)
