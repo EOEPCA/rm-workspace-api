@@ -288,28 +288,33 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                 },
             },
             "harvester": {
-                "harvesters": [
-                    {
-                        "name": config.BUCKET_CATALOG_HARVESTER,
-                        "type": "STACCatalog",
-                        "source": {
-                            "bucket": bucket,
-                            "access_key_id": access_key_id,
-                            "secret_access_key": secret_access_key,
-                            "endpoint_url": config.S3_ENDPOINT,
-                            "region_name": config.S3_REGION,
-                            "validate_bucket_name": False,
-                            "public": False,
+                "config": {
+                    "harvesters": [
+                        {
+                            "name": config.BUCKET_CATALOG_HARVESTER,
+                            "resource": {
+                                "type": "STACCatalog",
+                                "source": {
+                                    "type": "S3",
+                                    "bucket": bucket,
+                                    "access_key_id": access_key_id,
+                                    "secret_access_key": secret_access_key,
+                                    "endpoint_url": config.S3_ENDPOINT,
+                                    "region_name": config.S3_REGION,
+                                    "validate_bucket_name": False,
+                                    "public": False,
+                                },
+                            },
+                            "queue": "register_queue",
                         },
-                        "queue": "register_queue",
-                    }
-                ]
+                    ],
+                },
             },
             "registrar": {
                 "config": {
                     "backends": [
                         {
-                            "path": "registrar.backend.EOxServerBackend",
+                            "path": "registrar.backend.eoxserver.EOxServerBackend",
                             "kwargs": {
                                 "instance_base_path": "/var/www/pvs/dev",
                                 "instance_name": "pvs_instance",
