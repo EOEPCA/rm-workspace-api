@@ -306,42 +306,44 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                 ]
             },
             "registrar": {
-                "backends": [
-                    {
-                        "path": "registrar.backend.EOxServerBackend",
-                        "kwargs": {
-                            "instance_base_path": "/var/www/pvs/dev",
-                            "instance_name": "pvs_instance",
-                            "auto_create_product_types": True,
-                        }
-                    },
-                    {
-                        "path": "registrar_pycsw.backend.PycswItemBackend",
-                        "kwargs": {
-                            "repository_database_uri": (
-                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                            ),
-                            "ows_url": f"https://{data_access_host}/ows",
-                            "public_s3_url": (
-                                f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
-                            ),
+                "config": {
+                    "backends": [
+                        {
+                            "path": "registrar.backend.EOxServerBackend",
+                            "kwargs": {
+                                "instance_base_path": "/var/www/pvs/dev",
+                                "instance_name": "pvs_instance",
+                                "auto_create_product_types": True,
+                            }
                         },
-                    },
-                ],
-                "pathBackends": [
-                    {
-                        "path": "registrar_pycsw.backend.PycswCWLBackend",
-                        "kwargs": {
-                            "repository_database_uri": (
-                                "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                            ),
-                            "ows_url": f"https://{data_access_host}/ows",
-                            "public_s3_url": (
-                                f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
-                            ),
+                        {
+                            "path": "registrar_pycsw.backend.PycswItemBackend",
+                            "kwargs": {
+                                "repository_database_uri": (
+                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                                ),
+                                "ows_url": f"https://{data_access_host}/ows",
+                                "public_s3_url": (
+                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
+                                ),
+                            },
                         },
-                    },
-                ]
+                    ],
+                    "pathBackends": [
+                        {
+                            "path": "registrar_pycsw.backend.PycswCWLBackend",
+                            "kwargs": {
+                                "repository_database_uri": (
+                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
+                                ),
+                                "ows_url": f"https://{data_access_host}/ows",
+                                "public_s3_url": (
+                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
+                                ),
+                            },
+                        },
+                    ],
+                },
             },
         },
         "rm-resource-catalogue": {
