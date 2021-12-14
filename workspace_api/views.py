@@ -711,7 +711,7 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
     # TODO:
     if product.type == "stac-item":
         if url.endswith("/"):
-            url = f"{url}/catalog.json"
+            url = f"{url}catalog.json"
         await client.lpush(
             config.HARVESTER_QUEUE,
             json.dumps({
