@@ -700,8 +700,8 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
     try:
         parsed_url = urlparse(product.url)
         netloc = parsed_url.netloc
-        if ":" in netloc:
-            netloc = netloc.rpartition(":")[2]
+        # if ":" in netloc:
+        #     netloc = netloc.rpartition(":")[2]
         url = netloc + parsed_url.path
     except Exception as e:
         message = {"message": f"Registration failed: {e}"}
@@ -709,6 +709,8 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
 
     # TODO:
     if product.type == "stac-item":
+        if url.endswith("/"):
+            url = f"{url}/catalog.json"
         await client.lpush(
             config.HARVESTER_QUEUE,
             json.dumps({
