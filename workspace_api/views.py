@@ -318,6 +318,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                             "kwargs": {
                                 "instance_base_path": "/var/www/pvs/dev",
                                 "instance_name": "pvs_instance",
+                                "product_types": [],
                                 "auto_create_product_types": True,
                             }
                         },
