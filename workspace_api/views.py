@@ -228,9 +228,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
     version = "v2beta1"
 
     domain = config.WORKSPACE_DOMAIN
-    # data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
     data_access_host = f"data-access.{workspace_name}.{domain}"
-    # catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
     catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
     bucket = base64.b64decode(secret.data["bucketname"]).decode()
     projectid = base64.b64decode(secret.data["projectid"]).decode()
@@ -362,10 +360,6 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                         "url": f"http://{catalog_host}",
                     },
                 },
-            },
-            "ingress": {
-                "host": catalog_open_host,
-                "tls_host": catalog_open_host,
             },
         },
         "resource-guard": {
