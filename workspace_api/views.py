@@ -230,7 +230,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
     domain = config.WORKSPACE_DOMAIN
     # data_access_open_host = f"data-access-open.{workspace_name}.{domain}"
     data_access_host = f"data-access.{workspace_name}.{domain}"
-    catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
+    # catalog_open_host = f"resource-catalogue-open.{workspace_name}.{domain}"
     catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
     bucket = base64.b64decode(secret.data["bucketname"]).decode()
     projectid = base64.b64decode(secret.data["projectid"]).decode()
@@ -413,15 +413,20 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                     "enabled": True,
                     "hosts": [
                         {
-                            "host": f"{workspace_name}",
+                            "host": f"resource-catalogue.{workspace_name}",
                             "paths": [
                                 {
-                                    "path": "/catalogue",
+                                    "path": "/(.*)",
                                     "service": {
                                         "name": "resource-catalogue-service",
                                         "port": 80,
                                     },
                                 },
+                            ],
+                        },
+                        {
+                            "host": f"data-access.{workspace_name}",
+                            "paths": [
                                 {
                                     "path": "/(ows.*)",
                                     "service": {
