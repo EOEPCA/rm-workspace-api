@@ -425,35 +425,35 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                                 {
                                     "path": "/(ows.*)",
                                     "service": {
-                                        "name": "workspace-vs-renderer",
+                                        "name": "workspace-renderer",
                                         "port": 80,
                                     },
                                 },
                                 {
                                     "path": "/(opensearch.*)",
                                     "service": {
-                                        "name": "workspace-vs-renderer",
+                                        "name": "workspace-renderer",
                                         "port": 80,
                                     },
                                 },
                                 {
                                     "path": "/(admin.*)",
                                     "service": {
-                                        "name": "workspace-vs-renderer",
+                                        "name": "workspace-renderer",
                                         "port": 80,
                                     },
                                 },
                                 {
                                     "path": "/cache/(.*)",
                                     "service": {
-                                        "name": "workspace-vs-cache",
+                                        "name": "workspace-cache",
                                         "port": 80,
                                     },
                                 },
                                 {
                                     "path": "/(.*)",
                                     "service": {
-                                        "name": "workspace-vs-client",
+                                        "name": "workspace-client",
                                         "port": 80,
                                     },
                                 },
