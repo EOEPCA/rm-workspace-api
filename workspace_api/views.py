@@ -689,75 +689,75 @@ class Product(BaseModel):
 async def register(product: Product, workspace_name: str = workspace_path_type):
 
     k8s_namespace = workspace_name
-    async with await aioredis.create_redis(
+    client = await aioredis.create_redis(
         # TODO: make this configurable of better
         (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
         encoding="utf-8",
-    ) as client:
+    )
 
-        # get the URL and extract the path from the S3 URL
-        try:
-            # parsed_url = urlparse(product.url)
-            # netloc = parsed_url.netloc
-            # # if ":" in netloc:
-            # #     netloc = netloc.rpartition(":")[2]
-            # url = netloc + parsed_url.path
-            url = product.url
-        except Exception as e:
-            message = {"message": f"Registration failed: {e}"}
-            return JSONResponse(status_code=400, content=message)
+    # get the URL and extract the path from the S3 URL
+    try:
+        # parsed_url = urlparse(product.url)
+        # netloc = parsed_url.netloc
+        # # if ":" in netloc:
+        # #     netloc = netloc.rpartition(":")[2]
+        # url = netloc + parsed_url.path
+        url = product.url
+    except Exception as e:
+        message = {"message": f"Registration failed: {e}"}
+        return JSONResponse(status_code=400, content=message)
 
-        # TODO:
-        if product.type == "stac-item":
-            if url.endswith("/"):
-                url = f"{url}catalog.json"
-            await client.lpush(
-                config.HARVESTER_QUEUE,
-                json.dumps({
-                    "name": config.BUCKET_CATALOG_HARVESTER,
-                    "values": {
-                        "resource": {
-                            "root_path": url
-                        }
+    # TODO:
+    if product.type == "stac-item":
+        if url.endswith("/"):
+            url = f"{url}catalog.json"
+        await client.lpush(
+            config.HARVESTER_QUEUE,
+            json.dumps({
+                "name": config.BUCKET_CATALOG_HARVESTER,
+                "values": {
+                    "resource": {
+                        "root_path": url
                     }
-                })
-            )
-            logger.info(f"STAC Catalog '{url}' was accepted for harvesting")
-            message = {"message": f"STAC Catalog '{url}' was accepted for harvesting"}
-            return JSONResponse(status_code=202, content=message)
+                }
+            })
+        )
+        logger.info(f"STAC Catalog '{url}' was accepted for harvesting")
+        message = {"message": f"STAC Catalog '{url}' was accepted for harvesting"}
+        return JSONResponse(status_code=202, content=message)
 
-        # Register CWL applications
-        try:
-            await client.lpush(config.REGISTER_PATH_QUEUE, url)
-            time_index = 0.0
-            while True:
-                logger.info("CWL file '%s' is being proccessed!" % url)
-                await asyncio.sleep(config.REGISTRATION_CHECK_INTERVAL)
-                time_index += config.REGISTRATION_CHECK_INTERVAL
-                if (
-                    time_index >= config.REGISTRATION_TIME_OUT
-                    or not await client.sismember(config.PROGRESS_SET, url)
-                ):
-                    break
+    # Register CWL applications
+    try:
+        await client.lpush(config.REGISTER_PATH_QUEUE, url)
+        time_index = 0.0
+        while True:
+            logger.info("CWL file '%s' is being proccessed!" % url)
+            await asyncio.sleep(config.REGISTRATION_CHECK_INTERVAL)
+            time_index += config.REGISTRATION_CHECK_INTERVAL
+            if (
+                time_index >= config.REGISTRATION_TIME_OUT
+                or not await client.sismember(config.PROGRESS_SET, url)
+            ):
+                break
 
-            if time_index >= config.REGISTRATION_TIME_OUT:
-                logger.info("Timeout while registering '%s'" % url)
-                message = {"message": f"Timeout while registering '{url}'"}
-                return JSONResponse(status_code=400, content=message)
-
-            if await client.sismember(config.SUCCESS_SET, url):
-                logger.info("CWL file '%s' was successfully registered" % url)
-                message = {"message": f"CWL file '{url}' was successfully registered"}
-                return JSONResponse(status_code=200, content=message)
-
-            elif await client.sismember(config.FAILURE_SET, url):
-                logger.info("Failed to register CWL file %s" % url)
-                message = {"message": f"Failed to register CWL file {url}"}
-                return JSONResponse(status_code=400, content=message)
-
-        except Exception as e:
-            message = {"message": f"Registration failed: {e}"}
+        if time_index >= config.REGISTRATION_TIME_OUT:
+            logger.info("Timeout while registering '%s'" % url)
+            message = {"message": f"Timeout while registering '{url}'"}
             return JSONResponse(status_code=400, content=message)
+
+        if await client.sismember(config.SUCCESS_SET, url):
+            logger.info("CWL file '%s' was successfully registered" % url)
+            message = {"message": f"CWL file '{url}' was successfully registered"}
+            return JSONResponse(status_code=200, content=message)
+
+        elif await client.sismember(config.FAILURE_SET, url):
+            logger.info("Failed to register CWL file %s" % url)
+            message = {"message": f"Failed to register CWL file {url}"}
+            return JSONResponse(status_code=400, content=message)
+
+    except Exception as e:
+        message = {"message": f"Registration failed: {e}"}
+        return JSONResponse(status_code=400, content=message)
 
 
 class DeregisterProduct(BaseModel):
