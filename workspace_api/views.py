@@ -388,7 +388,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                     "name": f"eoepca-resman-pvc-{workspace_name}",
                     "create": "true",
                 },
-                "customDefaultResources": [
+                "defaultResources": [
                     {
                         "name": f"Workspace {workspace_name}",
                         "description": "Root URL of a users workspace",
