@@ -357,7 +357,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
             "pycsw": {
                 "config": {
                     "server": {
-                        "url": f"http://{catalog_host}",
+                        "url": f"https://{catalog_host}",
                     },
                 },
             },
