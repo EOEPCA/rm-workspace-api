@@ -653,7 +653,8 @@ class WorkspaceUpdate(BaseModel):
 
 @app.patch("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
 def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_type):
-    if storage := data.storage:  # noqa: E203
+    storage = data.storage
+    if storage:  # noqa: E203
         k8s_client.CoreV1Api().patch_namespaced_config_map(
             name=config.WORKSPACE_CONFIG_MAP_NAME,
             namespace=workspace_name,
