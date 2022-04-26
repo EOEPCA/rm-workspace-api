@@ -476,6 +476,9 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         "global": {
             "namespace": workspace_name,
         },
+        "storage": {
+            "storageClassName": config.HELM_CHART_STORAGE_CLASS_NAME
+        },
     }
 
     body = {

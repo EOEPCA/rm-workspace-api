@@ -359,6 +359,7 @@ def test_install_workspace_phase2_sets_values(
         values["vs"]["global"]["storage"]["data"]["data"]["secret_access_key"]
         == "supersecret"
     )
+    assert values["storage"]["storageClassName"] == "my-storage-class"
 
 
 def test_get_workspace_returns_not_found_if_not_found(
