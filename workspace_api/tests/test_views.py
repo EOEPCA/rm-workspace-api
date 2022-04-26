@@ -104,15 +104,13 @@ def mock_delete_namespace():
 @pytest.fixture()
 def mock_list_ingress():
     with mock.patch(
-        "workspace_api.views.k8s_client.ExtensionsV1beta1Api.list_namespaced_ingress",
-        return_value=k8s_client.ExtensionsV1beta1IngressList(
+        "workspace_api.views.k8s_client.NetworkingV1Api.list_namespaced_ingress",
+        return_value=k8s_client.V1IngressList(
             items=[
-                k8s_client.ExtensionsV1beta1Ingress(
+                k8s_client.V1Ingress(
                     metadata=k8s_client.V1ObjectMeta(name="myingress"),
-                    spec=k8s_client.ExtensionsV1beta1IngressSpec(
-                        rules=[
-                            k8s_client.ExtensionsV1beta1IngressRule(host="example.com")
-                        ]
+                    spec=k8s_client.V1IngressSpec(
+                        rules=[k8s_client.V1IngressRule(host="example.com")]
                     ),
                 )
             ]
@@ -252,12 +250,12 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     mock_create_namespace.assert_called_once()
 
     # create bucket
-    params = mock_create_custom_object.mock_calls[0].kwargs
+    params = mock_create_custom_object.mock_calls[0][2]
     assert params["body"]["kind"] == "Bucket"
     assert name in params["body"]["spec"]["bucketName"]
 
     # create helm release
-    params = mock_create_custom_object.mock_calls[1].kwargs
+    params = mock_create_custom_object.mock_calls[1][2]
     assert name in params["namespace"]
     assert params["body"]["kind"] == "HelmRelease"
     assert name in params["body"]["metadata"]["namespace"]
@@ -265,20 +263,20 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     # create uma secret
     assert (
         base64.b64decode(
-            mock_create_secret.mock_calls[0].kwargs["body"].data["uma"]
+            mock_create_secret.mock_calls[0][2]["body"].data["uma"]
         ).decode()
         == "uma"
     )
 
     # create harbor credentials via api
     mock_post_harbor_api.assert_called_once()
-    assert name in mock_post_harbor_api.mock_calls[0].kwargs["json"]["username"]
+    assert name in mock_post_harbor_api.mock_calls[0][2]["json"]["username"]
 
     # store harbor credentials in secret
     assert (
         name
         in base64.b64decode(
-            mock_create_secret.mock_calls[1].kwargs["body"].data["username"]
+            mock_create_secret.mock_calls[1][2]["body"].data["username"]
         ).decode()
     )
 
@@ -293,8 +291,8 @@ def test_create_repository_in_container_registry_calls_harbor(
     )
 
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert mock_post_harbor_api.mock_calls[0].kwargs["json"]["project_name"] == "asdf"
-    assert mock_post_harbor_api.mock_calls[2].kwargs["json"]["role_id"] == 2
+    assert mock_post_harbor_api.mock_calls[0][2]["json"]["project_name"] == "asdf"
+    assert mock_post_harbor_api.mock_calls[2][2]["json"]["role_id"] == 2
 
 
 def test_create_repository_in_container_registry_returns_error_on_conflict(client):
@@ -338,9 +336,9 @@ def test_grant_access_to_repository_calls_harbor(client, mock_post_harbor_api):
     )
 
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert "asdf" in mock_post_harbor_api.mock_calls[0].args[0]
+    assert "asdf" in mock_post_harbor_api.mock_calls[0][1][0]
     assert (
-        mock_post_harbor_api.mock_calls[0].kwargs["json"]["member_user"]["username"]
+        mock_post_harbor_api.mock_calls[0][2]["json"]["member_user"]["username"]
         == "jkl"
     )
 
@@ -352,10 +350,13 @@ def test_install_workspace_phase2_sets_values(
     install_workspace_phase2("test")
 
     mock_create_custom_object.assert_called_once()
-    values = mock_create_custom_object.mock_calls[0].kwargs["body"]["spec"]["values"]
-    assert values["vs"]["ingress"]["hosts"][0]["host"].startswith("data-acc")
+    values = mock_create_custom_object.mock_calls[0][2]["body"]["spec"]["values"]
     assert (
-        values["vs"]["config"]["objectStorage"]["data"]["data"]["secret_access_key"]
+        "data-acc"
+        in values["vs"]["registrar"]["config"]["pathBackends"][0]["kwargs"]["ows_url"]
+    )
+    assert (
+        values["vs"]["global"]["storage"]["data"]["data"]["secret_access_key"]
         == "supersecret"
     )
 

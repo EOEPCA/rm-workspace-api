@@ -576,8 +576,8 @@ async def get_workspace(workspace_name: str = workspace_path_type):
 
 def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
     ingresses = cast(
-        List[k8s_client.ExtensionsV1beta1Ingress],
-        k8s_client.ExtensionsV1beta1Api()
+        List[k8s_client.V1Ingress],
+        k8s_client.NetworkingV1Api()
         .list_namespaced_ingress(namespace=workspace_name)
         .items,
     )

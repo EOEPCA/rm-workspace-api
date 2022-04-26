@@ -1,6 +1,6 @@
 # build is docker-compose build
 all:
-	docker-compose run workspace-api bash -c "pytest && flake8 && mypy ."
+	docker-compose run --user 0 workspace-api bash -c "pytest && flake8 && mypy ."
 
 build:
 	docker-compose build
@@ -12,10 +12,10 @@ test-watch:
 	docker-compose run workspace-api ptw
 
 lint:
-	docker-compose run workspace-api bash -c "flake8 && mypy ."
+	docker-compose run --user 0 workspace-api bash -c "flake8 && mypy ."
 
 lint-watch:
-	docker-compose run workspace-api bash -c "watch -n1  bash -c \"flake8 && mypy .\""
+	docker-compose run --user 0 workspace-api bash -c "watch -n1  bash -c \"flake8 && mypy .\""
 	
 upgrade-packages:
 	docker-compose run --user 0 workspace-api bash -c "python3 -m pip install pip-upgrader && pip-upgrade --skip-package-installation"
