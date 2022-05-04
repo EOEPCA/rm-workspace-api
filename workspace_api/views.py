@@ -691,10 +691,8 @@ class Product(BaseModel):
 async def register(product: Product, workspace_name: str = workspace_path_type):
 
     k8s_namespace = workspace_name
-    client = await aioredis.create_redis(
-        # TODO: make this configurable of better
-        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
-        encoding="utf-8",
+    client = await aioredis.from_url(
+        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
     )
 
     # get the URL and extract the path from the S3 URL
