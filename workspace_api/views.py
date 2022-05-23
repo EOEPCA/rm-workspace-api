@@ -362,19 +362,19 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         },
         "resource-guard": {
             "global": {
-                "pep": f"{workspace_name}-resource-guard",
+                "pep": f"{workspace_name}-pep",
                 "domain": config.WORKSPACE_DOMAIN,
-                "nginxIp": "185.52.195.19",
+                "nginxIp": config.AUTH_SERVER_IP,
                 "certManager": {
-                    "clusterIssuer": "letsencrypt",
+                    "clusterIssuer": config.CLUSTER_ISSUER,
                 },
-                "context": f"{workspace_name}-pep-engine",
+                "context": f"{workspace_name}-resource-guard",
             },
             "pep-engine": {
                 "configMap": {
                     "workingMode": "PARTIAL",
-                    "asHostname": "test",
-                    "pdpHostname": "test",
+                    "asHostname": config.AUTH_SERVER_HOSTNAME,
+                    "pdpHostname": config.AUTH_SERVER_HOSTNAME,
                 },
                 "nginxIntegration": {
                     "enabled": False
@@ -464,10 +464,10 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                     },
                 },
                 "client": {
-                    "credentialsSecretName": "rm-uma-user-agent",  # TODO: use dynamically created secret name
+                    "credentialsSecretName": config.UMA_CLIENT_SECRET_NAME,
                 },
                 "logging": {
-                    "level": "debug",
+                    "level": "info",
                 },
                 "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"',  # TODO: correct domain
                 # "openAccess": True,
@@ -595,7 +595,7 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         ),
     )
     """
-    credentials: dict[str, Any] = {
+    credentials: Dict[str, Any] = {
         k: base64.b64decode(v) for k, v in secret.data.items()
     }
     credentials["endpoint"] = config.S3_ENDPOINT
