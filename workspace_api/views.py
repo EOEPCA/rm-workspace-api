@@ -352,6 +352,9 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
             "global": {
                 "namespace": workspace_name,
             },
+            "db": {
+                "volume_storage_type": config.RESOURCE_CATALOG_VOLUME_STORAGE_TYPE,
+            },
             "pycsw": {
                 "config": {
                     "server": {
