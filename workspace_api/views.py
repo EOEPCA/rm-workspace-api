@@ -211,312 +211,44 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
-    #domain = config.WORKSPACE_DOMAIN
-    #data_access_host = f"data-access.{workspace_name}.{domain}"
-    #catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
-    bucket = base64.b64decode(secret.data["bucketname"]).decode()
-    projectid = base64.b64decode(secret.data["projectid"]).decode()
-
     found_hr = False
     if patch:
-        group = "helm.toolkit.fluxcd.io"
-        version = "v2beta1"
-        api = k8s_client.CustomObjectsApi()
-        response = api.list_namespaced_custom_object(
-            group=group,
+        response = k8s_client.CustomObjectsApi().list_namespaced_custom_object(
+            group="helm.toolkit.fluxcd.io",
             plural="helmreleases",
-            version=version,
+            version="v2beta1",
             namespace=workspace_name,
         )
-        found_hr = False
         for item in response["items"]:
             try:
-                if item["spec"]["releaseName"] == "workspace":
+                if item["spec"]["releaseName"] == "resource-guard":
                     found_hr = True
-                    default_owner = item["spec"]["values"]["resource-guard"][
-                        "pep-engine"
-                    ]["customDefaultResources"][0]["default_owner"]
+                    default_owner = item["spec"]["values"]["default_owner"]
                     break
 
             except KeyError:
                 pass
-    access_key_id = base64.b64decode(secret.data["access"]).decode()
-    secret_access_key = base64.b64decode(secret.data["secret"]).decode()
 
-
-    deploy_helm_releases(workspace_name=workspace_name, is_update=found_hr)
-    return
-
-    values = {
-        "vs": {
-            # open ingresses are now disabled
-            # "ingress": {
-            #     "hosts": [
-            #         {
-            #             "host": data_access_open_host,
-            #         },
-            #     ],
-            #     "tls": [
-            #         {
-            #             "hosts": [data_access_open_host],
-            #             "secretName": "data-access-tls",
-            #         }
-            #     ],
-            # },
-            "global": {
-                "storage": {
-                    "data": {
-                        "data": {
-                            # TODO: this values are secret, pass them as secret
-                            "access_key_id": access_key_id,
-                            "secret_access_key": secret_access_key,
-                            "bucket": bucket,
-                            "endpoint_url": config.S3_ENDPOINT,
-                            "region": config.S3_REGION,
-                        },
-                    },
-                },
-            },
-            "harvester": {
-                "config": {
-                    "harvesters": [
-                        {
-                            "name": config.BUCKET_CATALOG_HARVESTER,
-                            "resource": {
-                                "type": "STACCatalog",
-                                "source": {
-                                    "type": "S3",
-                                    "bucket": bucket,
-                                    "access_key_id": access_key_id,
-                                    "secret_access_key": secret_access_key,
-                                    "endpoint_url": config.S3_ENDPOINT,
-                                    "region_name": config.S3_REGION,
-                                    "validate_bucket_name": False,
-                                    "public": False,
-                                },
-                            },
-                            "queue": "register_queue",
-                        },
-                    ],
-                },
-            },
-            "registrar": {
-                "config": {
-                    "backends": [
-                        {
-                            "path": "registrar.backend.eoxserver.EOxServerBackend",
-                            "kwargs": {
-                                "instance_base_path": "/var/www/pvs/dev",
-                                "instance_name": "pvs_instance",
-                                "product_types": [],
-                                "auto_create_product_types": True,
-                            },
-                        },
-                        {
-                            "path": "registrar_pycsw.backend.PycswItemBackend",
-                            "kwargs": {
-                                "repository_database_uri": (
-                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                                ),
-                                "ows_url": f"https://{data_access_host}/ows",
-                                "public_s3_url": (
-                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
-                                ),
-                            },
-                        },
-                    ],
-                    "pathBackends": [
-                        {
-                            "path": "registrar_pycsw.backend.PycswCWLBackend",
-                            "kwargs": {
-                                "repository_database_uri": (
-                                    "postgresql://postgres:mypass@resource-catalogue-db/pycsw"
-                                ),
-                                "ows_url": f"https://{data_access_host}/ows",
-                                "public_s3_url": (
-                                    f"{config.S3_ENDPOINT}/{projectid}:{bucket}"
-                                ),
-                            },
-                        },
-                    ],
-                },
-            },
-        },
-        "rm-resource-catalogue": {
-            "global": {
-                "namespace": workspace_name,
-            },
-            "db": {
-                "volume_storage_type": config.RESOURCE_CATALOG_VOLUME_STORAGE_TYPE,
-            },
-            "pycsw": {
-                "config": {
-                    "server": {
-                        "url": f"https://{catalog_host}",
-                    },
-                },
-            },
-        },
-        "resource-guard": {
-            "global": {
-                "pep": f"{workspace_name}-pep",
-                "domain": config.WORKSPACE_DOMAIN,
-                "nginxIp": config.AUTH_SERVER_IP,
-                "certManager": {
-                    "clusterIssuer": config.CLUSTER_ISSUER,
-                },
-                "context": f"{workspace_name}-resource-guard",
-            },
-            "pep-engine": {
-                "configMap": {
-                    "workingMode": "PARTIAL",
-                    "asHostname": config.AUTH_SERVER_HOSTNAME,
-                    "pdpHostname": config.AUTH_SERVER_HOSTNAME,
-                },
-                "nginxIntegration": {
-                    "enabled": False
-                    # hostname: resource-catalogue-auth
-                },
-                # image:
-                #   pullPolicy: Always
-                "volumeClaim": {
-                    "name": f"eoepca-resman-pvc-{workspace_name}",
-                    "create": "true",
-                },
-                "defaultResources": [
-                    {
-                        "name": f"Workspace {workspace_name}",
-                        "description": "Root URL of a users workspace",
-                        "resource_uri": "/",
-                        "scopes": [],
-                        "default_owner": default_owner,
-                    }
-                ],
-            },
-            "uma-user-agent": {
-                "fullnameOverride": f"{workspace_name}-agent",
-                # image:
-                #   tag: latest
-                #   pullPolicy: Always
-                "nginxIntegration": {
-                    "enabled": True,
-                    "hosts": [
-                        {
-                            "host": f"resource-catalogue.{workspace_name}",
-                            "paths": [
-                                {
-                                    "path": "/(.*)",
-                                    "service": {
-                                        "name": "resource-catalogue-service",
-                                        "port": 80,
-                                    },
-                                },
-                            ],
-                        },
-                        {
-                            "host": f"data-access.{workspace_name}",
-                            "paths": [
-                                {
-                                    "path": "/(ows.*)",
-                                    "service": {
-                                        "name": "workspace-renderer",
-                                        "port": 80,
-                                    },
-                                },
-                                {
-                                    "path": "/(opensearch.*)",
-                                    "service": {
-                                        "name": "workspace-renderer",
-                                        "port": 80,
-                                    },
-                                },
-                                {
-                                    "path": "/(admin.*)",
-                                    "service": {
-                                        "name": "workspace-renderer",
-                                        "port": 80,
-                                    },
-                                },
-                                {
-                                    "path": "/cache/(.*)",
-                                    "service": {
-                                        "name": "workspace-cache",
-                                        "port": 80,
-                                    },
-                                },
-                                {
-                                    "path": "/(.*)",
-                                    "service": {
-                                        "name": "workspace-client",
-                                        "port": 80,
-                                    },
-                                },
-                            ],
-                        },
-                    ],
-                    "annotations": {
-                        "nginx.ingress.kubernetes.io/proxy-read-timeout": "600",
-                        "nginx.ingress.kubernetes.io/enable-cors": "true",
-                        "nginx.ingress.kubernetes.io/rewrite-target": "/$1",
-                    },
-                },
-                "client": {
-                    "credentialsSecretName": config.UMA_CLIENT_SECRET_NAME,
-                },
-                "logging": {
-                    "level": "info",
-                },
-                "unauthorizedResponse": f'Bearer realm="https://portal.{config.WORKSPACE_DOMAIN}/oidc/authenticate/"',  # TODO: correct domain
-                # "openAccess": True,
-            },
-        },
-        "global": {
-            "namespace": workspace_name,
-        },
-        "storage": {"storageClassName": config.HELM_CHART_STORAGE_CLASS_NAME},
-    }
-
-    body = {
-        "apiVersion": f"{group}/{version}",
-        "kind": "HelmRelease",
-        "metadata": {
-            "name": "workspace",
-            "namespace": workspace_name,
-        },
-        "spec": {
-            "chart": chart,
-            "interval": "1h0m0s",
-            "releaseName": "workspace",
-            "targetNamespace": workspace_name,
-            "values": values,
-        },
-    }
-
-    # try patching the HR first
-    if found_hr:
-        api.patch_namespaced_custom_object(
-            name="workspace",
-            group=group,
-            plural="helmreleases",
-            version=version,
-            namespace=workspace_name,
-            body=body,
+    try:
+        deploy_helm_releases(
+            workspace_name=workspace_name,
+            is_update=found_hr,
+            secret=secret,
+            default_owner=default_owner,
         )
-    else:
-        # fallback to (re-)create the HR
-        api.create_namespaced_custom_object(
-            group=group,
-            plural="helmreleases",
-            version=version,
-            namespace=workspace_name,
-            body=body,
-        )
+    except Exception as e:
+        logger.critical(e, exc_info=True)
+
+    # try patching the HR f
 
 
 def deploy_helm_releases(
     workspace_name: str,
-    is_update,
+    is_update: bool,
+    secret: k8s_client.V1Secret,
+    default_owner: str,
 ):
+
     hrs = (
         k8s_client.CoreV1Api()
         .read_namespaced_config_map(
@@ -525,9 +257,9 @@ def deploy_helm_releases(
         )
         .data
     )
-    logger.info(f"Deploying {len(hrs)} helmreleases: {list(hrs)}")
+    logger.info(f"Deploying {len(hrs)} HelmReleases: {list(hrs)}")
     for hr_key, hr_raw_content in hrs.items():
-        logger.info(f"Deploying hr {hr_key}")
+        logger.info(f"Deploying HelmRelease {hr_key}")
 
         hr_rendered = (
             jinja2.Environment()
@@ -536,6 +268,11 @@ def deploy_helm_releases(
             )
             .render(
                 workspace_name=workspace_name,
+                access_key_id=base64.b64decode(secret.data["access"]).decode(),
+                secret_access_key=base64.b64decode(secret.data["secret"]).decode(),
+                bucket=base64.b64decode(secret.data["bucketname"]).decode(),
+                projectid=base64.b64decode(secret.data["projectid"]).decode(),
+                default_owner=default_owner,
             )
         )
 
@@ -564,6 +301,7 @@ def deploy_helm_releases(
                 body=hr_rendered_parsed,
             )
 
+    logger.info("All HelmReleases have been deployed")
 
 def workspace_name_from_preferred_name(preferred_name: str):
     safe_name = slugify(preferred_name, max_length=32)
@@ -806,7 +544,7 @@ async def deregister(
 ):
 
     k8s_namespace = workspace_name
-    client = await aioredis.create_redis(
+    client = await aioredis.create_redis(  # type: ignore
         # TODO: make this configurable of better
         (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
         encoding="utf-8",

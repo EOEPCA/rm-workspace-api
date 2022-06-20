@@ -4,7 +4,7 @@ configMapGenerator:
   - name: workspace-charts
     namespace: dev
     files:
-    # - vs
+    - template-hr-vs.yaml
     - template-hr-rm-resource-catalogue.yaml
     - template-hr-resource-guard.yaml
 generatorOptions:

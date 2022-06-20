@@ -152,19 +152,22 @@ def mock_patch_config_map():
 
 
 @pytest.fixture()
-def mock_wait_for_secret():
-    secret = k8s_client.V1Secret(
+def mock_secret():
+    return k8s_client.V1Secret(
         data={
             "access": "",
             "bucketname": "",
             "projectid": "",
             "secret": base64.b64encode(b"supersecret"),
-            # actual secrets also have 'projectid', but we don't use that now
         }
     )
+
+
+@pytest.fixture()
+def mock_wait_for_secret(mock_secret):
     with mock.patch(
         "workspace_api.views.wait_for_namespace_secret",
-        return_value=secret,
+        return_value=mock_secret,
     ):
         yield
 
@@ -291,10 +294,17 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
 
 
 def test_deploy_hrs_deploys_from_tempalted_config_map(
-    mock_read_config_map, mock_create_custom_object
+    mock_read_config_map,
+    mock_create_custom_object,
+    mock_secret,
 ):
 
-    deploy_helm_releases(workspace_name="a", is_update=False)
+    deploy_helm_releases(
+        workspace_name="a",
+        is_update=False,
+        secret=mock_secret,
+        default_owner="me",
+    )
 
     hr_body = mock_create_custom_object.mock_calls[0][2]["body"]
     assert hr_body["spec"]["values"]["namespace"] == "a"

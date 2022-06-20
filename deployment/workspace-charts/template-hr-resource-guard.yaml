@@ -21,6 +21,7 @@ spec:
         certManager:
             clusterIssuer: letsencrypt
         context: "{{ workspace_name }}-resource-guard"
+        default_owner: {{ default_owner }} # NOTE: do not remove, we need to store this here for redeploys
     pep-engine:
         configMap:
             workingMode: "PARTIAL"
@@ -35,11 +36,11 @@ spec:
             name: "eoepca-resman-pvc-{{ workspace_name }}"
             create: "true"
         defaultResources: 
-            -   name: "Workspace {{ workspace_name }}"
-                description: "Root URL of a users workspace"
-                resource_uri: "/"
-                scopes: []
-                default_owner: default_owner
+            - name: "Workspace {{ workspace_name }}"
+              description: "Root URL of a users workspace"
+              resource_uri: "/"
+              scopes: []
+              default_owner: {{ default_owner }}
     uma-user-agent:
         fullnameOverride: "{{ workspace_name }}-agent"
         # image:
