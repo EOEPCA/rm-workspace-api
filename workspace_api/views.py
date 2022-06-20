@@ -316,7 +316,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                                 "instance_name": "pvs_instance",
                                 "product_types": [],
                                 "auto_create_product_types": True,
-                            }
+                            },
                         },
                         {
                             "path": "registrar_pycsw.backend.PycswItemBackend",
@@ -479,9 +479,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         "global": {
             "namespace": workspace_name,
         },
-        "storage": {
-            "storageClassName": config.HELM_CHART_STORAGE_CLASS_NAME
-        },
+        "storage": {"storageClassName": config.HELM_CHART_STORAGE_CLASS_NAME},
     }
 
     body = {
@@ -716,14 +714,12 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
             url = f"{url}catalog.json"
         await client.lpush(
             config.HARVESTER_QUEUE,
-            json.dumps({
-                "name": config.BUCKET_CATALOG_HARVESTER,
-                "values": {
-                    "resource": {
-                        "root_path": url
-                    }
+            json.dumps(
+                {
+                    "name": config.BUCKET_CATALOG_HARVESTER,
+                    "values": {"resource": {"root_path": url}},
                 }
-            })
+            ),
         )
         logger.info(f"STAC Catalog '{url}' was accepted for harvesting")
         message = {"message": f"STAC Catalog '{url}' was accepted for harvesting"}
