@@ -8,12 +8,10 @@ from kubernetes import client as k8s_client
 import pytest
 import requests
 import requests.exceptions
-import yaml
 
 from workspace_api import config
 from workspace_api.views import (
     WorkspaceStatus,
-    install_workspace_phase2,
     wait_for_namespace_secret,
     workspace_name_from_preferred_name,
     deploy_helm_releases,
@@ -269,7 +267,7 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     # create helm release
     params = mock_create_custom_object.mock_calls[1][2]
     assert name in params["namespace"]
-    assert yaml.safe_load(params["body"])["kind"] == "HelmRelease"
+    assert params["body"]["kind"] == "HelmRelease"
 
     # create uma secret
     assert (
@@ -298,7 +296,7 @@ def test_deploy_hrs_deploys_from_tempalted_config_map(
 
     deploy_helm_releases(workspace_name="a", is_update=False)
 
-    hr_body = yaml.safe_load(mock_create_custom_object.mock_calls[0][2]["body"])
+    hr_body = mock_create_custom_object.mock_calls[0][2]["body"]
     assert hr_body["spec"]["values"]["namespace"] == "a"
 
 

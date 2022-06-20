@@ -9,8 +9,8 @@ set -eux
 
 cd `dirname $0`
 
-kubectl delete clusterrolebindings.rbac.authorization.k8s.io workspace-api
-kubectl delete clusterroles.rbac.authorization.k8s.io workspace-api
+kubectl delete clusterrolebindings.rbac.authorization.k8s.io workspace-api || true
+kubectl delete clusterroles.rbac.authorization.k8s.io workspace-api || true
 
 for file in *.yaml; do
     kubectl apply -f "$file"

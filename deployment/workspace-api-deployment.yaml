@@ -38,7 +38,7 @@ spec:
           httpGet:
             path: /probe
             port: 8080
-          initialDelaySeconds: 10
+          initialDelaySeconds: 5
           timeoutSeconds: 2
           periodSeconds: 3
           failureThreshold: 1
@@ -46,7 +46,7 @@ spec:
           httpGet:
             path: /probe
             port: 8080
-          initialDelaySeconds: 20
+          initialDelaySeconds: 10
           timeoutSeconds: 2
           periodSeconds: 8
           failureThreshold: 1
@@ -55,6 +55,16 @@ spec:
           value: "rm-user"
         - name: WORKSPACE_CHARTS_CONFIG_MAP
           value: "workspace-charts"
+        - name: HELM_CHART_STORAGE_CLASS_NAME
+          value: "test"
+        - name: AUTH_SERVER_IP
+          value: "test"
+        - name: CLUSTER_ISSUER
+          value: "test"
+        - name: AUTH_SERVER_HOSTNAME
+          value: "test"
+        - name: RESOURCE_CATALOG_VOLUME_STORAGE_TYPE
+          value: "test"
         - name: WORKSPACE_SECRET_NAME
           value: "mucho-secreto"
         - name: NAMESPACE_FOR_BUCKET_RESOURCE

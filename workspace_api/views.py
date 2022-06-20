@@ -211,30 +211,17 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
-    chart = {
-        "spec": {
-            "chart": config.HELM_CHART_NAME,
-            "version": config.HELM_CHART_VERSION,
-            "sourceRef": {
-                "kind": "HelmRepository",
-                "name": config.GIT_REPO_RESOURCE_FOR_HELM_CHART_NAME,
-                "namespace": config.GIT_REPO_RESOURCE_FOR_HELM_CHART_NAMESPACE,
-            },
-        }
-    }
-
-    api = k8s_client.CustomObjectsApi()
-    group = "helm.toolkit.fluxcd.io"
-    version = "v2beta1"
-
-    domain = config.WORKSPACE_DOMAIN
-    data_access_host = f"data-access.{workspace_name}.{domain}"
-    catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
+    #domain = config.WORKSPACE_DOMAIN
+    #data_access_host = f"data-access.{workspace_name}.{domain}"
+    #catalog_host = f"resource-catalogue.{workspace_name}.{domain}"
     bucket = base64.b64decode(secret.data["bucketname"]).decode()
     projectid = base64.b64decode(secret.data["projectid"]).decode()
 
     found_hr = False
     if patch:
+        group = "helm.toolkit.fluxcd.io"
+        version = "v2beta1"
+        api = k8s_client.CustomObjectsApi()
         response = api.list_namespaced_custom_object(
             group=group,
             plural="helmreleases",
@@ -538,6 +525,7 @@ def deploy_helm_releases(
         )
         .data
     )
+    logger.info(f"Deploying {len(hrs)} helmreleases: {list(hrs)}")
     for hr_key, hr_raw_content in hrs.items():
         logger.info(f"Deploying hr {hr_key}")
 
@@ -565,7 +553,7 @@ def deploy_helm_releases(
                 plural=plural,
                 version=version,
                 namespace=workspace_name,
-                body=hr_rendered,
+                body=hr_rendered_parsed,
             )
         else:
             k8s_client.CustomObjectsApi().create_namespaced_custom_object(
@@ -573,7 +561,7 @@ def deploy_helm_releases(
                 plural=plural,
                 version=version,
                 namespace=workspace_name,
-                body=hr_rendered,
+                body=hr_rendered_parsed,
             )
 
 
@@ -887,7 +875,7 @@ def create_container_registry_repository(
         role_id=2,  # Developer
     )
 
-    return JSONResponse(status_code=HTTPStatus.NO_CONTENT)
+    return JSONResponse(status_code=HTTPStatus.NO_CONTENT, content="")
 
 
 def grant_container_registry_access(
@@ -918,7 +906,7 @@ def grant_container_registry_access_view(data: GrantAccess):
         project_name=data.repository_name,
         role_id=5,  # limited guest
     )
-    return JSONResponse(status_code=HTTPStatus.NO_CONTENT)
+    return JSONResponse(status_code=HTTPStatus.NO_CONTENT, content="")
 
 
 def current_namespace() -> str:

@@ -21,3 +21,4 @@ ipdb
 requests-mock
 types-python-slugify
 types-requests
+types-PyYAML

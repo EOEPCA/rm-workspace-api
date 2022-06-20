@@ -9,6 +9,6 @@ set -eux
 
 NAMESPACE=$1
 
-kubectl -n $NAMESPACE create secret generic mucho-secreto --from-literal=access=access_value --from-literal=bucketname=bucketname_value --from-literal=secret=secret_value
+kubectl -n $NAMESPACE create secret generic mucho-secreto --from-literal=access=access_value --from-literal=bucketname=bucketname_value --from-literal=secret=secret_value --from-literal=projectid=testproject
 # also create configmap
 kubectl -n $NAMESPACE create configmap workspace --from-literal=quota_in_mb=256

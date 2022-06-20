@@ -2,7 +2,6 @@ apiVersion: helm.toolkit.fluxcd.io/v2beta1
 kind: HelmRelease
 metadata:
   name: resource-guard
-  namespace: rm
 spec:
   interval: 60m
   chart:
@@ -16,16 +15,16 @@ spec:
   values:
     global:
         pep: "{{ workspace_name }}-pep"
-        domain: config.WORKSPACE_DOMAIN
-        ginxIp: config.AUTH_SERVER_IP
+        domain: develop.eoepca.org
+        ginxIp: "185.52.192.231"
         certManager:
-            clusterIssuer: config.CLUSTER_ISSUER
+            clusterIssuer: letsencrypt
         context: "{{ workspace_name }}-resource-guard"
     pep-engine:
         configMap:
             workingMode: "PARTIAL"
-            asHostname: config.AUTH_SERVER_HOSTNAME
-            pdpHostname: config.AUTH_SERVER_HOSTNAME
+            asHostname: auth
+            pdpHostname: auth
         nginxIntegration:
             enabled: False
             # hostname: resource-catalogue-auth
@@ -35,7 +34,7 @@ spec:
             name: "eoepca-resman-pvc-{{ workspace_name }}"
             create: "true"
         defaultResources: 
-            -   name: "Workspace {{ workspace_name }"
+            -   name: "Workspace {{ workspace_name }}"
                 description: "Root URL of a users workspace"
                 resource_uri: "/"
                 scopes: []
@@ -81,8 +80,8 @@ spec:
               nginx.ingress.kubernetes.io/enable-cors: "true"
               nginx.ingress.kubernetes.io/rewrite-target: "/$1"
         client:
-            credentialsSecretName: config.UMA_CLIENT_SECRET_NAME
+            credentialsSecretName: rm-uma-user-agent
         logging:
             level: info
-        unauthorizedResponse: 'Bearer realm="https://portal.{{ config.WORKSPACE_DOMAIN }}/oidc/authenticate/"'
+        unauthorizedResponse: 'Bearer realm="https://portal.develop.eoepca.org/oidc/authenticate/"'
         # "openAccess": True,
