@@ -15,3 +15,5 @@ kubectl delete clusterroles.rbac.authorization.k8s.io workspace-api
 for file in *.yaml; do
     kubectl apply -f "$file"
 done
+
+( cd ./workspace-charts ; kubectl kustomize . | kubectl apply -f - )

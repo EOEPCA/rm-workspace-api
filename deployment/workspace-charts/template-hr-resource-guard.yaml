@@ -1,0 +1,88 @@
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: resource-guard
+  namespace: rm
+spec:
+  interval: 60m
+  chart:
+    spec:
+      chart: resource-guard
+      version: 1.0.6
+      sourceRef:
+        kind: HelmRepository
+        name: eoepca
+        namespace: common
+  values:
+    global:
+        pep: "{{ workspace_name }}-pep"
+        domain: config.WORKSPACE_DOMAIN
+        ginxIp: config.AUTH_SERVER_IP
+        certManager:
+            clusterIssuer: config.CLUSTER_ISSUER
+        context: "{{ workspace_name }}-resource-guard"
+    pep-engine:
+        configMap:
+            workingMode: "PARTIAL"
+            asHostname: config.AUTH_SERVER_HOSTNAME
+            pdpHostname: config.AUTH_SERVER_HOSTNAME
+        nginxIntegration:
+            enabled: False
+            # hostname: resource-catalogue-auth
+        # image:
+        #   pullPolicy: Always
+        volumeClaim:
+            name: "eoepca-resman-pvc-{{ workspace_name }}"
+            create: "true"
+        defaultResources: 
+            -   name: "Workspace {{ workspace_name }"
+                description: "Root URL of a users workspace"
+                resource_uri: "/"
+                scopes: []
+                default_owner: default_owner
+    uma-user-agent:
+        fullnameOverride: "{{ workspace_name }}-agent"
+        # image:
+        #   tag: latest
+        #   pullPolicy: Always
+        nginxIntegration:
+            enabled: True,
+            hosts:
+              - host: "resource-catalogue.{{ workspace_name }}"
+                paths:
+                  - path: "/(.*)"
+                    service:
+                      name: "resource-catalogue-service"
+                      port: 80
+              - host: "data-access.{{ workspace_name }}"
+                paths:
+                    - path: "/(ows.*)"
+                      service:
+                        name: "workspace-renderer"
+                        port: 80
+                    - path: "/(opensearch.*)"
+                      service:
+                          name: "workspace-renderer"
+                          port: 80
+                    - path: "/(admin.*)"
+                      service:
+                          name: "workspace-renderer"
+                          port: 80
+                    - path: "/cache/(.*)"
+                      service:
+                          name: "workspace-cache"
+                          port: 80
+                    - path: "/(.*)"
+                      service:
+                          name: "workspace-client"
+                          port: 80
+            annotations:
+              nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+              nginx.ingress.kubernetes.io/enable-cors: "true"
+              nginx.ingress.kubernetes.io/rewrite-target: "/$1"
+        client:
+            credentialsSecretName: config.UMA_CLIENT_SECRET_NAME
+        logging:
+            level: info
+        unauthorizedResponse: 'Bearer realm="https://portal.{{ config.WORKSPACE_DOMAIN }}/oidc/authenticate/"'
+        # "openAccess": True,

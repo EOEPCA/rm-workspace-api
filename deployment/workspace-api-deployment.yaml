@@ -53,6 +53,8 @@ spec:
         env:
         - name: PREFIX_FOR_NAME
           value: "rm-user"
+        - name: WORKSPACE_CHARTS_CONFIG_MAP
+          value: "workspace-charts"
         - name: WORKSPACE_SECRET_NAME
           value: "mucho-secreto"
         - name: NAMESPACE_FOR_BUCKET_RESOURCE
