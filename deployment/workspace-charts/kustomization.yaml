@@ -5,7 +5,7 @@ configMapGenerator:
     namespace: dev
     files:
     # - vs
-    # - rm-resource-catalog
+    - template-hr-rm-resource-catalogue.yaml
     - template-hr-resource-guard.yaml
 generatorOptions:
   disableNameSuffixHash: true
