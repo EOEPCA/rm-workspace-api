@@ -10,6 +10,8 @@ import secrets
 import logging
 import json
 
+import jinja2
+import yaml
 from fastapi import HTTPException, Path, Response, BackgroundTasks
 from fastapi.responses import JSONResponse
 from kubernetes.client.models.v1_secret import V1Secret
@@ -253,6 +255,11 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
                 pass
     access_key_id = base64.b64decode(secret.data["access"]).decode()
     secret_access_key = base64.b64decode(secret.data["secret"]).decode()
+
+
+    deploy_helm_releases(workspace_name=workspace_name, is_update=found_hr)
+    return
+
     values = {
         "vs": {
             # open ingresses are now disabled
@@ -519,6 +526,57 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         )
 
 
+def deploy_helm_releases(
+    workspace_name: str,
+    is_update,
+):
+    hrs = (
+        k8s_client.CoreV1Api()
+        .read_namespaced_config_map(
+            name=config.WORKSPACE_CHARTS_CONFIG_MAP,
+            namespace=current_namespace(),
+        )
+        .data
+    )
+    for hr_key, hr_raw_content in hrs.items():
+        logger.info(f"Deploying hr {hr_key}")
+
+        hr_rendered = (
+            jinja2.Environment()
+            .from_string(
+                hr_raw_content,
+            )
+            .render(
+                workspace_name=workspace_name,
+            )
+        )
+
+        # we have to implement kubectl apply here because kubernetes-python can only create using utils.create_from_yaml
+        # https://github.com/kubernetes-client/python/issues/1737
+        hr_rendered_parsed = yaml.safe_load(hr_rendered)
+
+        group, version = hr_rendered_parsed["apiVersion"].split("/")
+        plural = hr_rendered_parsed["kind"].lower() + "s"
+
+        if is_update:
+            k8s_client.CustomObjectsApi().patch_namespaced_custom_object(
+                name=hr_rendered_parsed["metadata"]["name"],
+                group=group,
+                plural=plural,
+                version=version,
+                namespace=workspace_name,
+                body=hr_rendered,
+            )
+        else:
+            k8s_client.CustomObjectsApi().create_namespaced_custom_object(
+                group=group,
+                plural=plural,
+                version=version,
+                namespace=workspace_name,
+                body=hr_rendered,
+            )
+
+
 def workspace_name_from_preferred_name(preferred_name: str):
     safe_name = slugify(preferred_name, max_length=32)
     if not safe_name:
@@ -586,16 +644,6 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
         .items,
     )
 
-    # current workspace chart doesn't feature a configmap
-    """
-    configmap = cast(
-        k8s_client.V1ConfigMap,
-        k8s_client.CoreV1Api().read_namespaced_config_map(
-            config.WORKSPACE_CONFIG_MAP_NAME,
-            namespace=workspace_name,
-        ),
-    )
-    """
     credentials: Dict[str, Any] = {
         k: base64.b64decode(v) for k, v in secret.data.items()
     }

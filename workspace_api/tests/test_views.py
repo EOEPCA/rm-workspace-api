@@ -8,6 +8,7 @@ from kubernetes import client as k8s_client
 import pytest
 import requests
 import requests.exceptions
+import yaml
 
 from workspace_api import config
 from workspace_api.views import (
@@ -15,6 +16,7 @@ from workspace_api.views import (
     install_workspace_phase2,
     wait_for_namespace_secret,
     workspace_name_from_preferred_name,
+    deploy_helm_releases,
 )
 
 
@@ -102,6 +104,29 @@ def mock_delete_namespace():
 
 
 @pytest.fixture()
+def mock_read_config_map():
+    with mock.patch(
+        "workspace_api.views.k8s_client.CoreV1Api.read_namespaced_config_map",
+        return_value=k8s_client.V1ConfigMap(
+            data={
+                "hr1.yaml": """
+apiVersion: helm.toolkit.fluxcd.io/v2beta1
+kind: HelmRelease
+metadata:
+  name: resource-guard
+  namespace: rm
+spec:
+  chart: null
+  values:
+    namespace: {{ workspace_name }}
+"""
+            },
+        ),
+    ) as mocker:
+        yield mocker
+
+
+@pytest.fixture()
 def mock_list_ingress():
     with mock.patch(
         "workspace_api.views.k8s_client.NetworkingV1Api.list_namespaced_ingress",
@@ -114,20 +139,6 @@ def mock_list_ingress():
                     ),
                 )
             ]
-        ),
-    ) as mocker:
-        yield mocker
-
-
-@pytest.fixture()
-def mock_read_config_map():
-    with mock.patch(
-        "workspace_api.views.k8s_client.CoreV1Api.read_namespaced_config_map",
-        return_value=k8s_client.V1ConfigMap(
-            data={
-                "stuff": "idontcare",
-                "quota_in_mb": "123",
-            }
         ),
     ) as mocker:
         yield mocker
@@ -240,6 +251,7 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     mock_create_namespace,
     mock_wait_for_secret,
     mock_post_harbor_api,
+    mock_read_config_map,
 ):
     name = "tklayafg"
     client.post("/workspaces", json={"preferred_name": name})
@@ -257,8 +269,7 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     # create helm release
     params = mock_create_custom_object.mock_calls[1][2]
     assert name in params["namespace"]
-    assert params["body"]["kind"] == "HelmRelease"
-    assert name in params["body"]["metadata"]["namespace"]
+    assert yaml.safe_load(params["body"])["kind"] == "HelmRelease"
 
     # create uma secret
     assert (
@@ -279,6 +290,16 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
             mock_create_secret.mock_calls[1][2]["body"].data["username"]
         ).decode()
     )
+
+
+def test_deploy_hrs_deploys_from_tempalted_config_map(
+    mock_read_config_map, mock_create_custom_object
+):
+
+    deploy_helm_releases(workspace_name="a", is_update=False)
+
+    hr_body = yaml.safe_load(mock_create_custom_object.mock_calls[0][2]["body"])
+    assert hr_body["spec"]["values"]["namespace"] == "a"
 
 
 def test_create_repository_in_container_registry_calls_harbor(
@@ -341,25 +362,6 @@ def test_grant_access_to_repository_calls_harbor(client, mock_post_harbor_api):
         mock_post_harbor_api.mock_calls[0][2]["json"]["member_user"]["username"]
         == "jkl"
     )
-
-
-def test_install_workspace_phase2_sets_values(
-    mock_wait_for_secret,
-    mock_create_custom_object,
-):
-    install_workspace_phase2("test")
-
-    mock_create_custom_object.assert_called_once()
-    values = mock_create_custom_object.mock_calls[0][2]["body"]["spec"]["values"]
-    assert (
-        "data-acc"
-        in values["vs"]["registrar"]["config"]["pathBackends"][0]["kwargs"]["ows_url"]
-    )
-    assert (
-        values["vs"]["global"]["storage"]["data"]["data"]["secret_access_key"]
-        == "supersecret"
-    )
-    assert values["storage"]["storageClassName"] == "my-storage-class"
 
 
 def test_get_workspace_returns_not_found_if_not_found(

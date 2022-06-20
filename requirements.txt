@@ -5,6 +5,7 @@ pydantic==1.9.0
 python-slugify==6.1.1
 aioredis==2.0.1
 requests==2.27.1
+jinja2==3.1.2
 
 kubernetes==23.3.0
 
