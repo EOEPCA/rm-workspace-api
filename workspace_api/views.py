@@ -303,6 +303,7 @@ def deploy_helm_releases(
 
     logger.info("All HelmReleases have been deployed")
 
+
 def workspace_name_from_preferred_name(preferred_name: str):
     safe_name = slugify(preferred_name, max_length=32)
     if not safe_name:
