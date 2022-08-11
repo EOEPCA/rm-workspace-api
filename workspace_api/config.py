@@ -18,11 +18,26 @@ REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "register_queue")
 REGISTER_PATH_QUEUE = os.environ.get(
     "REDIS_REGISTER_PATH_QUEUE_KEY", "register_path_queue"
 )
+
+REGISTER_ADES_QUEUE = os.environ.get(
+    "REDIS_REGISTER_ADES_QUEUE", "register_ades_queue"
+)
+REGISTER_APPLICATION_QUEUE = os.environ.get(
+    "REDIS_REGISTER_APPLICATION_QUEUE", "register_application_queue"
+)
+
+
 HARVESTER_QUEUE = os.environ.get("REDIS_HARVESTER_QUEUE_KEY", "harvester_queue")
 PROGRESS_SET = os.environ.get("REDIS_REGISTER_PROGRESS_KEY", "registering_set")
-SUCCESS_SET = os.environ.get("REDIS_REGISTER_SUCCESS_KEY", "register-success_set")
-FAILURE_SET = os.environ.get("REDIS_REGISTER_FAILURE_KEY", "register-failure_set")
-DEREGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "deregister_queue")
+SUCCESS_SET = os.environ.get(
+    "REDIS_REGISTER_SUCCESS_KEY", "register-success_set"
+)
+FAILURE_SET = os.environ.get(
+    "REDIS_REGISTER_FAILURE_KEY", "register-failure_set"
+)
+DEREGISTER_QUEUE = os.environ.get(
+    "REDIS_REGISTER_QUEUE_KEY", "deregister_queue"
+)
 REGISTRATION_CHECK_INTERVAL = float(
     os.environ.get("REGISTRATION_CHECK_INTERVAL", "0.3")
 )
