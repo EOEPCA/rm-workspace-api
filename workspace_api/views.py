@@ -221,9 +221,9 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         )
         for item in response["items"]:
             try:
-                if item["spec"]["releaseName"] == "resource-guard":
+                if item["spec"]["chart"]["spec"]["chart"] == "resource-guard":
                     found_hr = True
-                    default_owner = item["spec"]["values"]["default_owner"]
+                    default_owner = item["spec"]["values"]["global"]["default_owner"]
                     break
 
             except KeyError:
@@ -238,8 +238,6 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         )
     except Exception as e:
         logger.critical(e, exc_info=True)
-
-    # try patching the HR f
 
 
 def deploy_helm_releases(
