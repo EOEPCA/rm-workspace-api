@@ -232,9 +232,9 @@ def install_workspace_phase2(
         )
         for item in response["items"]:
             try:
-                if item["spec"]["releaseName"] == "resource-guard":
+                if item["spec"]["chart"]["spec"]["chart"] == "resource-guard":
                     found_hr = True
-                    default_owner = item["spec"]["values"]["default_owner"]
+                    default_owner = item["spec"]["values"]["global"]["default_owner"]
                     break
 
             except KeyError:
@@ -249,8 +249,6 @@ def install_workspace_phase2(
         )
     except Exception as e:
         logger.critical(e, exc_info=True)
-
-    # try patching the HR f
 
 
 def deploy_helm_releases(
@@ -492,7 +490,7 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
 
     k8s_namespace = workspace_name
     client = await aioredis.from_url(
-        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
+        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
     )
 
     # get the URL and extract the path from the S3 URL

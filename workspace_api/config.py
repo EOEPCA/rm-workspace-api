@@ -14,6 +14,12 @@ S3_REGION = os.environ["S3_REGION"]
 # TODO: whitelistings = list of strings (applied to helm chart)
 
 # registration endpoint variables
+REDIS_SERVICE_NAME = os.environ.get("REDIS_SERVICE_NAME", "vs-redis-master")
+REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE_KEY", "register_queue")
+REGISTER_PATH_QUEUE = os.environ.get(
+    "REDIS_REGISTER_PATH_QUEUE_KEY", "register_path_queue"
+)
+
 REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE", "register_queue")
 REGISTER_ADES_QUEUE = os.environ.get(
     "REDIS_REGISTER_ADES_QUEUE", "register_ades_queue"
