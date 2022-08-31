@@ -54,7 +54,9 @@ def namespace_exists(workspace_name) -> bool:
         return True
 
 
-def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secret]:
+def fetch_secret(
+    secret_name: str, namespace: str
+) -> Optional[k8s_client.V1Secret]:
     try:
         return cast(
             k8s_client.V1Secret,
@@ -76,7 +78,9 @@ class WorkspaceCreate(BaseModel):
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
-async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTasks):
+async def create_workspace(
+    data: WorkspaceCreate, background_tasks: BackgroundTasks
+):
 
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
 
@@ -150,7 +154,9 @@ def create_harbor_user(workspace_name: str) -> None:
             ),
             data={
                 "username": base64.b64encode(workspace_name.encode()).decode(),
-                "password": base64.b64encode(harbor_user_password.encode()).decode(),
+                "password": base64.b64encode(
+                    harbor_user_password.encode()
+                ).decode(),
             },
         ),
     )
@@ -197,7 +203,10 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
         event_secret_name = event_secret.metadata.name
         logger.info(f"Received secret event {event_type} {event_secret_name}")
 
-        if event_type == "ADDED" and event_secret_name == config.WORKSPACE_SECRET_NAME:
+        if (
+            event_type == "ADDED"
+            and event_secret_name == config.WORKSPACE_SECRET_NAME
+        ):
             logger.info("Found the secret we were looking for")
             watch.stop()
             return event_secret
@@ -205,7 +214,9 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
-def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:
+def install_workspace_phase2(
+    workspace_name, default_owner=None, patch=False
+) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
@@ -267,7 +278,9 @@ def deploy_helm_releases(
             .render(
                 workspace_name=workspace_name,
                 access_key_id=base64.b64decode(secret.data["access"]).decode(),
-                secret_access_key=base64.b64decode(secret.data["secret"]).decode(),
+                secret_access_key=base64.b64decode(
+                    secret.data["secret"]
+                ).decode(),
                 bucket=base64.b64decode(secret.data["bucketname"]).decode(),
                 projectid=base64.b64decode(secret.data["projectid"]).decode(),
                 default_owner=default_owner,
@@ -361,7 +374,9 @@ async def get_workspace(workspace_name: str = workspace_path_type):
         return Workspace(status=WorkspaceStatus.provisioning)
 
 
-def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
+def serialize_workspace(
+    workspace_name: str, secret: k8s_client.V1Secret
+) -> Workspace:
     ingresses = cast(
         List[k8s_client.V1Ingress],
         k8s_client.NetworkingV1Api()
@@ -393,8 +408,12 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
             # quota_in_mb=int(configmap.data["quota_in_mb"]),
         ),
         container_registry=ContainerRegistryCredentials(
-            username=base64.b64decode(container_registry_secret.data["username"]),
-            password=base64.b64decode(container_registry_secret.data["password"]),
+            username=base64.b64decode(
+                container_registry_secret.data["username"]
+            ),
+            password=base64.b64decode(
+                container_registry_secret.data["password"]
+            ),
         )
         if container_registry_secret
         else None,
@@ -427,7 +446,9 @@ class WorkspaceUpdate(BaseModel):
 
 
 @app.patch("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
-def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_type):
+def patch_workspace(
+    data: WorkspaceUpdate, workspace_name: str = workspace_path_type
+):
     storage = data.storage
     if storage:  # noqa: E203
         k8s_client.CoreV1Api().patch_namespaced_config_map(
@@ -440,7 +461,9 @@ def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
 
-@app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
+@app.post(
+    "/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT
+)
 def redeploy_workspace(
     background_tasks: BackgroundTasks, workspace_name: str = workspace_path_type
 ):
@@ -459,6 +482,7 @@ def redeploy_workspace(
 class Product(BaseModel):
     type: str
     url: str
+    parent_identifier: Optional[str] = None
 
 
 @app.post("/workspaces/{workspace_name}/register")
@@ -481,8 +505,8 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
         message = {"message": f"Registration failed: {e}"}
         return JSONResponse(status_code=400, content=message)
 
-    # TODO:
-    if product.type == "stac-item":
+    type_ = product.type.lower()
+    if type_ == "stac-item":
         if url.endswith("/"):
             url = f"{url}catalog.json"
         await client.lpush(
@@ -494,42 +518,35 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
                 }
             ),
         )
-        logger.info(f"STAC Catalog '{url}' was accepted for harvesting")
-        message = {"message": f"STAC Catalog '{url}' was accepted for harvesting"}
-        return JSONResponse(status_code=202, content=message)
+        message = f"STAC Catalog '{url}' was accepted for harvesting"
+        logger.info(message)
+        return JSONResponse(
+            status_code=HTTPStatus.ACCEPTED, content={"message": message}
+        )
 
-    # Register CWL applications
-    try:
-        await client.lpush(config.REGISTER_PATH_QUEUE, url)
-        time_index = 0.0
-        while True:
-            logger.info("CWL file '%s' is being proccessed!" % url)
-            await asyncio.sleep(config.REGISTRATION_CHECK_INTERVAL)
-            time_index += config.REGISTRATION_CHECK_INTERVAL
-            if (
-                time_index >= config.REGISTRATION_TIME_OUT
-                or not await client.sismember(config.PROGRESS_SET, url)
-            ):
-                break
+    elif type_ in ("ades", "application"):
+        if type_ == "ades":
+            queue = config.REGISTER_ADES_QUEUE
+        else:
+            queue = config.REGISTER_APPLICATION_QUEUE
 
-        if time_index >= config.REGISTRATION_TIME_OUT:
-            logger.info("Timeout while registering '%s'" % url)
-            message = {"message": f"Timeout while registering '{url}'"}
-            return JSONResponse(status_code=400, content=message)
+        await client.lpush(
+            queue,
+            json.dumps(
+                {
+                    "url": product.url,
+                    "parent_identifier": product.parent_identifier,
+                }
+            ),
+        )
+        message = f"{product.type} {product.url} was applied for registration"
+        logger.info(message)
+        return JSONResponse(
+            status_code=HTTPStatus.ACCEPTED, content={"message": message}
+        )
+        # TODO wait until registered?
 
-        if await client.sismember(config.SUCCESS_SET, url):
-            logger.info("CWL file '%s' was successfully registered" % url)
-            message = {"message": f"CWL file '{url}' was successfully registered"}
-            return JSONResponse(status_code=200, content=message)
-
-        elif await client.sismember(config.FAILURE_SET, url):
-            logger.info("Failed to register CWL file %s" % url)
-            message = {"message": f"Failed to register CWL file {url}"}
-            return JSONResponse(status_code=400, content=message)
-
-    except Exception as e:
-        message = {"message": f"Registration failed: {e}"}
-        return JSONResponse(status_code=400, content=message)
+    return Response(status_code=HTTPStatus.BAD_REQUEST)
 
 
 class DeregisterProduct(BaseModel):
@@ -539,7 +556,8 @@ class DeregisterProduct(BaseModel):
 
 @app.post("/workspaces/{workspace_name}/deregister")
 async def deregister(
-    deregister_product: DeregisterProduct, workspace_name: str = workspace_path_type
+    deregister_product: DeregisterProduct,
+    workspace_name: str = workspace_path_type,
 ):
 
     k8s_namespace = workspace_name
@@ -617,7 +635,9 @@ def create_container_registry_repository(
 def grant_container_registry_access(
     username: str, project_name: str, role_id: int
 ) -> None:
-    logger.info(f"Granting container registry access to {username} for {project_name}")
+    logger.info(
+        f"Granting container registry access to {username} for {project_name}"
+    )
     response = requests.post(
         f"{config.HARBOR_URL}/api/v2.0/projects/{project_name}/members",
         json={
@@ -646,4 +666,6 @@ def grant_container_registry_access_view(data: GrantAccess):
 
 
 def current_namespace() -> str:
-    return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+    return open(
+        "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+    ).read()
