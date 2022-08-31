@@ -552,6 +552,7 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
 
 
 class DeregisterProduct(BaseModel):
+    type: str
     identifier: Optional[str]
     url: Optional[str]
 
@@ -563,10 +564,8 @@ async def deregister(
 ):
 
     k8s_namespace = workspace_name
-    client = await aioredis.create_redis(  # type: ignore
-        # TODO: make this configurable of better
-        (f"workspace-redis-master.{k8s_namespace}", config.REDIS_PORT),
-        encoding="utf-8",
+    client = await aioredis.from_url(
+        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
     )
 
     if deregister_product.url:
@@ -587,6 +586,26 @@ async def deregister(
 
     message = {"message": f"Item '{data}' was successfully de-registered"}
     return JSONResponse(status_code=200, content=message)
+
+
+@app.post("/workspaces/{workspace_name}/register_collection")
+async def register_collection(
+    collection: Dict[str, Any], workspace_name: str = workspace_path_type
+):
+    k8s_namespace = workspace_name
+    client = await aioredis.from_url(
+        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
+    )
+
+    await client.lpush(
+        config.REGISTER_COLLECTION_QUEUE,
+        json.dumps(collection),
+    )
+    message = f"{collection.get('id')} was applied for registration"
+    logger.info(message)
+    return JSONResponse(
+        status_code=HTTPStatus.ACCEPTED, content={"message": message}
+    )
 
 
 class CreateContainerRegistryRepository(BaseModel):
