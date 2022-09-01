@@ -586,7 +586,7 @@ async def deregister(
     return JSONResponse(status_code=200, content=message)
 
 
-@app.post("/workspaces/{workspace_name}/register_collection")
+@app.post("/workspaces/{workspace_name}/register-collection")
 async def register_collection(
     collection: Dict[str, Any], workspace_name: str = workspace_path_type
 ):
