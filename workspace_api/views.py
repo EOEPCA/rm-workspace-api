@@ -563,7 +563,7 @@ async def deregister(
 
     k8s_namespace = workspace_name
     client = await aioredis.from_url(
-        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
+        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
     )
 
     if deregister_product.url:
@@ -592,7 +592,7 @@ async def register_collection(
 ):
     k8s_namespace = workspace_name
     client = await aioredis.from_url(
-        f"redis://workspace-redis-master.{k8s_namespace}:{config.REDIS_PORT}"
+        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
     )
 
     await client.lpush(
