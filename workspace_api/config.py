@@ -10,7 +10,7 @@ WORKSPACE_CHARTS_CONFIG_MAP = os.environ["WORKSPACE_CHARTS_CONFIG_MAP"]
 
 S3_ENDPOINT = os.environ["S3_ENDPOINT"]
 S3_REGION = os.environ["S3_REGION"]
-
+BUCKET_ENDPOINT_URL = os.environ["BUCKET_ENDPOINT_URL"]
 # TODO: whitelistings = list of strings (applied to helm chart)
 
 # registration endpoint variables

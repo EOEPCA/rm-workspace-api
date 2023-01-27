@@ -9,6 +9,7 @@ import string
 import secrets
 import logging
 import json
+import time
 
 import jinja2
 import yaml
@@ -83,6 +84,7 @@ async def create_workspace(
 ):
 
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
+    bucket_endpoint_url = config.BUCKET_ENDPOINT_URL
 
     if namespace_exists(workspace_name):
         raise HTTPException(
@@ -98,7 +100,17 @@ async def create_workspace(
         )
     )
 
-    create_bucket(workspace_name=workspace_name)
+    # create_bucket(workspace_name=workspace_name)
+    response = requests.get(bucket_endpoint_url, {...})
+    wait_task = asyncio.create_task(wait_for_secret(response.body))
+    if response.status == 200:
+        # we have a bucket created, we create the secret and continue setting up workspace
+        secret = create_secret(response.body)
+
+    elif response.status == 201:
+        # async approach
+        # wait for the secret to be created
+        secret = await wait_task
 
     create_uma_client_credentials_secret(workspace_name=workspace_name)
 
@@ -111,6 +123,36 @@ async def create_workspace(
     )
 
     return {"name": workspace_name}
+
+
+def create_secret(credentials: Dict[str, Any]):
+
+    secret = k8s_client.V1Secret(
+        metadata=k8s_client.V1ObjectMeta(
+            name=CONTAINER_REGISTRY_SECRET_NAME,
+        ),
+        data={
+            "username": base64.b64encode(credentials["workspace_name"].encode()).decode(),
+            "password": base64.b64encode(
+                credentials["password"].encode()
+            ).decode(),
+        },
+    )
+    return secret
+
+
+async def wait_for_secret(
+        credentials: Dict[str, Any], res , time_out: int, time_interval: int):
+
+    timer = 0
+    while res.status == 201:
+        time.sleep(time_interval)
+        timer += time_interval
+        if timer > time_out:
+            # TODO: raise a timeout exception
+            break
+        if res.status == 200:
+            return create_secret(credentials)
 
 
 def create_bucket(workspace_name: str) -> None:
