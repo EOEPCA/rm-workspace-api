@@ -112,6 +112,8 @@ async def create_workspace(
         # wait for the secret to be created
         secret = await wait_task
 
+    # TODO: create the workspace using the secret
+
     create_uma_client_credentials_secret(workspace_name=workspace_name)
 
     create_harbor_user(workspace_name=workspace_name)
