@@ -9,7 +9,6 @@ import string
 import secrets
 import logging
 import json
-import time
 
 import jinja2
 import yaml
@@ -105,7 +104,7 @@ async def create_workspace(
     response = requests.post(bucket_endpoint_url, data={})
     if response.status == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
-        secret = create_bucket_secret(workspace_name=workspace_name, credentials=response.body)
+        create_bucket_secret(workspace_name=workspace_name, credentials=response.body)
 
     elif response.status == 201:
         # async approach
@@ -128,9 +127,10 @@ async def create_workspace(
     return {"name": workspace_name}
 
 
-def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> V1Secret:
+def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> None:
 
-    secret = k8s_client.CoreV1Api().create_namespaced_secret(
+    logger.info(f"Creating secret for namespace {workspace_name}")
+    k8s_client.CoreV1Api().create_namespaced_secret(
         namespace=workspace_name,
         body=k8s_client.V1Secret(
             metadata=k8s_client.V1ObjectMeta(
@@ -144,7 +144,6 @@ def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> V1
             },
         )
     )
-    return secret
 
 
 async def wait_for_secret(
