@@ -101,16 +101,17 @@ async def create_workspace(
     )
 
     # create_bucket(workspace_name=workspace_name)
-    response = requests.get(bucket_endpoint_url, {...})
-    wait_task = asyncio.create_task(wait_for_secret(response.body))
+    # TODO: specify post body
+    response = requests.post(bucket_endpoint_url, data={})
     if response.status == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
-        secret = create_secret(response.body)
+        secret = create_bucket_secret(workspace_name=workspace_name, credentials=response.body)
 
     elif response.status == 201:
         # async approach
         # wait for the secret to be created
-        secret = await wait_task
+        # TODO determine the timeout & time interval values from config ?
+        background_tasks.add_task(wait_for_secret, response.body, 100, 10)
 
     # TODO: create the workspace using the secret
 
@@ -127,34 +128,37 @@ async def create_workspace(
     return {"name": workspace_name}
 
 
-def create_secret(credentials: Dict[str, Any]):
+def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> V1Secret:
 
-    secret = k8s_client.V1Secret(
-        metadata=k8s_client.V1ObjectMeta(
-            name=CONTAINER_REGISTRY_SECRET_NAME,
-        ),
-        data={
-            "username": base64.b64encode(credentials["workspace_name"].encode()).decode(),
-            "password": base64.b64encode(
-                credentials["password"].encode()
-            ).decode(),
-        },
+    secret = k8s_client.CoreV1Api().create_namespaced_secret(
+        namespace=workspace_name,
+        body=k8s_client.V1Secret(
+            metadata=k8s_client.V1ObjectMeta(
+                name=CONTAINER_REGISTRY_SECRET_NAME,
+            ),
+            data={
+                "username": base64.b64encode(credentials["workspace_name"].encode()).decode(),
+                "password": base64.b64encode(
+                    credentials["password"].encode()
+                ).decode(),
+            },
+        )
     )
     return secret
 
 
 async def wait_for_secret(
-        credentials: Dict[str, Any], res , time_out: int, time_interval: int):
+        workspace_name: str, res: object , time_out: int, time_interval: int) -> V1Secret:
 
     timer = 0
     while res.status == 201:
-        time.sleep(time_interval)
+        await asyncio.sleep(time_interval)
         timer += time_interval
         if timer > time_out:
             # TODO: raise a timeout exception
             break
         if res.status == 200:
-            return create_secret(credentials)
+            return create_bucket_secret(workspace_name=workspace_name, credentials=res.body)
 
 
 def create_bucket(workspace_name: str) -> None:
