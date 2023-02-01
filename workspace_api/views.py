@@ -3,7 +3,6 @@ import enum
 from http import HTTPStatus
 import uuid
 from typing import cast, Optional, List, Dict, Any
-import asyncio
 from urllib.parse import urlparse
 import string
 import secrets
@@ -99,20 +98,31 @@ async def create_workspace(
         )
     )
 
-    # create_bucket(workspace_name=workspace_name)
-    # TODO: specify post body
-    response = requests.post(bucket_endpoint_url, data={})
+    group = "epca.eo"
+    version = "v1alpha1"
+    body = {
+        "apiVersion": f"{group}/{version}",
+        "kind": "Bucket",
+        "metadata": {
+            # TODO: better name for bucket resource?
+            "name": workspace_name,
+            "namespace": config.NAMESPACE_FOR_BUCKET_RESOURCE,
+        },
+        "spec": {
+            # we use the workspace name as bucket name since it's a good unique name
+            "bucketName": workspace_name,
+            "secretName": config.WORKSPACE_SECRET_NAME,
+            "secretNamespace": workspace_name,
+        },
+    }
+
+    response = requests.post(bucket_endpoint_url, data=body)
     if response.status == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
         create_bucket_secret(workspace_name=workspace_name, credentials=response.body)
 
-    elif response.status == 201:
-        # async approach
-        # wait for the secret to be created
-        # TODO determine the timeout & time interval values from config ?
-        background_tasks.add_task(wait_for_secret, response.body, 100, 10)
-
-    # TODO: create the workspace using the secret
+    elif response.status in range(400, 512):
+        raise HTTPException(status_code=response.status)
 
     create_uma_client_credentials_secret(workspace_name=workspace_name)
 
@@ -130,34 +140,22 @@ async def create_workspace(
 def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> None:
 
     logger.info(f"Creating secret for namespace {workspace_name}")
+
     k8s_client.CoreV1Api().create_namespaced_secret(
         namespace=workspace_name,
         body=k8s_client.V1Secret(
             metadata=k8s_client.V1ObjectMeta(
-                name=CONTAINER_REGISTRY_SECRET_NAME,
+                name=config.WORKSPACE_SECRET_NAME,
+                namespace=workspace_name
             ),
             data={
-                "username": base64.b64encode(credentials["workspace_name"].encode()).decode(),
-                "password": base64.b64encode(
-                    credentials["password"].encode()
-                ).decode(),
+                "bucketname": base64.b64encode(credentials["bucketname"].encode()).decode(),
+                "access": base64.b64encode(credentials["access_key"].encode()).decode(),
+                "secret": base64.b64encode(credentials["access_secret"].encode()).decode(),
+                "projectid": base64.b64encode(credentials["projectid"].encode()).decode(),
             },
         )
     )
-
-
-async def wait_for_secret(
-        workspace_name: str, res: object , time_out: int, time_interval: int) -> V1Secret:
-
-    timer = 0
-    while res.status == 201:
-        await asyncio.sleep(time_interval)
-        timer += time_interval
-        if timer > time_out:
-            # TODO: raise a timeout exception
-            break
-        if res.status == 200:
-            return create_bucket_secret(workspace_name=workspace_name, credentials=res.body)
 
 
 def create_bucket(workspace_name: str) -> None:
@@ -240,25 +238,32 @@ def create_uma_client_credentials_secret(workspace_name: str):
 
 
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
-    watch = kubernetes.watch.Watch()
-    for event in watch.stream(
-        k8s_client.CoreV1Api().list_namespaced_secret,
+    secret = fetch_secret(
+        secret_name=config.WORKSPACE_SECRET_NAME,
         namespace=workspace_name,
-    ):
-        event_type = event["type"]
-        event_secret: k8s_client.V1Secret = event["object"]
-        event_secret_name = event_secret.metadata.name
-        logger.info(f"Received secret event {event_type} {event_secret_name}")
-
-        if (
-            event_type == "ADDED"
-            and event_secret_name == config.WORKSPACE_SECRET_NAME
+    )
+    if secret:
+        return secret
+    else:
+        watch = kubernetes.watch.Watch()
+        for event in watch.stream(
+            k8s_client.CoreV1Api().list_namespaced_secret,
+            namespace=workspace_name,
         ):
-            logger.info("Found the secret we were looking for")
-            watch.stop()
-            return event_secret
+            event_type = event["type"]
+            event_secret: k8s_client.V1Secret = event["object"]
+            event_secret_name = event_secret.metadata.name
+            logger.info(f"Received secret event {event_type} {event_secret_name}")
 
-    raise Exception("Watch aborted")
+            if (
+                event_type == "ADDED"
+                and event_secret_name == config.WORKSPACE_SECRET_NAME
+            ):
+                logger.info("Found the secret we were looking for")
+                watch.stop()
+                return event_secret
+
+        raise Exception("Watch aborted")
 
 
 def install_workspace_phase2(
