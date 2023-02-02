@@ -7,5 +7,7 @@ configMapGenerator:
     - template-hr-vs.yaml
     - template-hr-rm-resource-catalogue.yaml
     - template-hr-resource-guard.yaml
+    - template-cm.yaml
+    - template-pvc.yaml
 generatorOptions:
   disableNameSuffixHash: true

@@ -44,6 +44,13 @@ def mock_read_namespace():
 
 
 @pytest.fixture()
+def mock_dynamic_client_apply():
+    with mock.patch("workspace_api.views.DynamicClient") as mocker:
+        yield mocker
+        # "workspace_api.views.DynamicClient.resources.get.server_side_apply",
+
+
+@pytest.fixture()
 def mock_read_secret():
     def new_read_namespaced_secret(name: str, namespace: str, **kwargs):
         if name == "container-registry-admin":
@@ -253,11 +260,12 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     mock_wait_for_secret,
     mock_post_harbor_api,
     mock_read_config_map,
+    mock_dynamic_client_apply,
 ):
     name = "tklayafg"
     client.post("/workspaces", json={"preferred_name": name})
 
-    assert len(mock_create_custom_object.mock_calls) == 2
+    assert len(mock_create_custom_object.mock_calls) == 1
 
     # create ns
     mock_create_namespace.assert_called_once()
@@ -267,10 +275,8 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     assert params["body"]["kind"] == "Bucket"
     assert name in params["body"]["spec"]["bucketName"]
 
-    # create helm release
-    params = mock_create_custom_object.mock_calls[1][2]
-    assert name in params["namespace"]
-    assert params["body"]["kind"] == "HelmRelease"
+    # create helm releases
+    assert mock_dynamic_client_apply.mock_calls
 
     # create uma secret
     assert (
@@ -293,20 +299,18 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     )
 
 
-def test_deploy_hrs_deploys_from_tempalted_config_map(
+def test_deploy_hrs_deploys_from_templated_config_map(
     mock_read_config_map,
-    mock_create_custom_object,
+    mock_dynamic_client_apply,
     mock_secret,
 ):
-
     deploy_helm_releases(
         workspace_name="a",
-        is_update=False,
         secret=mock_secret,
         default_owner="me",
     )
 
-    hr_body = mock_create_custom_object.mock_calls[0][2]["body"]
+    hr_body = mock_dynamic_client_apply.mock_calls[-1].kwargs["body"]
     assert hr_body["spec"]["values"]["namespace"] == "a"
 
 

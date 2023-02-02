@@ -14,8 +14,10 @@ import yaml
 from fastapi import HTTPException, Path, Response, BackgroundTasks
 from fastapi.responses import JSONResponse
 from kubernetes.client.models.v1_secret import V1Secret
+from kubernetes.dynamic import DynamicClient
 import kubernetes.client.rest
 import kubernetes.watch
+import kubernetes.client
 from kubernetes import config as k8s_config, client as k8s_client
 import requests
 import requests.exceptions
@@ -213,15 +215,12 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
     raise Exception("Watch aborted")
 
 
-def install_workspace_phase2(
-    workspace_name, default_owner=None, patch=False
-) -> None:
+def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:
     """Wait for secret, then install helm chart"""
     secret = wait_for_namespace_secret(workspace_name=workspace_name)
 
     logger.info(f"Install phase 2 for {workspace_name}")
 
-    found_hr = False
     if patch:
         response = k8s_client.CustomObjectsApi().list_namespaced_custom_object(
             group="helm.toolkit.fluxcd.io",
@@ -232,7 +231,6 @@ def install_workspace_phase2(
         for item in response["items"]:
             try:
                 if item["spec"]["chart"]["spec"]["chart"] == "resource-guard":
-                    found_hr = True
                     default_owner = item["spec"]["values"]["global"]["default_owner"]
                     break
 
@@ -242,7 +240,6 @@ def install_workspace_phase2(
     try:
         deploy_helm_releases(
             workspace_name=workspace_name,
-            is_update=found_hr,
             secret=secret,
             default_owner=default_owner,
         )
@@ -252,12 +249,10 @@ def install_workspace_phase2(
 
 def deploy_helm_releases(
     workspace_name: str,
-    is_update: bool,
     secret: k8s_client.V1Secret,
     default_owner: str,
 ):
-
-    hrs = (
+    k8s_objects = (
         k8s_client.CoreV1Api()
         .read_namespaced_config_map(
             name=config.WORKSPACE_CHARTS_CONFIG_MAP,
@@ -265,53 +260,39 @@ def deploy_helm_releases(
         )
         .data
     )
-    logger.info(f"Deploying {len(hrs)} HelmReleases: {list(hrs)}")
-    for hr_key, hr_raw_content in hrs.items():
-        logger.info(f"Deploying HelmRelease {hr_key}")
+    logger.info(f"Deploying {len(k8s_objects)} k8s objects: {list(k8s_objects)}")
+    dynamic_client = DynamicClient(
+        client=kubernetes.client.api_client.ApiClient(),
+    )
+    for key, raw_content in k8s_objects.items():
+        logger.info(f"Deploying k8s object {key}")
 
         hr_rendered = (
             jinja2.Environment()
-            .from_string(
-                hr_raw_content,
-            )
+            .from_string(raw_content)
             .render(
                 workspace_name=workspace_name,
                 access_key_id=base64.b64decode(secret.data["access"]).decode(),
-                secret_access_key=base64.b64decode(
-                    secret.data["secret"]
-                ).decode(),
+                secret_access_key=base64.b64decode(secret.data["secret"]).decode(),
                 bucket=base64.b64decode(secret.data["bucketname"]).decode(),
                 projectid=base64.b64decode(secret.data["projectid"]).decode(),
                 default_owner=default_owner,
             )
         )
 
-        # we have to implement kubectl apply here because kubernetes-python can only create using utils.create_from_yaml
-        # https://github.com/kubernetes-client/python/issues/1737
-        hr_rendered_parsed = yaml.safe_load(hr_rendered)
+        object_rendered_parsed = yaml.safe_load(hr_rendered)
 
-        group, version = hr_rendered_parsed["apiVersion"].split("/")
-        plural = hr_rendered_parsed["kind"].lower() + "s"
+        object_api = dynamic_client.resources.get(
+            api_version=object_rendered_parsed["apiVersion"],
+            kind=object_rendered_parsed["kind"],
+        )
+        object_api.server_side_apply(
+            namespace=workspace_name,
+            body=object_rendered_parsed,
+            field_manager="kubectl-client-side-apply",
+        )
 
-        if is_update:
-            k8s_client.CustomObjectsApi().patch_namespaced_custom_object(
-                name=hr_rendered_parsed["metadata"]["name"],
-                group=group,
-                plural=plural,
-                version=version,
-                namespace=workspace_name,
-                body=hr_rendered_parsed,
-            )
-        else:
-            k8s_client.CustomObjectsApi().create_namespaced_custom_object(
-                group=group,
-                plural=plural,
-                version=version,
-                namespace=workspace_name,
-                body=hr_rendered_parsed,
-            )
-
-    logger.info("All HelmReleases have been deployed")
+    logger.info("All k8s objects have been deployed")
 
 
 def workspace_name_from_preferred_name(preferred_name: str):
