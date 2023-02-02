@@ -98,22 +98,11 @@ async def create_workspace(
         )
     )
 
-    group = "epca.eo"
-    version = "v1alpha1"
     body = {
-        "apiVersion": f"{group}/{version}",
-        "kind": "Bucket",
-        "metadata": {
-            # TODO: better name for bucket resource?
-            "name": workspace_name,
-            "namespace": config.NAMESPACE_FOR_BUCKET_RESOURCE,
-        },
-        "spec": {
-            # we use the workspace name as bucket name since it's a good unique name
-            "bucketName": workspace_name,
-            "secretName": config.WORKSPACE_SECRET_NAME,
-            "secretNamespace": workspace_name,
-        },
+        # we use the workspace name as bucket name since it's a good unique name
+        "bucketName": workspace_name,
+        "secretName": config.WORKSPACE_SECRET_NAME,
+        "secretNamespace": workspace_name,
     }
 
     response = requests.post(bucket_endpoint_url, data=body)
