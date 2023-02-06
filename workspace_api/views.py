@@ -108,12 +108,12 @@ async def create_workspace(
     }
 
     response = requests.post(bucket_endpoint_url, data=body)
-    if response.status == 200:
+    if response.status_code == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
-        create_bucket_secret(workspace_name=workspace_name, credentials=response.body)
+        create_bucket_secret(workspace_name=workspace_name, credentials=response.json())
 
-    elif response.status in range(400, 512):
-        raise HTTPException(status_code=response.status)
+    elif 400 <= response.status_code <= 511:
+        raise HTTPException(status_code=response.status_code)
 
     create_uma_client_credentials_secret(workspace_name=workspace_name)
 
@@ -229,32 +229,26 @@ def create_uma_client_credentials_secret(workspace_name: str):
 
 
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
-    secret = fetch_secret(
-        secret_name=config.WORKSPACE_SECRET_NAME,
+
+    watch = kubernetes.watch.Watch()
+    for event in watch.stream(
+        k8s_client.CoreV1Api().list_namespaced_secret,
         namespace=workspace_name,
-    )
-    if secret:
-        return secret
-    else:
-        watch = kubernetes.watch.Watch()
-        for event in watch.stream(
-            k8s_client.CoreV1Api().list_namespaced_secret,
-            namespace=workspace_name,
+    ):
+        event_type = event["type"]
+        event_secret: k8s_client.V1Secret = event["object"]
+        event_secret_name = event_secret.metadata.name
+        logger.info(f"Received secret event {event_type} {event_secret_name}")
+
+        if (
+            event_type == "ADDED"
+            and event_secret_name == config.WORKSPACE_SECRET_NAME
         ):
-            event_type = event["type"]
-            event_secret: k8s_client.V1Secret = event["object"]
-            event_secret_name = event_secret.metadata.name
-            logger.info(f"Received secret event {event_type} {event_secret_name}")
+            logger.info("Found the secret we were looking for")
+            watch.stop()
+            return event_secret
 
-            if (
-                event_type == "ADDED"
-                and event_secret_name == config.WORKSPACE_SECRET_NAME
-            ):
-                logger.info("Found the secret we were looking for")
-                watch.stop()
-                return event_secret
-
-        raise Exception("Watch aborted")
+    raise Exception("Watch aborted")
 
 
 def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:

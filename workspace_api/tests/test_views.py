@@ -28,6 +28,24 @@ def mock_k8s_base():
 
 
 @pytest.fixture()
+def mock_remote_backend_harbor():
+    with mock.patch(
+        "workspace_api.config.HARBOR_URL",
+        new="https://example_harbor.com",
+    ):
+        yield
+
+
+@pytest.fixture()
+def mock_remote_backend_bucket():
+    with mock.patch(
+        "workspace_api.config.BUCKET_ENDPOINT_URL",
+        new="https://example.com/bucket",
+    ):
+        yield
+
+
+@pytest.fixture()
 def mock_read_namespace():
     # NOTE: if preferred name is a status, we mock the respective behavior
     def new_read_namespace(name: str, **kwargs):
@@ -80,14 +98,6 @@ def mock_read_secret():
 def mock_create_secret():
     with mock.patch(
         "workspace_api.views.k8s_client.CoreV1Api.create_namespaced_secret"
-    ) as mocker:
-        yield mocker
-
-
-@pytest.fixture()
-def mock_create_custom_object():
-    with mock.patch(
-        "workspace_api.views.k8s_client.CustomObjectsApi.create_namespaced_custom_object"
     ) as mocker:
         yield mocker
 
@@ -180,20 +190,59 @@ def mock_wait_for_secret(mock_secret):
 
 
 @pytest.fixture()
-def mock_post_harbor_api():
-    with mock.patch("requests.post") as mocker:
-        yield mocker
+def mock_bucket_post_request(requests_mock, mock_remote_backend_bucket,):
+    return requests_mock.post(
+        "https://example.com/bucket",
+        json={
+            "bucketname": "",
+            "access_key": "",
+            "access_secret": "",
+            "projectid": ""
+        }
+    )
+
+@pytest.fixture()
+def mock_bucket_fail_post_request(requests_mock, mock_remote_backend_bucket,):
+    return requests_mock.post(
+        "https://example.com/bucket", status_code=500
+    )
+
+
+@pytest.fixture()
+def mock_post_harbor_api(requests_mock, mock_remote_backend_harbor,):
+    return requests_mock.post("https://example_harbor.com/api/v2.0/users")
+
+
+@pytest.fixture()
+def mock_post_harbor_projects_members_api(requests_mock, mock_remote_backend_harbor,):
+    return requests_mock.post("https://example_harbor.com/api/v2.0/projects/asdf/members")
+
+
+@pytest.fixture()
+def mock_post_harbor_repository_api(requests_mock, mock_remote_backend_harbor,):
+    return requests_mock.post("https://example_harbor.com/api/v2.0/projects")
+
+
+def test_create_bucket_with_server_error_response(
+    client: TestClient,
+    mock_bucket_fail_post_request,
+    mock_read_namespace,
+    mock_create_namespace,
+):
+    response = client.post("/workspaces", json={})
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
 
 
 def test_create_workspace_invents_name_if_missing(
     client: TestClient,
     mock_read_namespace,
-    mock_create_custom_object,
     mock_create_secret,
     mock_read_secret,
-    mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
+    mock_bucket_post_request,
+    mock_remote_backend_bucket,
+    mock_post_harbor_api,
 ):
     response = client.post("/workspaces", json={})
 
@@ -205,12 +254,13 @@ def test_create_workspace_invents_name_if_missing(
 def test_create_workspace_invents_name_invalid_if_no_proper_name_given(
     client: TestClient,
     mock_read_namespace,
-    mock_create_custom_object,
     mock_create_secret,
     mock_read_secret,
     mock_post_harbor_api,
     mock_create_namespace,
     mock_wait_for_secret,
+    mock_bucket_post_request,
+    mock_remote_backend_bucket,
 ):
     response = client.post("/workspaces", json={"preferred_name": "'"})
 
@@ -222,12 +272,12 @@ def test_create_workspace_invents_name_invalid_if_no_proper_name_given(
 def test_create_workspace_returns_sanitized_name(
     client: TestClient,
     mock_read_namespace,
-    mock_create_custom_object,
     mock_create_namespace,
     mock_read_secret,
     mock_create_secret,
     mock_post_harbor_api,
     mock_wait_for_secret,
+    mock_bucket_post_request,
 ):
     response = client.post(
         "/workspaces",
@@ -253,7 +303,6 @@ def test_create_workspace_checks_for_name_collisions(
 def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     client: TestClient,
     mock_read_namespace,
-    mock_create_custom_object,
     mock_read_secret,
     mock_create_secret,
     mock_create_namespace,
@@ -261,19 +310,13 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     mock_post_harbor_api,
     mock_read_config_map,
     mock_dynamic_client_apply,
+    mock_bucket_post_request
 ):
     name = "tklayafg"
     client.post("/workspaces", json={"preferred_name": name})
 
-    assert len(mock_create_custom_object.mock_calls) == 1
-
     # create ns
     mock_create_namespace.assert_called_once()
-
-    # create bucket
-    params = mock_create_custom_object.mock_calls[0][2]
-    assert params["body"]["kind"] == "Bucket"
-    assert name in params["body"]["spec"]["bucketName"]
 
     # create helm releases
     assert mock_dynamic_client_apply.mock_calls
@@ -281,20 +324,21 @@ def test_create_workspace_creates_namespace_and_bucket_and_starts_phase_2(
     # create uma secret
     assert (
         base64.b64decode(
-            mock_create_secret.mock_calls[0][2]["body"].data["uma"]
+            mock_create_secret.mock_calls[1][2]["body"].data["uma"]
         ).decode()
         == "uma"
     )
 
     # create harbor credentials via api
-    mock_post_harbor_api.assert_called_once()
-    assert name in mock_post_harbor_api.mock_calls[0][2]["json"]["username"]
+    assert mock_post_harbor_api.called_once
+
+    assert name in mock_post_harbor_api.last_request.json()["username"]
 
     # store harbor credentials in secret
     assert (
         name
         in base64.b64decode(
-            mock_create_secret.mock_calls[1][2]["body"].data["username"]
+            mock_create_secret.mock_calls[2][2]["body"].data["username"]
         ).decode()
     )
 
@@ -315,7 +359,7 @@ def test_deploy_hrs_deploys_from_templated_config_map(
 
 
 def test_create_repository_in_container_registry_calls_harbor(
-    client, mock_post_harbor_api
+    client, mock_post_harbor_repository_api, mock_post_harbor_projects_members_api
 ):
     response = client.post(
         f"/workspaces/{workspace_name_from_preferred_name(WorkspaceStatus.ready.value)}"
@@ -324,8 +368,8 @@ def test_create_repository_in_container_registry_calls_harbor(
     )
 
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert mock_post_harbor_api.mock_calls[0][2]["json"]["project_name"] == "asdf"
-    assert mock_post_harbor_api.mock_calls[2][2]["json"]["role_id"] == 2
+    assert mock_post_harbor_repository_api.last_request.json()["project_name"] == "asdf"
+    assert mock_post_harbor_projects_members_api.last_request.json()["role_id"] == 2
 
 
 def test_create_repository_in_container_registry_returns_error_on_conflict(client):
@@ -362,16 +406,15 @@ def test_create_repository_in_container_registry_forwards_error_on_bad_request(c
     assert "name bad" in response.text
 
 
-def test_grant_access_to_repository_calls_harbor(client, mock_post_harbor_api):
+def test_grant_access_to_repository_calls_harbor(client, mock_post_harbor_projects_members_api):
     response = client.post(
         "/grant-access-to-container-registry-repository",
         json={"repository_name": "asdf", "username": "jkl"},
     )
 
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert "asdf" in mock_post_harbor_api.mock_calls[0][1][0]
     assert (
-        mock_post_harbor_api.mock_calls[0][2]["json"]["member_user"]["username"]
+        mock_post_harbor_projects_members_api.last_request.json()["member_user"]["username"]
         == "jkl"
     )
 
