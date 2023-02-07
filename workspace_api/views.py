@@ -486,8 +486,10 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
             status_code=HTTPStatus.ACCEPTED, content={"message": message}
         )
 
-    elif type_ in ("ades", "application"):
+    elif type_ in ("ades", "application", "oaproc"):
         if type_ == "ades":
+            queue = config.REGISTER_ADES_QUEUE
+        elif type_ == "oaproc":
             queue = config.REGISTER_ADES_QUEUE
         else:
             queue = config.REGISTER_APPLICATION_QUEUE
@@ -498,6 +500,7 @@ async def register(product: Product, workspace_name: str = workspace_path_type):
                 {
                     "url": product.url,
                     "parent_identifier": product.parent_identifier,
+                    "type": type_,
                 }
             ),
         )
