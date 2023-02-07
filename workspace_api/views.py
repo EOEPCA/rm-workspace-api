@@ -261,6 +261,9 @@ def deploy_helm_releases(
         "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
         "projectid": base64.b64decode(secret.data["projectid"]).decode(),
         "default_owner": default_owner,
+        "container_registry_host": config.HARBOR_URL,
+        "s3_endpoint_url": config.S3_ENDPOINT,
+        "s3_region": config.S3_REGION,
     } | (
         {"container_registry_credentials": creds.base64_encode_as_single_string()}
         if (creds := fetch_container_registry_credentials(workspace_name))
