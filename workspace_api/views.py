@@ -55,9 +55,7 @@ def namespace_exists(workspace_name) -> bool:
         return True
 
 
-def fetch_secret(
-    secret_name: str, namespace: str
-) -> Optional[k8s_client.V1Secret]:
+def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secret]:
     try:
         return cast(
             k8s_client.V1Secret,
@@ -79,10 +77,7 @@ class WorkspaceCreate(BaseModel):
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
-async def create_workspace(
-    data: WorkspaceCreate, background_tasks: BackgroundTasks
-):
-
+async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTasks):
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
 
     if namespace_exists(workspace_name):
@@ -155,9 +150,7 @@ def create_harbor_user(workspace_name: str) -> None:
             ),
             data={
                 "username": base64.b64encode(workspace_name.encode()).decode(),
-                "password": base64.b64encode(
-                    harbor_user_password.encode()
-                ).decode(),
+                "password": base64.b64encode(harbor_user_password.encode()).decode(),
             },
         ),
     )
@@ -204,10 +197,7 @@ def wait_for_namespace_secret(workspace_name) -> V1Secret:
         event_secret_name = event_secret.metadata.name
         logger.info(f"Received secret event {event_type} {event_secret_name}")
 
-        if (
-            event_type == "ADDED"
-            and event_secret_name == config.WORKSPACE_SECRET_NAME
-        ):
+        if event_type == "ADDED" and event_secret_name == config.WORKSPACE_SECRET_NAME:
             logger.info("Found the secret we were looking for")
             watch.stop()
             return event_secret
@@ -264,20 +254,27 @@ def deploy_helm_releases(
     dynamic_client = DynamicClient(
         client=kubernetes.client.api_client.ApiClient(),
     )
+    template_vars = {
+        "workspace_name": workspace_name,
+        "access_key_id": base64.b64decode(secret.data["access"]).decode(),
+        "secret_access_key": base64.b64decode(secret.data["secret"]).decode(),
+        "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
+        "projectid": base64.b64decode(secret.data["projectid"]).decode(),
+        "default_owner": default_owner,
+    } | (
+        {"container_registry_credentials": creds.base64_encode_as_single_string()}
+        if (creds := fetch_container_registry_credentials(workspace_name))
+        else {}
+    )
     for key, raw_content in k8s_objects.items():
         logger.info(f"Deploying k8s object {key}")
 
         hr_rendered = (
             jinja2.Environment()
-            .from_string(raw_content)
-            .render(
-                workspace_name=workspace_name,
-                access_key_id=base64.b64decode(secret.data["access"]).decode(),
-                secret_access_key=base64.b64decode(secret.data["secret"]).decode(),
-                bucket=base64.b64decode(secret.data["bucketname"]).decode(),
-                projectid=base64.b64decode(secret.data["projectid"]).decode(),
-                default_owner=default_owner,
+            .from_string(
+                raw_content,
             )
+            .render(**template_vars)
         )
 
         object_rendered_parsed = yaml.safe_load(hr_rendered)
@@ -323,6 +320,9 @@ class ContainerRegistryCredentials(BaseModel):
     username: str
     password: str
 
+    def base64_encode_as_single_string(self) -> str:
+        return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
+
 
 class Workspace(BaseModel):
     status: WorkspaceStatus
@@ -340,7 +340,6 @@ workspace_path_type = Path(..., regex=f"^{config.PREFIX_FOR_NAME}")
 
 @app.get("/workspaces/{workspace_name}", response_model=Workspace)
 async def get_workspace(workspace_name: str = workspace_path_type):
-
     if not namespace_exists(workspace_name):
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
 
@@ -354,9 +353,7 @@ async def get_workspace(workspace_name: str = workspace_path_type):
         return Workspace(status=WorkspaceStatus.provisioning)
 
 
-def serialize_workspace(
-    workspace_name: str, secret: k8s_client.V1Secret
-) -> Workspace:
+def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
     ingresses = cast(
         List[k8s_client.V1Ingress],
         k8s_client.NetworkingV1Api()
@@ -369,10 +366,6 @@ def serialize_workspace(
     }
     credentials["endpoint"] = config.S3_ENDPOINT
     credentials["region"] = config.S3_REGION
-
-    container_registry_secret = fetch_secret(
-        CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
-    )
 
     return Workspace(
         status=WorkspaceStatus.ready,  # only ready workspaces can be serialized
@@ -387,16 +380,7 @@ def serialize_workspace(
             credentials=credentials,
             # quota_in_mb=int(configmap.data["quota_in_mb"]),
         ),
-        container_registry=ContainerRegistryCredentials(
-            username=base64.b64decode(
-                container_registry_secret.data["username"]
-            ),
-            password=base64.b64decode(
-                container_registry_secret.data["password"]
-            ),
-        )
-        if container_registry_secret
-        else None,
+        container_registry=fetch_container_registry_credentials(workspace_name),
     )
 
 
@@ -426,9 +410,7 @@ class WorkspaceUpdate(BaseModel):
 
 
 @app.patch("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
-def patch_workspace(
-    data: WorkspaceUpdate, workspace_name: str = workspace_path_type
-):
+def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_type):
     storage = data.storage
     if storage:  # noqa: E203
         k8s_client.CoreV1Api().patch_namespaced_config_map(
@@ -441,9 +423,7 @@ def patch_workspace(
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
 
-@app.post(
-    "/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT
-)
+@app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
 def redeploy_workspace(
     background_tasks: BackgroundTasks, workspace_name: str = workspace_path_type
 ):
@@ -467,7 +447,6 @@ class Product(BaseModel):
 
 @app.post("/workspaces/{workspace_name}/register")
 async def register(product: Product, workspace_name: str = workspace_path_type):
-
     k8s_namespace = workspace_name
     client = await aioredis.from_url(
         f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
@@ -540,7 +519,6 @@ async def deregister(
     deregister_product: DeregisterProduct,
     workspace_name: str = workspace_path_type,
 ):
-
     k8s_namespace = workspace_name
     client = await aioredis.from_url(
         f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
@@ -581,9 +559,7 @@ async def register_collection(
     )
     message = f"{collection.get('id')} was applied for registration"
     logger.info(message)
-    return JSONResponse(
-        status_code=HTTPStatus.ACCEPTED, content={"message": message}
-    )
+    return JSONResponse(status_code=HTTPStatus.ACCEPTED, content={"message": message})
 
 
 class CreateContainerRegistryRepository(BaseModel):
@@ -635,9 +611,7 @@ def create_container_registry_repository(
 def grant_container_registry_access(
     username: str, project_name: str, role_id: int
 ) -> None:
-    logger.info(
-        f"Granting container registry access to {username} for {project_name}"
-    )
+    logger.info(f"Granting container registry access to {username} for {project_name}")
     response = requests.post(
         f"{config.HARBOR_URL}/api/v2.0/projects/{project_name}/members",
         json={
@@ -665,7 +639,26 @@ def grant_container_registry_access_view(data: GrantAccess):
     return JSONResponse(status_code=HTTPStatus.NO_CONTENT, content="")
 
 
+def fetch_container_registry_credentials(
+    workspace_name: str,
+) -> ContainerRegistryCredentials | None:
+    logger.info("Fetching container registry secret")
+    container_registry_secret = fetch_secret(
+        CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
+    )
+    return (
+        ContainerRegistryCredentials(
+            username=base64.b64decode(
+                container_registry_secret.data["username"]
+            ).decode(),
+            password=base64.b64decode(
+                container_registry_secret.data["password"]
+            ).decode(),
+        )
+        if container_registry_secret
+        else None
+    )
+
+
 def current_namespace() -> str:
-    return open(
-        "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-    ).read()
+    return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()

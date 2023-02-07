@@ -58,8 +58,8 @@ def mock_read_secret():
         elif name == "container-registry":
             return k8s_client.V1Secret(
                 data={
-                    "username": base64.b64encode(b"container-registry-user"),
-                    "password": "",
+                    "username": base64.b64encode(b"eric"),
+                    "password": base64.b64encode(b"changeme"),
                 }
             )
         elif name == config.UMA_CLIENT_SECRET_NAME:
@@ -124,6 +124,7 @@ spec:
   chart: null
   values:
     namespace: {{ workspace_name }}
+    container_registry_credentials: {{ container_registry_credentials }}
 """
             },
         ),
@@ -303,6 +304,7 @@ def test_deploy_hrs_deploys_from_templated_config_map(
     mock_read_config_map,
     mock_dynamic_client_apply,
     mock_secret,
+    mock_read_secret,
 ):
     deploy_helm_releases(
         workspace_name="a",
@@ -311,7 +313,9 @@ def test_deploy_hrs_deploys_from_templated_config_map(
     )
 
     hr_body = mock_dynamic_client_apply.mock_calls[-1].kwargs["body"]
-    assert hr_body["spec"]["values"]["namespace"] == "a"
+    values = hr_body["spec"]["values"]
+    assert values["namespace"] == "a"
+    assert values["container_registry_credentials"] == "ZXJpYzpjaGFuZ2VtZQ=="
 
 
 def test_create_repository_in_container_registry_calls_harbor(
@@ -417,9 +421,7 @@ def test_get_workspace_returns_ready(
         },
         # "quota_in_mb": 123,
     }
-    assert (
-        response.json()["container_registry"]["username"] == "container-registry-user"
-    )
+    assert response.json()["container_registry"]["username"] == "eric"
 
 
 def test_get_workspace_only_works_on_prefixed_path(client: TestClient):
