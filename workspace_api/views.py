@@ -11,7 +11,7 @@ import json
 
 import jinja2
 import yaml
-from fastapi import HTTPException, Path, Response, BackgroundTasks
+from fastapi import HTTPException, Path, Response, BackgroundTasks, Header
 from fastapi.responses import JSONResponse
 from kubernetes.client.models.v1_secret import V1Secret
 from kubernetes.dynamic import DynamicClient
@@ -77,9 +77,15 @@ class WorkspaceCreate(BaseModel):
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
-async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTasks):
+async def create_workspace(
+    data: WorkspaceCreate, background_tasks: BackgroundTasks,
+    header: Header
+):
+
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
     bucket_endpoint_url = config.BUCKET_ENDPOINT_URL
+    pepBaseUrl = config.PEP_BASE_URL
+    auto_protection_enabled = config.AUTO_PROTECTION_ENABLED
 
     if namespace_exists(workspace_name):
         raise HTTPException(
@@ -95,14 +101,14 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
         )
     )
 
-    body = {
+    bucket_body = {
         # we use the workspace name as bucket name since it's a good unique name
         "bucketName": workspace_name,
         "secretName": config.WORKSPACE_SECRET_NAME,
         "secretNamespace": workspace_name,
     }
 
-    response = requests.post(bucket_endpoint_url, data=body)
+    response = requests.post(bucket_endpoint_url, data=bucket_body)
     if response.status_code == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
         create_bucket_secret(workspace_name=workspace_name, credentials=response.json())
@@ -114,6 +120,13 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
 
     create_harbor_user(workspace_name=workspace_name)
 
+    if auto_protection_enabled:
+        register_workspace_api_protection(
+            header=header, creation_data=data,
+            workspace_name=workspace_name,
+            basUrl=pepBaseUrl
+        )
+
     background_tasks.add_task(
         install_workspace_phase2,
         workspace_name=workspace_name,
@@ -121,6 +134,26 @@ async def create_workspace(data: WorkspaceCreate, background_tasks: BackgroundTa
     )
 
     return {"name": workspace_name}
+
+
+def register_workspace_api_protection(
+    header: Dict[str: Any], creation_data: WorkspaceCreate,
+    workspace_name: str, baseUrl
+) -> None:
+
+    headers = {
+        "Authorization": header['Authorization']
+    }
+    pep_body = {
+        "name": f"Workspace for user: {creation_data.preferred_name}",
+        "icon_uri": f"/workspaces/{workspace_name}",
+        "uuid": f"{creation_data.default_owner}",
+        "resource_scopes": []
+    }
+
+    pep_response = requests.post(f"{baseUrl}/resources", headers=headers, json=pep_body)
+
+    pep_response.raise_for_status()
 
 
 def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> None:
