@@ -21,9 +21,7 @@ REGISTER_PATH_QUEUE = os.environ.get(
 )
 
 REGISTER_QUEUE = os.environ.get("REDIS_REGISTER_QUEUE", "register_queue")
-REGISTER_ADES_QUEUE = os.environ.get(
-    "REDIS_REGISTER_ADES_QUEUE", "register_ades_queue"
-)
+REGISTER_ADES_QUEUE = os.environ.get("REDIS_REGISTER_ADES_QUEUE", "register_ades_queue")
 REGISTER_APPLICATION_QUEUE = os.environ.get(
     "REDIS_REGISTER_APPLICATION_QUEUE", "register_application_queue"
 )
