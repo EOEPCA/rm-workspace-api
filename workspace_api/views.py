@@ -108,7 +108,7 @@ async def create_workspace(
         "secretNamespace": workspace_name,
     }
 
-    response = requests.post(bucket_endpoint_url, data=bucket_body)
+    response = requests.post(bucket_endpoint_url, json=bucket_body)
     if response.status_code == 200:
         # we have a bucket created, we create the secret and continue setting up workspace
         create_bucket_secret(workspace_name=workspace_name, credentials=response.json())
