@@ -2,7 +2,7 @@ import base64
 import enum
 from http import HTTPStatus
 import uuid
-from typing import cast, Optional, List, Dict, Any
+from typing import cast, Optional, List, Dict, Any, Union
 from urllib.parse import urlparse
 import string
 import secrets
@@ -79,12 +79,12 @@ class WorkspaceCreate(BaseModel):
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
 async def create_workspace(
     data: WorkspaceCreate, background_tasks: BackgroundTasks,
-    header: Header
+    authorization: Union[str, None] = Header(default=None)
 ):
 
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
     bucket_endpoint_url = config.BUCKET_ENDPOINT_URL
-    pepBaseUrl = config.PEP_BASE_URL
+    pep_base_url = config.PEP_BASE_URL
     auto_protection_enabled = config.AUTO_PROTECTION_ENABLED
 
     if namespace_exists(workspace_name):
@@ -122,9 +122,9 @@ async def create_workspace(
 
     if auto_protection_enabled:
         register_workspace_api_protection(
-            header=header, creation_data=data,
+            authorization=authorization, creation_data=data,
             workspace_name=workspace_name,
-            baseUrl=pepBaseUrl
+            base_url=pep_base_url,
         )
 
     background_tasks.add_task(
@@ -137,12 +137,12 @@ async def create_workspace(
 
 
 def register_workspace_api_protection(
-    header: Dict[str: Any], creation_data: WorkspaceCreate,
-    workspace_name: str, baseUrl
+    authorization: Union[str, None], creation_data: WorkspaceCreate,
+    workspace_name: str, base_url: str
 ) -> None:
 
     headers = {
-        "Authorization": header['Authorization']
+        "Authorization": authorization
     }
     pep_body = {
         "name": f"Workspace for user: {creation_data.preferred_name}",
