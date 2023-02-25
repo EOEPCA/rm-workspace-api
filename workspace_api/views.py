@@ -124,7 +124,7 @@ async def create_workspace(
         register_workspace_api_protection(
             header=header, creation_data=data,
             workspace_name=workspace_name,
-            basUrl=pepBaseUrl
+            baseUrl=pepBaseUrl
         )
 
     background_tasks.add_task(
