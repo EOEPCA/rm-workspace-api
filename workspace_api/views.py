@@ -151,7 +151,7 @@ def register_workspace_api_protection(
         "resource_scopes": []
     }
 
-    pep_response = requests.post(f"{baseUrl}/resources", headers=headers, json=pep_body)
+    pep_response = requests.post(f"{base_url}/resources", headers=headers, json=pep_body)
 
     pep_response.raise_for_status()
 
