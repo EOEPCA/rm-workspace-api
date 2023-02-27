@@ -122,7 +122,8 @@ async def create_workspace(
 
     if auto_protection_enabled:
         register_workspace_api_protection(
-            authorization=authorization, creation_data=data,
+            authorization=authorization,
+            creation_data=data,
             workspace_name=workspace_name,
             base_url=pep_base_url,
         )
@@ -141,6 +142,7 @@ def register_workspace_api_protection(
     workspace_name: str, base_url: str
 ) -> None:
 
+    logger.info("Auth header is '%s'", authorization)
     headers = {
         "Authorization": authorization
     }
