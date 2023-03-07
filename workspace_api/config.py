@@ -30,6 +30,9 @@ REGISTER_APPLICATION_QUEUE = os.environ.get(
 REGISTER_COLLECTION_QUEUE = os.environ.get(
     "REDIS_REGISTER_COLLECTION_QUEUE", "register_collection_queue"
 )
+REGISTER_CATALOGUE_QUEUE = os.environ.get(
+    "REDIS_REGISTER_CATALOGUE_QUEUE", "register_catalogue_queue"
+)
 HARVESTER_QUEUE = os.environ.get("REDIS_HARVESTER_QUEUE", "harvester_queue")
 
 DEREGISTER_QUEUE = os.environ.get("REDIS_DEREGISTER_QUEUE", "deregister_queue")
@@ -41,6 +44,9 @@ DEREGISTER_APPLICATION_QUEUE = os.environ.get(
 )
 DEREGISTER_COLLECTION_QUEUE = os.environ.get(
     "REDIS_DEREGISTER_COLLECTION_QUEUE", "deregister_collection_queue"
+)
+DEREGISTER_CATALOGUE_QUEUE = os.environ.get(
+    "REDIS_DEREGISTER_CATALOGUE_QUEUE", "deregister_catalogue_queue"
 )
 
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
