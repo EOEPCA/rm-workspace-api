@@ -30,6 +30,9 @@ REGISTER_APPLICATION_QUEUE = os.environ.get(
 REGISTER_COLLECTION_QUEUE = os.environ.get(
     "REDIS_REGISTER_COLLECTION_QUEUE", "register_collection_queue"
 )
+REGISTER_JSON_QUEUE = os.environ.get(
+    "REDIS_REGISTER_JSON_QUEUE", "register_json_queue"
+)
 REGISTER_CATALOGUE_QUEUE = os.environ.get(
     "REDIS_REGISTER_CATALOGUE_QUEUE", "register_catalogue_queue"
 )
