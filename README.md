@@ -97,31 +97,11 @@ docker-compose up
 
 ## Documentation
 
-The component documentation can be found at https://eoepca.github.io/rm-workspace-api/.
+Documentation for the Workspace API:
+* [Wiki Pages](https://github.com/EOEPCA/rm-workspace-api/wiki)
+* [Design documentation](https://eoepca.github.io/rm-workspace-api/) - placeholders ~ still to be done
 
 <!-- USAGE EXAMPLES -->
-
-## Usage
-
-Use this space to show useful examples of how a project can be used. Additional screenshots, code examples and demos work well in this space. You may also link to more resources.
-
-_For more examples, please refer to the [Documentation](https://example.com)_
-
-### Running the template service
-
-Just execute the run task in Gradle
-
-```sh
-./gradlew run
-```
-
-### Upgrading Gradle Wrapper
-
-Change the version number in the `build.gradle` wrapper task then run:
-
-```sh
-./gradlew wrapper --gradle-version=4.10.2 --distribution-type=bin
-```
 
 <!-- ROADMAP -->
 
