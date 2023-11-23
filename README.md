@@ -24,10 +24,10 @@
     <img src="images/logo.png" alt="Logo" width="80" height="80">
   </a>
 
-  <h3 align="center">Workspace API</h3>
+  <h3 align="center">EOEPCA Workspace API</h3>
 
   <p align="center">
-    Template for developing an EOEPCA Service
+    This repository includes the EOEPCA Workspace API component
     <br />
     <a href="https://github.com/EOEPCA/rm-workspace-api"><strong>Explore the docs »</strong></a>
     <br />
@@ -63,9 +63,6 @@
 
 [![Product Name Screen Shot][product-screenshot]](https://github.com/EOEPCA/rm-workspace-api)
 
-Here's a blank template to get started:
-**To avoid retyping too much info. Do a search and replace with your text editor for the following:**
-`rm-workspace-api`, `__fschindler__`, `fabian.schindler@eox.at`
 
 ### Built With
 
@@ -99,7 +96,7 @@ docker-compose up
 
 Documentation for the Workspace API:
 * [Wiki Pages](https://github.com/EOEPCA/rm-workspace-api/wiki)
-* [Design documentation](https://eoepca.github.io/rm-workspace-api/) - placeholders ~ still to be done
+* [Design documentation](https://eoepca.github.io/rm-workspace-api/)
 
 <!-- USAGE EXAMPLES -->
 
