@@ -96,7 +96,6 @@ docker-compose up
 
 Documentation for the Workspace API:
 * [Wiki Pages](https://github.com/EOEPCA/rm-workspace-api/wiki)
-* [Design documentation](https://eoepca.github.io/rm-workspace-api/)
 
 <!-- USAGE EXAMPLES -->
 
