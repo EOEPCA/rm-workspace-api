@@ -11,9 +11,20 @@ WORKSPACE_CHARTS_CONFIG_MAP = os.environ["WORKSPACE_CHARTS_CONFIG_MAP"]
 S3_ENDPOINT = os.environ["S3_ENDPOINT"]
 S3_REGION = os.environ["S3_REGION"]
 BUCKET_ENDPOINT_URL = os.environ["BUCKET_ENDPOINT_URL"]
-PEP_BASE_URL = os.environ.get("PEPBaseUrl", "http://workspace-api-pep:5576")
-AUTO_PROTECTION_ENABLED = "True" == os.environ.get("AUTO_PROTECTION_ENABLED", "True")
-# TODO: whitelistings = list of strings (applied to helm chart)
+
+# Gluu integration
+GLUU_INTEGRATION_ENABLED = os.environ.get("GLUU_INTEGRATION_ENABLED", "false").lower() == "true"
+PEP_BASE_URL = os.environ.get("PEP_BASE_URL", "http://workspace-api-pep:5576")
+UMA_CLIENT_SECRET_NAME = os.environ["UMA_CLIENT_SECRET_NAME"]
+UMA_CLIENT_SECRET_NAMESPACE = os.environ["UMA_CLIENT_SECRET_NAMESPACE"]
+
+# Keycloak integration
+KEYCLOAK_INTEGRATION_ENABLED = os.environ.get("KEYCLOAK_INTEGRATION_ENABLED", "false").lower() == "true"
+KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "http://identity-keycloak.um.svc.cluster.local:8080")
+KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "master")
+IDENTITY_API_URL = os.environ.get("IDENTITY_API_URL", "http://identity-api.um.svc.cluster.local:8080")
+WORKSPACE_API_CLIENT_ID = os.environ.get("WORKSPACE_API_CLIENT_ID", "workspace-api")
+DEFAULT_IAM_CLIENT_SECRET = os.environ.get("DEFAULT_IAM_CLIENT_SECRET", "changeme")
 
 # registration endpoint variables
 REDIS_SERVICE_NAME = os.environ.get("REDIS_SERVICE_NAME", "vs-redis-master")
@@ -56,10 +67,6 @@ DEREGISTER_CATALOGUE_QUEUE = os.environ.get(
 )
 
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
-
-# Guard specific values
-UMA_CLIENT_SECRET_NAME = os.environ["UMA_CLIENT_SECRET_NAME"]
-UMA_CLIENT_SECRET_NAMESPACE = os.environ["UMA_CLIENT_SECRET_NAMESPACE"]
 
 HARBOR_URL = os.environ["HARBOR_URL"]
 HARBOR_ADMIN_USERNAME = os.environ["HARBOR_ADMIN_USERNAME"]

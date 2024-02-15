@@ -84,8 +84,6 @@ async def create_workspace(
 
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
     bucket_endpoint_url = config.BUCKET_ENDPOINT_URL
-    pep_base_url = config.PEP_BASE_URL
-    auto_protection_enabled = config.AUTO_PROTECTION_ENABLED
 
     if namespace_exists(workspace_name):
         raise HTTPException(
@@ -120,12 +118,24 @@ async def create_workspace(
 
     create_harbor_user(workspace_name=workspace_name)
 
-    if auto_protection_enabled:
-        register_workspace_api_protection(
+    if config.GLUU_INTEGRATION_ENABLED:
+        register_workspace_api_gluu_protection(
             authorization=authorization,
             creation_data=data,
             workspace_name=workspace_name,
-            base_url=pep_base_url,
+            base_url=config.PEP_BASE_URL,
+        )
+
+    if config.KEYCLOAK_INTEGRATION_ENABLED:
+        register_workspace_api_keycloak_protection(
+            authorization=authorization,
+            creation_data=data,
+            workspace_name=workspace_name,
+            keycloak_url=config.KEYCLOAK_URL,
+            realm=config.KEYCLOAK_REALM,
+            identity_api_url=config.IDENTITY_API_URL,
+            workspace_api_client_id = config.WORKSPACE_API_CLIENT_ID,
+            new_client_secret = config.DEFAULT_IAM_CLIENT_SECRET,
         )
 
     background_tasks.add_task(
@@ -137,7 +147,7 @@ async def create_workspace(
     return {"name": workspace_name}
 
 
-def register_workspace_api_protection(
+def register_workspace_api_gluu_protection(
     authorization: Union[str, None], creation_data: WorkspaceCreate,
     workspace_name: str, base_url: str
 ) -> None:
@@ -156,6 +166,138 @@ def register_workspace_api_protection(
     pep_response = requests.post(f"{base_url}/resources", headers=headers, json=pep_body)
 
     pep_response.raise_for_status()
+
+
+def register_workspace_api_keycloak_protection(
+    authorization: Union[str, None], creation_data: WorkspaceCreate,
+    workspace_name: str, keycloak_url: str, realm: str, identity_api_url: str,
+    workspace_api_client_id: str, new_client_secret: str
+) -> None:
+    pass
+    # Steps...
+    # 1. Protect workspace-api/workspaces/{workspace_name} for {creation_data.preferred_name}
+    # 2. Create new client '{workspace_name}' with /* protected for user 'data.default_owner'
+
+    logger.info(f"Auth header is '{authorization}'")
+
+    #--------------------------------------------------------------------------
+    # Protect the URI of the new workspace in the Workspace API
+    #--------------------------------------------------------------------------
+    logger.info(f"Protect Workspace API URI '/workspaces/{workspace_name}' for user '{creation_data.default_owner}'")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": authorization
+    }
+    body = [
+        {
+            "name": workspace_name,
+            "uris": [ f"/workspaces/{workspace_name}/*" ],
+            "scopes": [ "view" ],
+            "permissions": {
+                "user": [ creation_data.default_owner ]
+            }
+        }
+    ]
+    response = requests.post(f"{identity_api_url}/{workspace_api_client_id}/resources", headers=headers, json=body)
+    if response.status_code == 200 or response.status_code == 409:
+        logger.info(f"  [Protected Workspace API] Completed with response: {response.status_code}")
+    else:
+        logger.error(f"  [Protected Workspace API] Failed with response: {response.status_code}")
+        response.raise_for_status()
+
+    #--------------------------------------------------------------------------
+    # Create a new Keycloak client to protect the new workspace services
+    #--------------------------------------------------------------------------
+    logger.info(f"Create a new Keycloak client for new workspace '{workspace_name}' with protected access for user '{creation_data.default_owner}'")
+
+    #--------------------------------------------------------------------------
+    # Step 1 - Create the client with permissions
+    #--------------------------------------------------------------------------
+    logger.info("[step 1] Create the client with permissions...")
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": authorization
+    }
+    body = {
+        "clientId": workspace_name,
+        "secret": new_client_secret,
+        "name": f"Workspace {workspace_name} Gatekeeper",
+        "resources": [
+            {
+                "name": creation_data.default_owner,
+                "uris": [ "/*" ],
+                "scopes": [ "view" ],
+                "permissions": {
+                    "user": [ creation_data.default_owner ]
+                }
+            }
+        ],
+        "description": f"Client to be used by Workspace {workspace_name} Gatekeeper"
+    }
+    response = requests.post(f"{identity_api_url}/clients", headers=headers, json=body)
+    if response.status_code == 200 or response.status_code == 409:
+        logger.info(f"  [Create Client] Completed with response: {response.status_code}")
+        created_client_details = response.json()
+        if "client" in created_client_details:
+            new_client_uuid = created_client_details["client"]
+            logger.info(f"  [Create Client] New client created with UUID: {new_client_uuid}")
+    else:
+        logger.error(f"  [Create Client] Failed with response: {response.status_code}")
+        response.raise_for_status()
+
+    #--------------------------------------------------------------------------
+    # Step 2 - Update the Default Resource with the 'view' scope
+    #--------------------------------------------------------------------------
+    logger.info("[step 2] Update the Default Resource with the 'view' scope...")
+    # Get the UUID of the new client
+    if not new_client_uuid:
+        response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients", headers=headers)
+        if response.ok:
+            client_list = response.json()
+            for client in client_list:
+                if "clientId" in client:
+                    if client["clientId"] == workspace_name:
+                        new_client_uuid = client["id"]
+                        break
+
+    if new_client_uuid:
+        # Get the UUID of the Default Resource
+        response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource", headers=headers)
+        if response.ok:
+            resource_list = response.json()
+            for resource in resource_list:
+                if "name" in resource:
+                    if resource["name"] == "Default Resource":
+                        default_resource_uuid = resource["_id"]
+                        break
+        else:
+            logger.error(f"  [Update Default Resource] Get Default Resource UUID failed with response: {response.status_code}\n{response.text}")
+            response.raise_for_status()
+
+        if default_resource_uuid:
+            # Get the details of the Default Resource, and add the 'view' scope
+            response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource/{default_resource_uuid}", headers=headers)
+            if response.ok:
+                logger.info(f"  [Update Default Resource] Get Default Resource details completed with response: {response.status_code}\n{response.text}")
+                default_resource_details = response.json()
+                if "scopes" not in default_resource_details:
+                    default_resource_details["scopes"] = []
+                if "view" not in default_resource_details["scopes"]:
+                    default_resource_details["scopes"].append("view")
+                # Update the Default Resource
+                response = requests.put(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource/{default_resource_uuid}", headers=headers, json=default_resource_details)
+                if response.ok:
+                    logger.info(f"  [Update Default Resource] Update completed with response: {response.status_code}")
+                else:
+                    logger.error(f"  [Update Default Resource] Update failed with response: {response.status_code}\n{response.text}")
+                    response.raise_for_status()
+            else:
+                logger.error(f"  [Update Default Resource] Get Default Resource details failed with response: {response.status_code}\n{response.text}")
+                response.raise_for_status()
+        else:
+            logger.error(f"  [Update Default Resource] Get Default Resource UUID failed parsing '_id' (UUID) from response: {response.status_code}\n{response.text}")
 
 
 def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> None:
