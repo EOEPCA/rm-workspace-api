@@ -1,7 +1,7 @@
 name: Build and publish Docker image
 on:
   push:
-    branches: [ master ]
+    branches: [ master, integration ]
     tags:
       - "*"
   pull_request:

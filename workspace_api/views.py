@@ -240,20 +240,21 @@ def create_harbor_user(workspace_name: str) -> None:
 
 
 def create_uma_client_credentials_secret(workspace_name: str):
-    logger.info("Creating uma client credentials secret")
-    original_secret = k8s_client.CoreV1Api().read_namespaced_secret(
-        name=config.UMA_CLIENT_SECRET_NAME,
-        namespace=config.UMA_CLIENT_SECRET_NAMESPACE,
-    )
-    k8s_client.CoreV1Api().create_namespaced_secret(
-        namespace=workspace_name,
-        body=k8s_client.V1Secret(
-            metadata=k8s_client.V1ObjectMeta(
-                name=config.UMA_CLIENT_SECRET_NAME,
+    if config.UMA_CLIENT_SECRET_NAME and config.UMA_CLIENT_SECRET_NAMESPACE:
+        logger.info("Creating uma client credentials secret")
+        original_secret = k8s_client.CoreV1Api().read_namespaced_secret(
+            name=config.UMA_CLIENT_SECRET_NAME,
+            namespace=config.UMA_CLIENT_SECRET_NAMESPACE,
+        )
+        k8s_client.CoreV1Api().create_namespaced_secret(
+            namespace=workspace_name,
+            body=k8s_client.V1Secret(
+                metadata=k8s_client.V1ObjectMeta(
+                    name=config.UMA_CLIENT_SECRET_NAME,
+                ),
+                data=original_secret.data,
             ),
-            data=original_secret.data,
-        ),
-    )
+        )
 
 
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
@@ -291,7 +292,7 @@ def install_workspace_phase2(workspace_name, default_owner=None, patch=False) ->
         )
         for item in response["items"]:
             try:
-                if item["spec"]["chart"]["spec"]["chart"] == "resource-guard":
+                if item["spec"]["chart"]["spec"]["chart"] == "identity-gatekeeper":
                     default_owner = item["spec"]["values"]["global"]["default_owner"]
                     break
 
