@@ -114,11 +114,10 @@ async def create_workspace(
     elif 400 <= response.status_code <= 511:
         raise HTTPException(status_code=response.status_code)
 
-    create_uma_client_credentials_secret(workspace_name=workspace_name)
-
     create_harbor_user(workspace_name=workspace_name)
 
     if config.GLUU_INTEGRATION_ENABLED:
+        create_uma_client_credentials_secret(workspace_name=workspace_name)
         register_workspace_api_gluu_protection(
             authorization=authorization,
             creation_data=data,
@@ -397,6 +396,8 @@ def create_uma_client_credentials_secret(workspace_name: str):
                 data=original_secret.data,
             ),
         )
+    else:
+        logger.warning("Not creating uma client credentials secret - due to missing input values")
 
 
 def wait_for_namespace_secret(workspace_name) -> V1Secret:
