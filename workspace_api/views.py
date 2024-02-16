@@ -238,7 +238,7 @@ def register_workspace_api_keycloak_protection(
     }
     response = requests.post(f"{identity_api_url}/clients", headers=headers, json=body)
     if response.status_code == 200 or response.status_code == 409:
-        logger.info(f"  [Create Client] Completed with response: {response.status_code}")
+        logger.info(f"  [Create Client] Completed with response: {response.status_code}\n{response.text}")
         created_client_details = response.json()
         if "client" in created_client_details:
             new_client_uuid = created_client_details["client"]
