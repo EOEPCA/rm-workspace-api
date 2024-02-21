@@ -214,6 +214,7 @@ def register_workspace_api_keycloak_protection(
     # Step 1 - Create the client with permissions
     #--------------------------------------------------------------------------
     logger.info("[step 1] Create the client with permissions...")
+    new_client_uuid = None
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
