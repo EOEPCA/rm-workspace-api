@@ -3,32 +3,26 @@ import enum
 from http import HTTPStatus
 import uuid
 from typing import cast, Optional, List, Dict, Any, Union
-from urllib.parse import urlparse
 import string
 import secrets
 import logging
-import json
-
-import jinja2
-import yaml
 from fastapi import HTTPException, Path, Response, BackgroundTasks, Header
-from fastapi.responses import JSONResponse
-from kubernetes.client.models.v1_secret import V1Secret
-from kubernetes.dynamic import DynamicClient
+
+# from kubernetes.client.models.v1_secret import V1Secret
 import kubernetes.client.rest
 import kubernetes.watch
 import kubernetes.client
 from kubernetes import config as k8s_config, client as k8s_client
+from kubernetes.client.models import V1ObjectMeta
+from kubernetes.dynamic import DynamicClient
 import requests
 import requests.exceptions
 from slugify import slugify
 from pydantic import BaseModel
-import aioredis
+
 
 from workspace_api import app, config
 
-
-# TODO: fix logging output with gunicorn
 logger = logging.getLogger(__name__)
 
 CONTAINER_REGISTRY_SECRET_NAME = "container-registry"
@@ -39,7 +33,6 @@ async def load_k8s_config():
     try:
         k8s_config.load_kube_config()
     except Exception:
-        # load_kube_config might throw anything :/
         k8s_config.load_incluster_config()
 
 
@@ -78,274 +71,56 @@ class WorkspaceCreate(BaseModel):
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
 async def create_workspace(
-    data: WorkspaceCreate, background_tasks: BackgroundTasks,
-    authorization: Union[str, None] = Header(default=None)
+    data: WorkspaceCreate,
+    background_tasks: BackgroundTasks,
+    authorization: Union[str, None] = Header(default=None),
 ):
-
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
-    bucket_endpoint_url = config.BUCKET_ENDPOINT_URL
 
-    if namespace_exists(workspace_name):
+    # if namespace_exists(workspace_name):
+    #     raise HTTPException(
+    #         status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+    #         detail={"error": "Namespace already exists"},
+    #     )
+
+    # k8s_client.CoreV1Api().create_namespace(
+    #     k8s_client.V1Namespace(
+    #         metadata=k8s_client.V1ObjectMeta(
+    #             name=workspace_name,
+    #         )
+    #     )
+    # )
+
+    # return {"name": workspace_name}
+
+    dynamic_client = DynamicClient(kubernetes.client.ApiClient())
+    try:
+        dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").get(name=workspace_name)
         raise HTTPException(
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            detail={"error": "Namespace already exists"},
+            detail={"error": "Workspace with this name already exists"},
         )
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            # Workspace doesn't exist, proceed with creation
+            pass
+        else:
+            raise
 
-    k8s_client.CoreV1Api().create_namespace(
-        k8s_client.V1Namespace(
-            metadata=k8s_client.V1ObjectMeta(
-                name=workspace_name,
-            )
-        )
-    )
+    print("all good")
 
-    bucket_body = {
-        # we use the workspace name as bucket name since it's a good unique name
-        "bucketName": workspace_name,
-        "secretName": config.WORKSPACE_SECRET_NAME,
-        "secretNamespace": workspace_name,
+    workspace_data = {
+        "apiVersion": "epca.eo/v1beta1",
+        "kind": "Workspace",
+        "metadata": V1ObjectMeta(name=workspace_name),
+        "spec" : {
+            "subscription": "silver",
+        }
     }
-
-    response = requests.post(bucket_endpoint_url, json=bucket_body)
-    if response.status_code == 200:
-        # we have a bucket created, we create the secret and continue setting up workspace
-        create_bucket_secret(workspace_name=workspace_name, credentials=response.json())
-
-    elif 400 <= response.status_code <= 511:
-        raise HTTPException(status_code=response.status_code)
-
-    create_harbor_user(workspace_name=workspace_name)
-
-    if config.GLUU_INTEGRATION_ENABLED:
-        create_uma_client_credentials_secret(workspace_name=workspace_name)
-        register_workspace_api_gluu_protection(
-            authorization=authorization,
-            creation_data=data,
-            workspace_name=workspace_name,
-            base_url=config.PEP_BASE_URL,
-        )
-
-    if config.KEYCLOAK_INTEGRATION_ENABLED:
-        register_workspace_api_keycloak_protection(
-            authorization=authorization,
-            creation_data=data,
-            workspace_name=workspace_name,
-            keycloak_url=config.KEYCLOAK_URL,
-            realm=config.KEYCLOAK_REALM,
-            identity_api_url=config.IDENTITY_API_URL,
-            workspace_api_client_id = config.WORKSPACE_API_CLIENT_ID,
-            new_client_secret = config.DEFAULT_IAM_CLIENT_SECRET,
-        )
-
-    background_tasks.add_task(
-        install_workspace_phase2,
-        workspace_name=workspace_name,
-        default_owner=data.default_owner,
-    )
+    print(f"creating {workspace_name} in {current_namespace()}")
+    dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").create(workspace_data, namespace=current_namespace())
 
     return {"name": workspace_name}
-
-
-def register_workspace_api_gluu_protection(
-    authorization: Union[str, None], creation_data: WorkspaceCreate,
-    workspace_name: str, base_url: str
-) -> None:
-
-    logger.info("Auth header is '%s'", authorization)
-    headers = {
-        "Authorization": authorization
-    }
-    pep_body = {
-        "name": f"Workspace for user: {creation_data.preferred_name}",
-        "icon_uri": f"/workspaces/{workspace_name}",
-        "uuid": f"{creation_data.default_owner}",
-        "resource_scopes": []
-    }
-
-    pep_response = requests.post(f"{base_url}/resources", headers=headers, json=pep_body)
-
-    pep_response.raise_for_status()
-
-
-def register_workspace_api_keycloak_protection(
-    authorization: Union[str, None], creation_data: WorkspaceCreate,
-    workspace_name: str, keycloak_url: str, realm: str, identity_api_url: str,
-    workspace_api_client_id: str, new_client_secret: str
-) -> None:
-    pass
-    # Steps...
-    # 1. Protect workspace-api/workspaces/{workspace_name} for {creation_data.preferred_name}
-    # 2. Create new client '{workspace_name}' with /* protected for user 'data.default_owner'
-
-    logger.info(f"Auth header is '{authorization}'")
-
-    #--------------------------------------------------------------------------
-    # Protect the URI of the new workspace in the Workspace API
-    #--------------------------------------------------------------------------
-    logger.info(f"Protect Workspace API URI '/workspaces/{workspace_name}' for user '{creation_data.default_owner}'")
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": authorization
-    }
-    body = [
-        {
-            "name": workspace_name,
-            "uris": [ f"/workspaces/{workspace_name}/*" ],
-            "scopes": [ "view" ],
-            "permissions": {
-                "user": [ creation_data.default_owner ]
-            }
-        }
-    ]
-    response = requests.post(f"{identity_api_url}/{workspace_api_client_id}/resources", headers=headers, json=body)
-    if response.status_code == 200 or response.status_code == 409:
-        logger.info(f"  [Protected Workspace API] Completed with response: {response.status_code}")
-    else:
-        logger.error(f"  [Protected Workspace API] Failed with response: {response.status_code}")
-        response.raise_for_status()
-
-    #--------------------------------------------------------------------------
-    # Create a new Keycloak client to protect the new workspace services
-    #--------------------------------------------------------------------------
-    logger.info(f"Create a new Keycloak client for new workspace '{workspace_name}' with protected access for user '{creation_data.default_owner}'")
-
-    #--------------------------------------------------------------------------
-    # Step 1 - Create the client with permissions
-    #--------------------------------------------------------------------------
-    logger.info("[step 1] Create the client with permissions...")
-    new_client_uuid = None
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": authorization
-    }
-    body = {
-        "clientId": workspace_name,
-        "secret": new_client_secret,
-        "name": f"Workspace {workspace_name} Gatekeeper",
-        "resources": [
-            {
-                "name": creation_data.default_owner,
-                "uris": [ "/*" ],
-                "scopes": [ "view" ],
-                "permissions": {
-                    "user": [ creation_data.default_owner ]
-                }
-            }
-        ],
-        "description": f"Client to be used by Workspace {workspace_name} Gatekeeper"
-    }
-    response = requests.post(f"{identity_api_url}/clients", headers=headers, json=body)
-    if response.status_code == 200 or response.status_code == 409:
-        logger.info(f"  [Create Client] Completed with response: {response.status_code}\n{response.text}")
-        created_client_details = response.json()
-        if "client" in created_client_details:
-            new_client_uuid = created_client_details["client"]
-            logger.info(f"  [Create Client] New client created with UUID: {new_client_uuid}")
-    else:
-        logger.error(f"  [Create Client] Failed with response: {response.status_code}")
-        response.raise_for_status()
-
-    #--------------------------------------------------------------------------
-    # Step 2 - Update the Default Resource with the 'view' scope
-    #--------------------------------------------------------------------------
-    logger.info("[step 2] Update the Default Resource with the 'view' scope...")
-    # Get the UUID of the new client
-    if not new_client_uuid:
-        response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients", headers=headers)
-        if response.ok:
-            client_list = response.json()
-            for client in client_list:
-                if "clientId" in client:
-                    if client["clientId"] == workspace_name:
-                        new_client_uuid = client["id"]
-                        break
-
-    if new_client_uuid:
-        # Get the UUID of the Default Resource
-        response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource", headers=headers)
-        if response.ok:
-            resource_list = response.json()
-            for resource in resource_list:
-                if "name" in resource:
-                    if resource["name"] == "Default Resource":
-                        default_resource_uuid = resource["_id"]
-                        break
-        else:
-            logger.error(f"  [Update Default Resource] Get Default Resource UUID failed with response: {response.status_code}\n{response.text}")
-            response.raise_for_status()
-
-        if default_resource_uuid:
-            # Get the details of the Default Resource, and add the 'view' scope
-            response = requests.get(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource/{default_resource_uuid}", headers=headers)
-            if response.ok:
-                logger.info(f"  [Update Default Resource] Get Default Resource details completed with response: {response.status_code}\n{response.text}")
-                default_resource_details = response.json()
-                if "scopes" not in default_resource_details:
-                    default_resource_details["scopes"] = []
-                if "view" not in default_resource_details["scopes"]:
-                    default_resource_details["scopes"].append("view")
-                # Update the Default Resource
-                response = requests.put(f"{keycloak_url}/admin/realms/{realm}/clients/{new_client_uuid}/authz/resource-server/resource/{default_resource_uuid}", headers=headers, json=default_resource_details)
-                if response.ok:
-                    logger.info(f"  [Update Default Resource] Update completed with response: {response.status_code}")
-                else:
-                    logger.error(f"  [Update Default Resource] Update failed with response: {response.status_code}\n{response.text}")
-                    response.raise_for_status()
-            else:
-                logger.error(f"  [Update Default Resource] Get Default Resource details failed with response: {response.status_code}\n{response.text}")
-                response.raise_for_status()
-        else:
-            logger.error(f"  [Update Default Resource] Get Default Resource UUID failed parsing '_id' (UUID) from response: {response.status_code}\n{response.text}")
-
-
-def create_bucket_secret(workspace_name: str, credentials: Dict[str, Any]) -> None:
-
-    logger.info(f"Creating secret for namespace {workspace_name}")
-
-    k8s_client.CoreV1Api().create_namespaced_secret(
-        namespace=workspace_name,
-        body=k8s_client.V1Secret(
-            metadata=k8s_client.V1ObjectMeta(
-                name=config.WORKSPACE_SECRET_NAME,
-                namespace=workspace_name
-            ),
-            data={
-                "bucketname": base64.b64encode(credentials["bucketname"].encode()).decode(),
-                "access": base64.b64encode(credentials["access_key"].encode()).decode(),
-                "secret": base64.b64encode(credentials["access_secret"].encode()).decode(),
-                "projectid": base64.b64encode(credentials["projectid"].encode()).decode(),
-            },
-        )
-    )
-
-
-def create_bucket(workspace_name: str) -> None:
-    logger.info(f"Creating bucket in namespace {workspace_name}")
-    group = "epca.eo"
-    version = "v1alpha1"
-    k8s_client.CustomObjectsApi().create_namespaced_custom_object(
-        group=group,
-        version=version,
-        plural="buckets",
-        namespace=config.NAMESPACE_FOR_BUCKET_RESOURCE,
-        body={
-            "apiVersion": f"{group}/{version}",
-            "kind": "Bucket",
-            "metadata": {
-                # TODO: better name for bucket resource?
-                "name": workspace_name,
-                "namespace": config.NAMESPACE_FOR_BUCKET_RESOURCE,
-            },
-            "spec": {
-                # we use the workspace name as bucket name since it's a good unique name
-                "bucketName": workspace_name,
-                "secretName": config.WORKSPACE_SECRET_NAME,
-                "secretNamespace": workspace_name,
-            },
-        },
-    )
 
 
 def create_harbor_user(workspace_name: str) -> None:
@@ -381,136 +156,6 @@ def create_harbor_user(workspace_name: str) -> None:
     response.raise_for_status()
 
 
-def create_uma_client_credentials_secret(workspace_name: str):
-    if config.UMA_CLIENT_SECRET_NAME and config.UMA_CLIENT_SECRET_NAMESPACE:
-        logger.info("Creating uma client credentials secret")
-        original_secret = k8s_client.CoreV1Api().read_namespaced_secret(
-            name=config.UMA_CLIENT_SECRET_NAME,
-            namespace=config.UMA_CLIENT_SECRET_NAMESPACE,
-        )
-        k8s_client.CoreV1Api().create_namespaced_secret(
-            namespace=workspace_name,
-            body=k8s_client.V1Secret(
-                metadata=k8s_client.V1ObjectMeta(
-                    name=config.UMA_CLIENT_SECRET_NAME,
-                ),
-                data=original_secret.data,
-            ),
-        )
-    else:
-        logger.warning("Not creating uma client credentials secret - due to missing input values")
-
-
-def wait_for_namespace_secret(workspace_name) -> V1Secret:
-
-    watch = kubernetes.watch.Watch()
-    for event in watch.stream(
-        k8s_client.CoreV1Api().list_namespaced_secret,
-        namespace=workspace_name,
-    ):
-        event_type = event["type"]
-        event_secret: k8s_client.V1Secret = event["object"]
-        event_secret_name = event_secret.metadata.name
-        logger.info(f"Received secret event {event_type} {event_secret_name}")
-
-        if event_type == "ADDED" and event_secret_name == config.WORKSPACE_SECRET_NAME:
-            logger.info("Found the secret we were looking for")
-            watch.stop()
-            return event_secret
-
-    raise Exception("Watch aborted")
-
-
-def install_workspace_phase2(workspace_name, default_owner=None, patch=False) -> None:
-    """Wait for secret, then install helm chart"""
-    secret = wait_for_namespace_secret(workspace_name=workspace_name)
-
-    logger.info(f"Install phase 2 for {workspace_name}")
-
-    if patch:
-        response = k8s_client.CustomObjectsApi().list_namespaced_custom_object(
-            group="helm.toolkit.fluxcd.io",
-            plural="helmreleases",
-            version="v2beta1",
-            namespace=workspace_name,
-        )
-        for item in response["items"]:
-            try:
-                if item["spec"]["chart"]["spec"]["chart"] == "identity-gatekeeper":
-                    default_owner = item["spec"]["values"]["global"]["default_owner"]
-                    break
-
-            except KeyError:
-                pass
-
-    try:
-        deploy_helm_releases(
-            workspace_name=workspace_name,
-            secret=secret,
-            default_owner=default_owner,
-        )
-    except Exception as e:
-        logger.critical(e, exc_info=True)
-
-
-def deploy_helm_releases(
-    workspace_name: str,
-    secret: k8s_client.V1Secret,
-    default_owner: str,
-):
-    k8s_objects = (
-        k8s_client.CoreV1Api()
-        .read_namespaced_config_map(
-            name=config.WORKSPACE_CHARTS_CONFIG_MAP,
-            namespace=current_namespace(),
-        )
-        .data
-    )
-    logger.info(f"Deploying {len(k8s_objects)} k8s objects: {list(k8s_objects)}")
-    dynamic_client = DynamicClient(
-        client=kubernetes.client.api_client.ApiClient(),
-    )
-    template_vars = {
-        "workspace_name": workspace_name,
-        "access_key_id": base64.b64decode(secret.data["access"]).decode(),
-        "secret_access_key": base64.b64decode(secret.data["secret"]).decode(),
-        "bucket": base64.b64decode(secret.data["bucketname"]).decode(),
-        "projectid": base64.b64decode(secret.data["projectid"]).decode(),
-        "default_owner": default_owner,
-        "container_registry_host": config.HARBOR_URL,
-        "s3_endpoint_url": config.S3_ENDPOINT,
-        "s3_region": config.S3_REGION,
-    } | (
-        {"container_registry_credentials": creds.base64_encode_as_single_string()}
-        if (creds := fetch_container_registry_credentials(workspace_name))
-        else {}
-    )
-    for key, raw_content in k8s_objects.items():
-        logger.info(f"Deploying k8s object {key}")
-
-        hr_rendered = (
-            jinja2.Environment()
-            .from_string(
-                raw_content,
-            )
-            .render(**template_vars)
-        )
-
-        object_rendered_parsed = yaml.safe_load(hr_rendered)
-
-        object_api = dynamic_client.resources.get(
-            api_version=object_rendered_parsed["apiVersion"],
-            kind=object_rendered_parsed["kind"],
-        )
-        object_api.server_side_apply(
-            namespace=workspace_name,
-            body=object_rendered_parsed,
-            field_manager="kubectl-client-side-apply",
-        )
-
-    logger.info("All k8s objects have been deployed")
-
-
 def workspace_name_from_preferred_name(preferred_name: str):
     safe_name = slugify(preferred_name, max_length=32)
     if not safe_name:
@@ -530,9 +175,7 @@ class Endpoint(BaseModel):
 
 
 class Storage(BaseModel):
-    # url: str
     credentials: Dict[str, str]
-    # quota_in_mb: int
 
 
 class ContainerRegistryCredentials(BaseModel):
@@ -569,7 +212,9 @@ async def get_workspace(workspace_name: str = workspace_path_type):
     if secret:
         return serialize_workspace(workspace_name, secret=secret)
     else:
-        return Workspace(status=WorkspaceStatus.provisioning)
+        return Workspace(
+            status=WorkspaceStatus.provisioning, storage=None, container_registry=None
+        )
 
 
 def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
@@ -595,10 +240,7 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
             )
             for ingress in ingresses
         ],
-        storage=Storage(
-            credentials=credentials,
-            # quota_in_mb=int(configmap.data["quota_in_mb"]),
-        ),
+        storage=Storage(credentials=credentials),
         container_registry=fetch_container_registry_credentials(workspace_name),
     )
 
@@ -606,8 +248,16 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
 @app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
 async def delete_workspace(workspace_name: str = workspace_path_type):
     # NOTE: name is validated via regex
+    # try:
+    #     k8s_client.CoreV1Api().delete_namespace(workspace_name)
+    # except kubernetes.client.rest.ApiException as e:
+    #     if e.status == HTTPStatus.NOT_FOUND:
+    #         raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
+    #     else:
+    #         raise
     try:
-        k8s_client.CoreV1Api().delete_namespace(workspace_name)
+        dynamic_client = DynamicClient(kubernetes.client.ApiClient())
+        dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").delete(name=workspace_name, namespace=current_namespace())
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
@@ -615,272 +265,6 @@ async def delete_workspace(workspace_name: str = workspace_path_type):
             raise
 
     return Response(status_code=HTTPStatus.NO_CONTENT)
-
-    # TODO: this should clean up everything in namespace, anything else to consider?
-
-
-# TODO: possibly set as base class of Storage, but wait until more details are known
-class StorageUpdate(BaseModel):
-    quota_in_mb: int
-
-
-class WorkspaceUpdate(BaseModel):
-    storage: Optional[StorageUpdate]
-
-
-@app.patch("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
-def patch_workspace(data: WorkspaceUpdate, workspace_name: str = workspace_path_type):
-    storage = data.storage
-    if storage:  # noqa: E203
-        k8s_client.CoreV1Api().patch_namespaced_config_map(
-            name=config.WORKSPACE_CONFIG_MAP_NAME,
-            namespace=workspace_name,
-            # NOTE: config maps don't support ints!
-            body={"data": {"quota_in_mb": str(storage.quota_in_mb)}},
-        )
-
-    return Response(status_code=HTTPStatus.NO_CONTENT)
-
-
-@app.post("/workspaces/{workspace_name}/redeploy", status_code=HTTPStatus.NO_CONTENT)
-def redeploy_workspace(
-    background_tasks: BackgroundTasks, workspace_name: str = workspace_path_type
-):
-    if not namespace_exists(workspace_name):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
-
-    background_tasks.add_task(
-        install_workspace_phase2, workspace_name=workspace_name, patch=True
-    )
-    return Response(status_code=HTTPStatus.NO_CONTENT)
-
-
-# Registration API
-
-
-class Product(BaseModel):
-    type: str
-    url: str
-    parent_identifier: Optional[str] = None
-
-
-@app.post("/workspaces/{workspace_name}/register")
-async def register(product: Product, workspace_name: str = workspace_path_type):
-    k8s_namespace = workspace_name
-    client = await aioredis.from_url(
-        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
-    )
-
-    # get the URL and extract the path from the S3 URL
-    try:
-        # parsed_url = urlparse(product.url)
-        # netloc = parsed_url.netloc
-        # # if ":" in netloc:
-        # #     netloc = netloc.rpartition(":")[2]
-        # url = netloc + parsed_url.path
-        url = product.url
-    except Exception as e:
-        message_dict = {"message": f"Registration failed: {e}"}
-        return JSONResponse(status_code=400, content=message_dict)
-
-    type_ = product.type.lower()
-    if type_ == "stac-item":
-        if url.endswith("/"):
-            url = f"{url}catalog.json"
-        await client.lpush(
-            config.HARVESTER_QUEUE,
-            json.dumps(
-                {
-                    "name": config.BUCKET_CATALOG_HARVESTER,
-                    "values": {"resource": {"root_path": url}},
-                }
-            ),
-        )
-        message = f"STAC Catalog '{url}' was accepted for harvesting"
-        logger.info(message)
-        return JSONResponse(
-            status_code=HTTPStatus.ACCEPTED, content={"message": message}
-        )
-
-    elif type_ in ("ades", "application", "oaproc", "catalogue", "xml"):
-        if type_ == "ades":
-            queue = config.REGISTER_ADES_QUEUE
-        elif type_ == "oaproc":
-            queue = config.REGISTER_ADES_QUEUE
-        elif type_ == "catalogue":
-            queue = config.REGISTER_CATALOGUE_QUEUE
-        elif type_ == "xml":
-            queue = config.REGISTER_XML_QUEUE
-        else:
-            queue = config.REGISTER_APPLICATION_QUEUE
-
-        await client.lpush(
-            queue,
-            json.dumps(
-                {
-                    "url": product.url,
-                    "parent_identifier": product.parent_identifier,
-                    "type": type_,
-                }
-            ),
-        )
-        message = f"{product.type} {product.url} was applied for registration"
-        logger.info(message)
-        return JSONResponse(
-            status_code=HTTPStatus.ACCEPTED, content={"message": message}
-        )
-        # TODO wait until registered?
-
-    return Response(status_code=HTTPStatus.BAD_REQUEST)
-
-
-class DeregisterProduct(BaseModel):
-    type: str
-    identifier: Optional[str]
-    url: Optional[str]
-
-
-@app.post("/workspaces/{workspace_name}/deregister")
-async def deregister(
-    deregister_product: DeregisterProduct,
-    workspace_name: str = workspace_path_type,
-):
-    k8s_namespace = workspace_name
-    client = await aioredis.from_url(
-        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
-    )
-
-    if deregister_product.url:
-        parsed_url = urlparse(deregister_product.url)
-        netloc = parsed_url.netloc
-        if ":" in netloc:
-            netloc = netloc.rpartition(":")[2]
-        url = netloc + parsed_url.path
-        data = {"url": url}
-    elif deregister_product.identifier:
-        data = {"identifier": deregister_product.identifier}
-    else:
-        # TODO: return exception
-        pass
-
-    await client.lpush(config.DEREGISTER_QUEUE, json.dumps(data))
-    # TODO: get result?
-
-    message = {"message": f"Item '{data}' was successfully de-registered"}
-    return JSONResponse(status_code=200, content=message)
-
-
-@app.post("/workspaces/{workspace_name}/register-collection")
-async def register_collection(
-    collection: Dict[str, Any], workspace_name: str = workspace_path_type
-):
-    k8s_namespace = workspace_name
-    client = await aioredis.from_url(
-        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
-    )
-
-    await client.lpush(
-        config.REGISTER_COLLECTION_QUEUE,
-        json.dumps(collection),
-    )
-    message = f"{collection.get('id')} was applied for registration"
-    logger.info(message)
-    return JSONResponse(status_code=HTTPStatus.ACCEPTED, content={"message": message})
-
-
-@app.post("/workspaces/{workspace_name}/register-json")
-async def register_json(
-    record: Dict[str, Any], workspace_name: str = workspace_path_type
-):
-    k8s_namespace = workspace_name
-    client = await aioredis.from_url(
-        f"redis://{config.REDIS_SERVICE_NAME}.{k8s_namespace}:{config.REDIS_PORT}"
-    )
-
-    await client.lpush(
-        config.REGISTER_JSON_QUEUE,
-        json.dumps(record),
-    )
-    message = f"{record.get('id')} was applied for registration"
-    logger.info(message)
-    return JSONResponse(status_code=HTTPStatus.ACCEPTED, content={"message": message})
-
-
-class CreateContainerRegistryRepository(BaseModel):
-    repository_name: str
-
-
-@app.post("/workspaces/{workspace_name}/create-container-registry-repository")
-def create_container_registry_repository(
-    data: CreateContainerRegistryRepository,
-    workspace_name: str = workspace_path_type,
-):
-    # technically we only create a project, but repositories are autocreated when
-    # you just push your docker image
-
-    logger.info(f"Creating container repository {data.repository_name}")
-    try:
-        response = requests.post(
-            f"{config.HARBOR_URL}/api/v2.0/projects",
-            json={
-                "project_name": data.repository_name,
-            },
-            auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
-        )
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == HTTPStatus.CONFLICT:
-            raise HTTPException(
-                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                detail={"error": "Repository already exists"},
-            )
-        elif e.response.status_code == HTTPStatus.BAD_REQUEST:
-            raise HTTPException(
-                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-                detail={"error": e.response.json().get("errors", [])},
-            )
-        else:
-            raise
-
-    # add workspace user as developer so they can push right away
-    grant_container_registry_access(
-        username=workspace_name,
-        project_name=data.repository_name,
-        role_id=2,  # Developer
-    )
-
-    return JSONResponse(status_code=HTTPStatus.NO_CONTENT, content="")
-
-
-def grant_container_registry_access(
-    username: str, project_name: str, role_id: int
-) -> None:
-    logger.info(f"Granting container registry access to {username} for {project_name}")
-    response = requests.post(
-        f"{config.HARBOR_URL}/api/v2.0/projects/{project_name}/members",
-        json={
-            "member_user": {"username": username},
-            "role_id": role_id,
-        },
-        auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
-    )
-    response.raise_for_status()
-
-
-class GrantAccess(BaseModel):
-    repository_name: str
-    username: str
-
-
-@app.post("/grant-access-to-container-registry-repository")
-def grant_container_registry_access_view(data: GrantAccess):
-    # TODO: do we need more error handling?
-    grant_container_registry_access(
-        username=data.username,
-        project_name=data.repository_name,
-        role_id=5,  # limited guest
-    )
-    return JSONResponse(status_code=HTTPStatus.NO_CONTENT, content="")
 
 
 def fetch_container_registry_credentials(
@@ -905,4 +289,7 @@ def fetch_container_registry_credentials(
 
 
 def current_namespace() -> str:
-    return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+    try:
+        return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+    except FileNotFoundError:
+        return "rm"

@@ -1,9 +1,3 @@
-<!--
-***
-*** To avoid retyping too much info. Do a search and replace for the following:
-*** rm-workspace-api, __fschindler__, fabian.schindler@eox.at
--->
-
 <!-- PROJECT SHIELDS -->
 <!--
 *** See the bottom of this document for the declaration of the reference variables
@@ -24,8 +18,8 @@
     <img src="images/logo.png" alt="Logo" width="80" height="80">
   </a>
 
-  <h3 align="center">EOEPCA Workspace API</h3>
-
+  <h3 align="center">EOEPCA Workspace API (v2)</h3>
+  
   <p align="center">
     This repository includes the EOEPCA Workspace API component
     <br />
@@ -68,7 +62,6 @@
 
 - FastAPI
 - Kubernetes Python API
-- Redis
 
 <!-- GETTING STARTED -->
 
@@ -91,6 +84,11 @@ docker-compose up
 
 - `make test` runs the unit tests
 - `make lint` runs the code lints
+
+### Run Locally (against eoepca-demo cluster)
+
+`HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HARBOR_ADMIN_PASSWORD="" S3_REGION="eu-central-1" S3_ENDPOINT="
+https://minio.develop.eoepca.org" PREFIX_FOR_NAME="ws" WORKSPACE_SECRET_NAME="bucket" KUBECONFIG=~/.kube/config-eoepca-demo uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app`
 
 ## Documentation
 
@@ -124,12 +122,6 @@ Contributions are what make the open source community such an amazing place to b
 Distributed under the Apache-2.0 License. See `LICENSE` for more information.
 
 <!-- CONTACT -->
-
-## Contact
-
-Fabian Schindler - [@__fschindler__](https://twitter.com/__fschindler__) - fabian.schindler@eox.at
-
-Project Link: [https://github.com/EOEPCA/rm-workspace-api](https://github.com/EOEPCA/rm-workspace-api)
 
 <!-- ACKNOWLEDGEMENTS -->
 

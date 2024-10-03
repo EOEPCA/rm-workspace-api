@@ -1,0 +1,21 @@
+@baseUrl = http://localhost:5000
+
+### create Workspace
+
+POST {{baseUrl}}/workspaces/
+Content-Type: application/json
+
+{
+  "preferred_name": "joe223"
+}
+
+### get Workspace Alice
+
+GET {{baseUrl}}/workspaces/ws-alice
+Content-Type: application/json
+
+### get Workspace Joe
+
+GET {{baseUrl}}/workspaces/ws--joe
+Content-Type: application/json
+

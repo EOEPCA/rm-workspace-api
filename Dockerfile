@@ -9,10 +9,6 @@ WORKDIR /srv/service
 ADD requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-RUN apt install wget && \
-    wget https://github.com/bitnami-labs/sealed-secrets/releases/download/v0.16.0/kubeseal-linux-amd64 -O kubeseal && \
-    install -m 755 kubeseal /usr/local/bin/kubeseal
-
 ADD . .
 
 USER www-data

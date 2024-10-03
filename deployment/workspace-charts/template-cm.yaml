@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: my-cm
-data:
-  a: "welcome to {{ workspace_name }}"

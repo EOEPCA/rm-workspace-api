@@ -5,6 +5,6 @@ services:
         ports:
         - 5000:5000
         volumes:
-        - .:/srv/service
+        - .:/srv/service        
         env_file: test_environment.env
         command: uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app
