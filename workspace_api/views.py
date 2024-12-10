@@ -36,18 +36,6 @@ async def load_k8s_config():
         k8s_config.load_incluster_config()
 
 
-def namespace_exists(workspace_name) -> bool:
-    try:
-        k8s_client.CoreV1Api().read_namespace(name=workspace_name)
-    except kubernetes.client.rest.ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return False
-        else:
-            raise
-    else:
-        return True
-
-
 def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secret]:
     try:
         return cast(
@@ -77,22 +65,6 @@ async def create_workspace(
 ):
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
 
-    # if namespace_exists(workspace_name):
-    #     raise HTTPException(
-    #         status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-    #         detail={"error": "Namespace already exists"},
-    #     )
-
-    # k8s_client.CoreV1Api().create_namespace(
-    #     k8s_client.V1Namespace(
-    #         metadata=k8s_client.V1ObjectMeta(
-    #             name=workspace_name,
-    #         )
-    #     )
-    # )
-
-    # return {"name": workspace_name}
-
     dynamic_client = DynamicClient(kubernetes.client.ApiClient())
     try:
         dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").get(name=workspace_name)
@@ -102,7 +74,6 @@ async def create_workspace(
         )
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
-            # Workspace doesn't exist, proceed with creation
             pass
         else:
             raise
@@ -115,6 +86,7 @@ async def create_workspace(
         "metadata": V1ObjectMeta(name=workspace_name),
         "spec" : {
             "subscription": "silver",
+            "owner": data.default_owner
         }
     }
     print(f"creating {workspace_name} in {current_namespace()}")
@@ -202,9 +174,6 @@ workspace_path_type = Path(..., regex=f"^{config.PREFIX_FOR_NAME}")
 
 @app.get("/workspaces/{workspace_name}", response_model=Workspace)
 async def get_workspace(workspace_name: str = workspace_path_type):
-    if not namespace_exists(workspace_name):
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
-
     secret = fetch_secret(
         secret_name=config.WORKSPACE_SECRET_NAME,
         namespace=workspace_name,
@@ -247,14 +216,6 @@ def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Wor
 
 @app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
 async def delete_workspace(workspace_name: str = workspace_path_type):
-    # NOTE: name is validated via regex
-    # try:
-    #     k8s_client.CoreV1Api().delete_namespace(workspace_name)
-    # except kubernetes.client.rest.ApiException as e:
-    #     if e.status == HTTPStatus.NOT_FOUND:
-    #         raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
-    #     else:
-    #         raise
     try:
         dynamic_client = DynamicClient(kubernetes.client.ApiClient())
         dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").delete(name=workspace_name, namespace=current_namespace())
@@ -292,4 +253,4 @@ def current_namespace() -> str:
     try:
         return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
     except FileNotFoundError:
-        return "rm"
+        return "workspace"

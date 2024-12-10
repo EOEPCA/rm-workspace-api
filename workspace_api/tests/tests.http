@@ -1,4 +1,5 @@
 @baseUrl = http://localhost:5000
+#@baseUrl = https://workspace-api.apx.develop.eoepca.org
 
 ### create Workspace
 
@@ -6,7 +7,7 @@ POST {{baseUrl}}/workspaces/
 Content-Type: application/json
 
 {
-  "preferred_name": "joe223"
+  "preferred_name": "joe2"
 }
 
 ### get Workspace Alice
@@ -16,6 +17,5 @@ Content-Type: application/json
 
 ### get Workspace Joe
 
-GET {{baseUrl}}/workspaces/ws--joe
+GET {{baseUrl}}/workspaces/ws-joe
 Content-Type: application/json
-
