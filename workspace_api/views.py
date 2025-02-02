@@ -6,7 +6,7 @@ from typing import cast, Optional, List, Dict, Any, Union
 import string
 import secrets
 import logging
-from fastapi import HTTPException, Path, Response, BackgroundTasks, Header
+from fastapi import HTTPException, Path, Response, BackgroundTasks, Header, Request
 
 # from kubernetes.client.models.v1_secret import V1Secret
 import kubernetes.client.rest
@@ -171,6 +171,11 @@ class Workspace(BaseModel):
 # only allow workspaces starting with the prefix for actions
 workspace_path_type = Path(..., regex=f"^{config.PREFIX_FOR_NAME}")
 
+
+@app.get("/debug", include_in_schema=False)
+async def get_debug(request: Request):
+    return {"headers": request.headers}
+    
 
 @app.get("/workspaces/{workspace_name}", response_model=Workspace)
 async def get_workspace(workspace_name: str = workspace_path_type):
