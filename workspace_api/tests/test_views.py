@@ -48,7 +48,6 @@ def mock_secret():
         data={
             "access": "",
             "bucketname": "",
-            "projectid": "",
             "secret": base64.b64encode(b"supersecret"),
         }
     )

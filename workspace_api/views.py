@@ -150,6 +150,10 @@ class Storage(BaseModel):
     credentials: Dict[str, str]
 
 
+class Runtime(BaseModel):
+    envs: Dict[str, str]
+
+
 class ContainerRegistryCredentials(BaseModel):
     username: str
     password: str
@@ -164,6 +168,7 @@ class Workspace(BaseModel):
     # NOTE: these are defined iff the workspace is ready
     endpoints: List[Endpoint] = []
     storage: Optional[Storage]
+    runtime: Optional[Runtime]
 
     container_registry: Optional[ContainerRegistryCredentials]
 
@@ -175,7 +180,7 @@ workspace_path_type = Path(..., regex=f"^{config.PREFIX_FOR_NAME}")
 @app.get("/debug", include_in_schema=False)
 async def get_debug(request: Request):
     return {"headers": request.headers}
-    
+
 
 @app.get("/workspaces/{workspace_name}", response_model=Workspace)
 async def get_workspace(workspace_name: str = workspace_path_type):
@@ -183,38 +188,77 @@ async def get_workspace(workspace_name: str = workspace_path_type):
         secret_name=config.WORKSPACE_SECRET_NAME,
         namespace=workspace_name,
     )
+    # compatibility v1
+    if not secret:
+        secret = fetch_secret(
+            secret_name="bucket",
+            namespace=workspace_name,
+        )
     if secret:
         return serialize_workspace(workspace_name, secret=secret)
     else:
         return Workspace(
-            status=WorkspaceStatus.provisioning, storage=None, container_registry=None
+            status=WorkspaceStatus.provisioning, storage=None, runtime=None, container_registry=None
         )
 
 
 def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
-    ingresses = cast(
-        List[k8s_client.V1Ingress],
-        k8s_client.NetworkingV1Api()
-        .list_namespaced_ingress(namespace=workspace_name)
-        .items,
-    )
+    ingress_endpoints = [
+        Endpoint(
+            id=ingress.metadata.name,
+            url=ingress.spec.rules[0].host if ingress.spec.rules else ""
+        )
+        for ingress in cast(
+            List[k8s_client.V1Ingress],
+            k8s_client.NetworkingV1Api()
+            .list_namespaced_ingress(namespace=workspace_name)
+            .items,
+        )
+    ]
 
-    credentials: Dict[str, Any] = {
+    apisix_route_endpoints = [
+        Endpoint(
+            id=apisix_route["metadata"]["name"],
+            url=",".join(
+                list(set(
+                    match
+                    for http in apisix_route.get("spec", {}).get("http", [])
+                    for match in http.get("match", {}).get("hosts", [])
+                ))
+            )
+        )
+        for apisix_route in cast(
+            List[dict],
+            k8s_client.CustomObjectsApi()
+            .list_namespaced_custom_object(
+                group="apisix.apache.org",
+                version="v2",
+                namespace=workspace_name,
+                plural="apisixroutes",
+            )["items"],
+        )
+    ]
+
+    endpoints = ingress_endpoints + apisix_route_endpoints
+
+    envs: Dict[str, Any] = {
         k: base64.b64decode(v) for k, v in secret.data.items()
     }
-    credentials["endpoint"] = config.S3_ENDPOINT
-    credentials["region"] = config.S3_REGION
+
+    # compatibility v1
+    credentials: Dict[str, Any] = {
+        "bucketname": workspace_name,
+        "access": envs.get("AWS_ACCESS_KEY_ID", envs.get("access", "")),
+        "secret": envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", "")),
+        "endpoint": envs.get("AWS_ENDPOINT_URL", envs.get("endpoint", "")),
+        "region": envs.get("AWS_REGION", envs.get("region", ""))
+    }
 
     return Workspace(
         status=WorkspaceStatus.ready,  # only ready workspaces can be serialized
-        endpoints=[
-            Endpoint(
-                id=ingress.metadata.name,
-                url=ingress.spec.rules[0].host,
-            )
-            for ingress in ingresses
-        ],
+        endpoints=endpoints,
         storage=Storage(credentials=credentials),
+        runtime=Runtime(envs=envs),
         container_registry=fetch_container_registry_credentials(workspace_name),
     )
 

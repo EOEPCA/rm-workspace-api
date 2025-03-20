@@ -87,8 +87,7 @@ docker-compose up
 
 ### Run Locally (against eoepca-demo cluster)
 
-`HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HARBOR_ADMIN_PASSWORD="" S3_REGION="eu-central-1" S3_ENDPOINT="
-https://minio.develop.eoepca.org" PREFIX_FOR_NAME="ws" WORKSPACE_SECRET_NAME="bucket" KUBECONFIG=~/.kube/config-eoepca-demo uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app`
+`HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HARBOR_ADMIN_PASSWORD="" PREFIX_FOR_NAME="ws" WORKSPACE_SECRET_NAME="workspace" KUBECONFIG=~/.kube/config-eoepca-demo uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app`
 
 ## Documentation
 
