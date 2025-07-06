@@ -60,8 +60,7 @@ pip install -r requirements.txt
 KUBECONFIG=~/.kube/config-eoepca-demo HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HARBOR_ADMIN_PASSWORD="" PREFIX_FOR_NAME="ws" WORKSPACE_SECRET_NAME="workspace" uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app
 ```
 
-In VSCode all parameters are set by default.
-
+💡 Relevant VS Code configuration files are included to support a streamlined, opinionated development setup.
 
 For v2, a VUE.js-based UI is included with the API bundle. To build or update the UI distribution folder, run:
 
