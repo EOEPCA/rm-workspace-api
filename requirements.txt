@@ -6,13 +6,9 @@ requests==2.32.3
 kubernetes==31.0.0
 gunicorn==23.0.0
 uvicorn[standard]
-
 pytest==8.3.3
 pytest-watch==4.2.0
-flake8==7.1.1
-mypy==1.11.2
-
-black
+ruff==0.12.0
 ipdb
 requests-mock
 types-python-slugify

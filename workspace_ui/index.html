@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Workspace-App</title>
+    <base href="{{ base_path.rstrip('/') }}/">
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.css"
+    />
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
+    <script>
+      const request = '{{ request | safe }}';
+      const serverBasePath = '{{ base_path | safe }}';
+      const workspaceData = '{{ workspace_data | safe }}';
+
+      let workspace = null;
+      try {
+        if (workspaceData && workspaceData.trim() !== '') {
+          workspace = JSON.parse(atob(workspaceData));
+        }
+      } catch (e) {
+        console.warn('Failed to decode workspace data', e);
+      }
+
+      let children = [
+        {
+          pathSegment: 'management',
+          label: 'Management',
+          icon: 'action-settings',
+          viewUrl: '/ui_dist/app.html#/management',
+          context: {
+            page: 'management',
+            workspaceName: workspace.name,
+            edit: {
+              members: workspace.members,
+              clusterStatus: workspace.cluster.status,
+              extraBuckets: workspace.buckets?.filter(b => b.name != workspace.name && b.name.startsWith(workspace.name)).map(b => b.name) || []
+            }
+          }
+        }
+      ];
+
+      let endpoints = Array.isArray(workspace?.endpoints) ? workspace.endpoints : [];
+      endpoints.forEach(endpoint => {
+        if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
+          let targetUrl = endpoint.url;
+          if (targetUrl && !targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+            targetUrl = 'https://' + targetUrl;
+          } else if (!targetUrl) {
+            targetUrl = '#';
+          }
+
+          children.push({
+            category: { label: 'Links', icon: 'link' },
+            label: endpoint.id,
+            externalLink: { url: targetUrl }
+          });
+        }
+      });
+
+      const luigiConfig = {
+        navigation: {
+          nodes: () => [
+            {
+              pathSegment: 'home',
+              label: workspace.name,
+              icon: 'home',
+              viewUrl: '/ui_dist/app.html#/home',
+              children: children,
+              context: {
+                workspace: workspace
+              }
+            }
+          ]
+        },
+        routing: {
+          useHashRouting: true
+        },
+        settings: {
+          header: {
+            title: `Workspace: ${workspace.name}`,
+            logo: '/ui_public/logo.svg',
+            profile: false
+          },
+          responsiveNavigation: 'semiCollapsible'
+        }
+      };
+
+      Luigi.setConfig(luigiConfig);
+    </script>
+  </body>
+</html>

@@ -1,27 +1,20 @@
 import base64
 import enum
-from http import HTTPStatus
-import uuid
-from typing import cast, Optional, List, Dict, Any, Union
-import string
-import secrets
 import logging
-from fastapi import HTTPException, Path, Response, BackgroundTasks, Header, Request
+import uuid
+from http import HTTPStatus
+from typing import Any, Dict, List, Optional, Union, cast
 
-# from kubernetes.client.models.v1_secret import V1Secret
-import kubernetes.client.rest
-import kubernetes.watch
 import kubernetes.client
-from kubernetes import config as k8s_config, client as k8s_client
-from kubernetes.client.models import V1ObjectMeta
+import kubernetes.client.rest
+from fastapi import BackgroundTasks, Header, HTTPException, Path, Request, Response
+from kubernetes import client as k8s_client
+from kubernetes import config as k8s_config
 from kubernetes.dynamic import DynamicClient
-import requests
-import requests.exceptions
-from slugify import slugify
 from pydantic import BaseModel
+from slugify import slugify
 
-
-from workspace_api import app, config
+from workspace_api import app, config, templates
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +26,11 @@ async def load_k8s_config():
     try:
         k8s_config.load_kube_config()
     except Exception:
-        k8s_config.load_incluster_config()
+        try:
+            k8s_config.load_incluster_config()
+        except Exception:
+            logger.error("Failed to load Kubernetes configuration", exc_info=True)
+            raise
 
 
 def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secret]:
@@ -66,92 +63,85 @@ async def create_workspace(
     workspace_name = workspace_name_from_preferred_name(data.preferred_name)
 
     dynamic_client = DynamicClient(kubernetes.client.ApiClient())
+    workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
     try:
-        dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").get(name=workspace_name)
+        workspace_api.get(name=workspace_name, namespace=current_namespace())
         raise HTTPException(
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             detail={"error": "Workspace with this name already exists"},
         )
     except kubernetes.client.rest.ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            pass
-        else:
+        if e.status != HTTPStatus.NOT_FOUND:
             raise
 
-    print("all good")
+    logger.info(f"Creating {workspace_name} in {current_namespace()}")
 
-    workspace_data = {
-        "apiVersion": "epca.eo/v1beta1",
-        "kind": "Workspace",
-        "metadata": V1ObjectMeta(name=workspace_name),
-        "spec" : {
-            "subscription": "silver",
-            "owner": data.default_owner
-        }
-    }
-    print(f"creating {workspace_name} in {current_namespace()}")
-    dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").create(workspace_data, namespace=current_namespace())
+    workspace_api.create(
+        {
+            "apiVersion": "epca.eo/v1beta1",
+            "kind": "Workspace",
+            "metadata": {"name": workspace_name},
+            "spec": {"owner": data.default_owner, "defaultBucket": workspace_name},
+        },
+        namespace=current_namespace(),
+    )
 
     return {"name": workspace_name}
 
 
-def create_harbor_user(workspace_name: str) -> None:
-    """Create user in harbor via api and store credentials in secret"""
-    logger.info(f"Creating container registry user {workspace_name}")
-    alphabet = string.ascii_letters + string.digits
-    harbor_user_password = "".join(secrets.choice(alphabet) for i in range(30))
+class WorkspaceEdit(BaseModel):
+    cluster_status: str
+    members: List[str]
+    buckets: List[str]
 
-    k8s_client.CoreV1Api().create_namespaced_secret(
-        namespace=workspace_name,
-        body=k8s_client.V1Secret(
-            metadata=k8s_client.V1ObjectMeta(
-                name=CONTAINER_REGISTRY_SECRET_NAME,
-            ),
-            data={
-                "username": base64.b64encode(workspace_name.encode()).decode(),
-                "password": base64.b64encode(harbor_user_password.encode()).decode(),
-            },
-        ),
-    )
 
-    response = requests.post(
-        f"{config.HARBOR_URL}/api/v2.0/users",
-        json={
-            "username": workspace_name,
-            "password": harbor_user_password,
-            "email": f"{workspace_name}@example.com",
-            "realname": workspace_name,
-            "comment": "Auto-created by workspace api",
-        },
-        auth=(config.HARBOR_ADMIN_USERNAME, config.HARBOR_ADMIN_PASSWORD),
-    )
-    response.raise_for_status()
+@app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
+async def update_workspace(workspace_name: str, update: WorkspaceEdit):
+    dynamic_client = DynamicClient(kubernetes.client.ApiClient())
+    workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
+    try:
+        workspace_api.get(name=workspace_name, namespace=current_namespace())
+        patch_body = {
+            "spec": {
+                "vcluster": update.cluster_status,
+                "members": update.members,
+                "extraBuckets": update.buckets,
+            }
+        }
+        workspace_api.patch(name=workspace_name, namespace=current_namespace(), body=patch_body)
+        return {"name": workspace_name}
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
+        else:
+            raise
 
 
 def workspace_name_from_preferred_name(preferred_name: str):
     safe_name = slugify(preferred_name, max_length=32)
     if not safe_name:
         safe_name = str(uuid.uuid4())
-
     return config.PREFIX_FOR_NAME + "-" + safe_name
 
 
 class WorkspaceStatus(enum.Enum):
-    ready = "ready"
     provisioning = "provisioning"
-
-
-class Endpoint(BaseModel):
-    id: str
-    url: str
+    ready = "ready"
+    unknown = "unknown"
 
 
 class Storage(BaseModel):
     credentials: Dict[str, str]
 
 
-class Runtime(BaseModel):
-    envs: Dict[str, str]
+class Cluster(BaseModel):
+    config: str
+    status: str
+
+
+class Endpoint(BaseModel):
+    id: str
+    url: str
 
 
 class ContainerRegistryCredentials(BaseModel):
@@ -162,144 +152,207 @@ class ContainerRegistryCredentials(BaseModel):
         return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
 
 
+class Member(BaseModel):
+    name: str
+
+
+class Bucket(BaseModel):
+    name: str
+    policy: str
+
+
 class Workspace(BaseModel):
+    name: str
     status: WorkspaceStatus
-
-    # NOTE: these are defined iff the workspace is ready
+    spec: Optional[Any] = None
+    storage: Optional[Storage] = None
+    container_registry: Optional[ContainerRegistryCredentials] = None
+    cluster: Optional[Cluster] = None
     endpoints: List[Endpoint] = []
-    storage: Optional[Storage]
-    runtime: Optional[Runtime]
-
-    container_registry: Optional[ContainerRegistryCredentials]
+    members: List[Member] = []
+    buckets: List[Bucket] = []
 
 
-# only allow workspaces starting with the prefix for actions
-workspace_path_type = Path(..., regex=f"^{config.PREFIX_FOR_NAME}")
+def get_workspace_internal(workspace_name: str):
+    try:
+        dynamic_client = DynamicClient(k8s_client.ApiClient())
+        workspace_resource = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
+        workspace = workspace_resource.get(name=workspace_name, namespace=current_namespace())
+        ignored_keys = {
+            "compositeDeletePolicy",
+            "compositionRef",
+            "compositionRevisionRef",
+            "compositionUpdatePolicy",
+            "resourceRef",
+        }
+        spec = {
+            k: v for k, v in (workspace.spec.to_dict() if hasattr(workspace.spec, "to_dict") else workspace.spec).items() if k not in ignored_keys
+        }
 
+        if not spec:
+            return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
+    except Exception:
+        return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
 
-@app.get("/debug", include_in_schema=False)
-async def get_debug(request: Request):
-    return {"headers": request.headers}
-
-
-@app.get("/workspaces/{workspace_name}", response_model=Workspace)
-async def get_workspace(workspace_name: str = workspace_path_type):
-    secret = fetch_secret(
-        secret_name=config.WORKSPACE_SECRET_NAME,
-        namespace=workspace_name,
-    )
-    # compatibility v1
-    if not secret:
-        secret = fetch_secret(
-            secret_name="bucket",
-            namespace=workspace_name,
-        )
-    if secret:
-        return serialize_workspace(workspace_name, secret=secret)
-    else:
-        return Workspace(
-            status=WorkspaceStatus.provisioning, storage=None, runtime=None, container_registry=None
-        )
-
-
-def serialize_workspace(workspace_name: str, secret: k8s_client.V1Secret) -> Workspace:
-    ingress_endpoints = [
-        Endpoint(
-            id=ingress.metadata.name,
-            url=ingress.spec.rules[0].host if ingress.spec.rules else ""
-        )
-        for ingress in cast(
-            List[k8s_client.V1Ingress],
-            k8s_client.NetworkingV1Api()
-            .list_namespaced_ingress(namespace=workspace_name)
-            .items,
-        )
-    ]
-
-    apisix_route_endpoints = [
-        Endpoint(
-            id=apisix_route["metadata"]["name"],
-            url=",".join(
-                list(set(
-                    match
-                    for http in apisix_route.get("spec", {}).get("http", [])
-                    for match in http.get("match", {}).get("hosts", [])
-                ))
-            )
-        )
-        for apisix_route in cast(
-            List[dict],
-            k8s_client.CustomObjectsApi()
-            .list_namespaced_custom_object(
-                group="apisix.apache.org",
-                version="v2",
+    try:
+        workspace_secret = cast(
+            k8s_client.V1Secret,
+            k8s_client.CoreV1Api().read_namespaced_secret(
+                name=config.WORKSPACE_SECRET_NAME,
                 namespace=workspace_name,
-                plural="apisixroutes",
-            )["items"],
+            ),
         )
-    ]
+    except Exception as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return Workspace(name=workspace_name, status=WorkspaceStatus.provisioning, spec=spec)
+        else:
+            logger.warning(f"Failed to load workspace secret: {e}")
+            return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
 
-    endpoints = ingress_endpoints + apisix_route_endpoints
-
-    envs: Dict[str, Any] = {
-        k: base64.b64decode(v) for k, v in secret.data.items()
-    }
-
-    # compatibility v1
-    credentials: Dict[str, Any] = {
+    envs = {k: base64.b64decode(v).decode() for k, v in workspace_secret.data.items()}
+    credentials = {
         "bucketname": workspace_name,
         "access": envs.get("AWS_ACCESS_KEY_ID", envs.get("access", "")),
         "secret": envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", "")),
         "endpoint": envs.get("AWS_ENDPOINT_URL", envs.get("endpoint", "")),
-        "region": envs.get("AWS_REGION", envs.get("region", ""))
+        "region": envs.get("AWS_REGION", envs.get("region", "")),
     }
 
+    container_registry = None
+    try:
+        container_registry_secret = cast(
+            k8s_client.V1Secret,
+            k8s_client.CoreV1Api().read_namespaced_secret(
+                name=CONTAINER_REGISTRY_SECRET_NAME,
+                namespace=workspace_name,
+            ),
+        )
+        container_registry = ContainerRegistryCredentials(
+            username=base64.b64decode(container_registry_secret.data["username"]).decode(),
+            password=base64.b64decode(container_registry_secret.data["password"]).decode(),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to load container registry secret: {e}")
+
+    endpoints = []
+    try:
+        ingress_endpoints = [
+            Endpoint(
+                id=ingress.metadata.name,
+                url=ingress.spec.rules[0].host if ingress.spec.rules else "",
+            )
+            for ingress in cast(
+                List[k8s_client.V1Ingress],
+                k8s_client.NetworkingV1Api().list_namespaced_ingress(namespace=workspace_name).items,
+            )
+        ]
+        endpoints.extend(ingress_endpoints)
+    except Exception as e:
+        logger.warning(f"Failed to load ingresses: {e}")
+
+    try:
+        apisix_routes = k8s_client.CustomObjectsApi().list_namespaced_custom_object(
+            group="apisix.apache.org",
+            version="v2",
+            namespace=workspace_name,
+            plural="apisixroutes",
+        )
+        apisix_endpoints = [
+            Endpoint(
+                id=route["metadata"]["name"],
+                url=",".join(list(set(match for http in route.get("spec", {}).get("http", []) for match in http.get("match", {}).get("hosts", [])))),
+            )
+            for route in cast(List[dict], apisix_routes["items"])
+        ]
+        endpoints.extend(apisix_endpoints)
+    except Exception as e:
+        logger.warning(f"Failed to load APISIX routes: {e}")
+
+    try:
+        memberships = k8s_client.CustomObjectsApi().list_cluster_custom_object(
+            group="group.keycloak.crossplane.io",
+            version="v1alpha1",
+            plural="memberships",
+        )["items"]
+
+        members = [
+            Member(name=username)
+            for m in memberships
+            if m.get("spec", {}).get("forProvider", {}).get("groupIdRef", {}).get("name") == workspace_name
+            for username in m.get("spec", {}).get("forProvider", {}).get("members", [])
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to load Keycloak memberships: {e}")
+        members = []
+
+    try:
+        policies = cast(
+            List[dict],
+            k8s_client.CustomObjectsApi().list_cluster_custom_object(group="minio.crossplane.io", version="v1", plural="policies")["items"],
+        )
+        buckets = []
+        for policy in policies:
+            parts = policy.get("metadata", {}).get("name", "").split(".")
+            if len(parts) == 3 and parts[0] == workspace_name:
+                buckets.append(Bucket(name=parts[2], policy=parts[1]))
+    except Exception as e:
+        logger.warning(f"Failed to load MinIO policies: {e}")
+        buckets = []
+
     return Workspace(
-        status=WorkspaceStatus.ready,  # only ready workspaces can be serialized
-        endpoints=endpoints,
+        name=workspace_name,
+        status=WorkspaceStatus.ready,
+        spec=spec,
         storage=Storage(credentials=credentials),
-        runtime=Runtime(envs=envs),
-        container_registry=fetch_container_registry_credentials(workspace_name),
+        container_registry=container_registry,
+        cluster=Cluster(
+            config=envs.get("KUBECONFIG"),
+            status="active" if any(e.id == "vcluster" for e in endpoints) else "suspended",
+        ),
+        endpoints=endpoints,
+        members=members,
+        buckets=buckets,
     )
+
+
+@app.get("/workspaces/{workspace_name}", status_code=HTTPStatus.OK)
+async def get_workspace(request: Request, workspace_name: str = Path(...)):
+    workspace = get_workspace_internal(workspace_name)
+
+    accept_header = request.headers.get("accept", "")
+    if request.query_params.get("devmode") == "true" and "text/html" in accept_header:
+        workspace_data = base64.b64encode(workspace.model_dump_json().encode("utf-8")).decode("utf-8")
+        return templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "base_path": request.url.path,
+                "workspace_data": workspace_data,
+            },
+        )
+    else:
+        return workspace
+
+
+workspace_path_type = Path(..., pattern=f"^{config.PREFIX_FOR_NAME}")
 
 
 @app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
 async def delete_workspace(workspace_name: str = workspace_path_type):
     try:
         dynamic_client = DynamicClient(kubernetes.client.ApiClient())
-        dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace").delete(name=workspace_name, namespace=current_namespace())
+        workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
+        workspace_api.delete(name=workspace_name, namespace=current_namespace())
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
         else:
             raise
-
     return Response(status_code=HTTPStatus.NO_CONTENT)
-
-
-def fetch_container_registry_credentials(
-    workspace_name: str,
-) -> ContainerRegistryCredentials | None:
-    logger.info("Fetching container registry secret")
-    container_registry_secret = fetch_secret(
-        CONTAINER_REGISTRY_SECRET_NAME, namespace=workspace_name
-    )
-    return (
-        ContainerRegistryCredentials(
-            username=base64.b64decode(
-                container_registry_secret.data["username"]
-            ).decode(),
-            password=base64.b64decode(
-                container_registry_secret.data["password"]
-            ).decode(),
-        )
-        if container_registry_secret
-        else None
-    )
 
 
 def current_namespace() -> str:
     try:
-        return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read()
+        return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
     except FileNotFoundError:
         return "workspace"
