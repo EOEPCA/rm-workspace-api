@@ -13,11 +13,15 @@ app.add_middleware(PrometheusMiddleware)
 app.add_route("/metrics", handle_metrics)
 
 BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
-UI_SOURCE_DIR = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui"))
-VUE_DIST_DIR = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "dist"))
-templates = Jinja2Templates(directory=UI_SOURCE_DIR)
-# app.mount("/ui_public", StaticFiles(directory=os.path.join(UI_SOURCE_DIR, "public")), name="ui_public_assets")
+UI_BASE_DIR = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui"))
+
+VUE_DIST_DIR = os.path.join(UI_BASE_DIR, "dist")
+TEMPLATE_DIR = os.path.join(UI_BASE_DIR, "luigi-shell")
+
+templates = Jinja2Templates(directory=TEMPLATE_DIR)
+
 app.mount("/ui", StaticFiles(directory=VUE_DIST_DIR, html=True), name="ui_dist_assets")
+
 
 # TODO: set up, make sure that multiple processes are handled
 
