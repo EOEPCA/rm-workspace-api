@@ -320,7 +320,7 @@ async def get_workspace(request: Request, workspace_name: str = Path(...)):
     workspace = get_workspace_internal(workspace_name)
 
     accept_header = request.headers.get("accept", "")
-    if request.query_params.get("devmode") == "true" and "text/html" in accept_header:
+    if config.UI_MODE == "ui" or (request.query_params.get("devmode") == "true" and "text/html") in accept_header:
         workspace_data = base64.b64encode(workspace.model_dump_json().encode("utf-8")).decode("utf-8")
         return templates.TemplateResponse(
             "index.html",
