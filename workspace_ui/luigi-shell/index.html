@@ -19,8 +19,7 @@
       const request = '{{ request | safe }}';
       const serverBasePath = '{{ base_path | safe }}';
       const workspaceData = '{{ workspace_data | safe }}';
-      // const frontendUrl = '/ui'
-      const frontendUrl = 'http://localhost:5173'
+      const frontendUrl = '{{ frontend_url | safe }}';
 
       let workspace = null;
       try {

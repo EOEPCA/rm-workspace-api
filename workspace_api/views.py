@@ -328,6 +328,7 @@ async def get_workspace(request: Request, workspace_name: str = Path(...)):
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "frontend_url": config.FRONTEND_URL,
             },
         )
     else:
