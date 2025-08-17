@@ -19,6 +19,8 @@
       const request = '{{ request | safe }}';
       const serverBasePath = '{{ base_path | safe }}';
       const workspaceData = '{{ workspace_data | safe }}';
+      // const frontendUrl = '/ui'
+      const frontendUrl = 'http://localhost:5173'
 
       let workspace = null;
       try {
@@ -34,7 +36,7 @@
           pathSegment: 'management',
           label: 'Management',
           icon: 'action-settings',
-          viewUrl: '/ui/app.html#/management',
+          viewUrl: frontendUrl + '/app.html#/management',
           context: {
             page: 'management',
             workspaceName: workspace.name,
@@ -72,7 +74,7 @@
               pathSegment: 'home',
               label: workspace.name,
               icon: 'home',
-              viewUrl: '/ui/app.html#/home',
+              viewUrl: frontendUrl + '/app.html#/home',
               children: children,
               context: {
                 workspace: workspace
