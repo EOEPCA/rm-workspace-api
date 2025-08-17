@@ -34,14 +34,14 @@
           pathSegment: 'management',
           label: 'Management',
           icon: 'action-settings',
-          viewUrl: '/ui_dist/app.html#/management',
+          viewUrl: '/ui/app.html#/management',
           context: {
             page: 'management',
             workspaceName: workspace.name,
             edit: {
               members: workspace.members,
               clusterStatus: workspace.cluster.status,
-              extraBuckets: workspace.buckets?.filter(b => b.name != workspace.name && b.name.startsWith(workspace.name)).map(b => b.name) || []
+              extraBuckets: workspace.buckets?.filter(b => b.name !== workspace.name && b.name.startsWith(workspace.name)).map(b => b.name) || []
             }
           }
         }
@@ -72,7 +72,7 @@
               pathSegment: 'home',
               label: workspace.name,
               icon: 'home',
-              viewUrl: '/ui_dist/app.html#/home',
+              viewUrl: '/ui/app.html#/home',
               children: children,
               context: {
                 workspace: workspace
@@ -86,7 +86,7 @@
         settings: {
           header: {
             title: `Workspace: ${workspace.name}`,
-            logo: '/ui_public/logo.svg',
+            logo: '/ui/logo.svg',
             profile: false
           },
           responsiveNavigation: 'semiCollapsible'
