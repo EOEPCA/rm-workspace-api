@@ -90,25 +90,33 @@ async def create_workspace(
 
 
 class WorkspaceEdit(BaseModel):
-    cluster_status: str
+    name: str
+    clusterStatus: str
     members: List[str]
-    buckets: List[str]
+    extraBuckets: List[str]
 
 
 @app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
 async def update_workspace(workspace_name: str, update: WorkspaceEdit):
+    logger.debug(f"Update {workspace_name} with {update}")
+
     dynamic_client = DynamicClient(kubernetes.client.ApiClient())
     workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
     try:
         workspace_api.get(name=workspace_name, namespace=current_namespace())
         patch_body = {
             "spec": {
-                "vcluster": update.cluster_status,
+                "vcluster": update.clusterStatus,
                 "members": update.members,
-                "extraBuckets": update.buckets,
+                "extraBuckets": update.extraBuckets,
             }
         }
-        workspace_api.patch(name=workspace_name, namespace=current_namespace(), body=patch_body)
+        workspace_api.patch(
+            name=workspace_name,
+            namespace=current_namespace(),
+            body=patch_body,
+            content_type="application/merge-patch+json"
+        )
         return {"name": workspace_name}
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
