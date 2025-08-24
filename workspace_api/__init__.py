@@ -14,12 +14,15 @@ app.add_route("/metrics", handle_metrics)
 
 BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
 UI_BASE_DIR = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui"))
+LUIGI_BASE_DIR = os.path.join(UI_BASE_DIR, "luigi-shell")
 
+PUBLIC_DIR = os.path.join(LUIGI_BASE_DIR, "public")
+TEMPLATE_DIR = os.path.join(LUIGI_BASE_DIR, "public")
 VUE_DIST_DIR = os.path.join(UI_BASE_DIR, "dist")
-TEMPLATE_DIR = os.path.join(UI_BASE_DIR, "luigi-shell")
 
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 
+app.mount("/public", StaticFiles(directory=PUBLIC_DIR, html=True), name="ui_public")
 app.mount("/ui", StaticFiles(directory=VUE_DIST_DIR, html=True), name="ui_dist_assets")
 
 
