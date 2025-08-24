@@ -2,7 +2,7 @@
   <div class="q-pa-md">
     <!-- Loading -->
     <div v-if="loading" class="row justify-center q-my-md">
-      <q-spinner size="28px" />
+      <q-spinner size="28px"/>
     </div>
 
     <!-- Error -->
@@ -20,7 +20,7 @@
             text-color="white"
             square
           >
-            <q-icon name="info" class="q-mr-sm" />
+            <q-icon name="info" class="q-mr-sm"/>
             Status: {{ workspace.status }}
           </q-chip>
         </q-card-section>
@@ -34,7 +34,7 @@
         <q-card-section class="text-subtitle1">
           Storage Credentials
         </q-card-section>
-        <q-separator />
+        <q-separator/>
         <q-card-section>
           <pre class="q-pa-md bg-grey-2 rounded-borders">{{ prettyCredentials }}</pre>
         </q-card-section>
@@ -43,7 +43,7 @@
       <!-- Members Table -->
       <q-card v-if="workspace.members?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Members</q-card-section>
-        <q-separator />
+        <q-separator/>
         <q-card-section class="q-pa-none">
           <q-markup-table flat>
             <thead>
@@ -69,42 +69,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
-
-/** ---- Types ---- */
-type WorkspaceStatus = 'ready' | 'pending' | 'error'
-
-interface Member {
-  name: string
-  // add other fields if they exist
-}
-
-interface StorageInfo {
-  credentials?: Record<string, unknown>
-}
-
-interface Workspace {
-  status: WorkspaceStatus
-  members?: Member[]
-  storage?: StorageInfo
-  // add other fields if they exist (id, name, etc.)
-}
-
-/** Narrowed public surface we need from Luigi */
-interface LuigiClientLike {
-  addInitListener?: (cb: (ctx: Record<string, unknown>, origin?: string) => void, disableTpcCheck?: boolean) => void
-  getContext?: () => Record<string, unknown>
-  uxManager?: () => unknown
-}
-
-/** Tiny guard for uxManager */
-const isUxManager = (v: unknown): v is { setViewReady?: () => void } =>
-  typeof v === 'object' && v !== null && 'setViewReady' in v
+import {computed, ref} from 'vue'
+import {useLuigiWorkspace} from 'src/composables/useLuigi'
+import type {Workspace} from 'src/models/models'
 
 /** ---- State ---- */
-const loading = ref<boolean>(true)
+// const loading = ref<boolean>(true)
 const errorMessage = ref<string>('')
-const workspace = ref<Workspace | null>(null)
+// const workspace = ref<Workspace | null>(null)
 
 /** ---- Computed helpers ---- */
 const hasCredentials = computed<boolean>(() => {
@@ -116,46 +88,20 @@ const prettyCredentials = computed<string>(() =>
   JSON.stringify(workspace.value?.storage?.credentials ?? {}, null, 2)
 )
 
-/** ---- Luigi bootstrap (safe & typed) ---- */
-async function initLuigi() {
-  let LuigiClient: LuigiClientLike | null = null
-
-  try {
-    // dynamic import to avoid hard dependency/type conflicts
-    const mod = await import('@luigi-project/client')
-    LuigiClient = (mod as unknown as { default: unknown }).default as LuigiClientLike
-  } catch {
-    // optional global fallback if the shell exposes it
-    const w = window as unknown as { LuigiClient?: LuigiClientLike }
-    LuigiClient = w.LuigiClient ?? null
-  }
-
-  // If not running under Luigi, finish gracefully
-  if (!LuigiClient) {
-    loading.value = false
-    errorMessage.value = ''
-    workspace.value = null
-    return
-  }
-
-  // Use init listener as your source of truth
-  LuigiClient.addInitListener?.((initialContext: Record<string, unknown>) => {
-    loading.value = false
-
-    const ws = (initialContext as { workspace?: unknown }).workspace
-    if (ws && typeof ws === 'object') {
-      workspace.value = ws as Workspace
-      const ux = LuigiClient?.uxManager?.()
-      if (isUxManager(ux)) ux.setViewReady?.()
-    } else {
-      errorMessage.value = 'Workspace Data not accessible.'
+const {
+  loading,
+  workspace
+} = useLuigiWorkspace<Workspace>({
+    onReady: (ws) => {
+//      console.log('Workspace initialized:', ws?.name)
+      if (!ws) {
+        errorMessage.value = 'Workspace Data not provided.'
+      }
     }
-  })
-}
+  }
+)
 
-onMounted(() => {
-  void initLuigi()
-})
+
 </script>
 
 <style scoped>

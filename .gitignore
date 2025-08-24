@@ -8,4 +8,4 @@ __pycache__
 .idea
 
 # ignore local files
-run
+run*

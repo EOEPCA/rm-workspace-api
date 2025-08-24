@@ -94,20 +94,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import {computed, ref} from 'vue'
 import axios from 'axios'
-import type { LuigiClientLike } from 'src/types/luigi' // from our earlier definitions
+import type {Workspace, WorkspaceEdit} from 'src/models/models'
+import type {ClusterStatus} from 'src/types/workspace'
+import {useLuigiWorkspace} from 'src/composables/useLuigi'
 
-/** ---- Types ---- */
-type ClusterStatus = 'active' | 'suspended'
-
-interface WorkspaceEdit {
-  name: string
-  members: string[]
-  clusterStatus: ClusterStatus
-  extraBuckets: string[]
-}
-
+/*
 type InitCtx = {
   workspaceName?: string
   edit?: {
@@ -118,9 +111,11 @@ type InitCtx = {
   }
 }
 
+ */
+
 /** ---- State ---- */
 const message = ref<string>('')
-const loading = ref<boolean>(true)
+// const loading = ref<boolean>(true)
 
 const form = ref<WorkspaceEdit>({
   name: '',
@@ -134,49 +129,37 @@ const isError = computed(() => message.value.startsWith('Error:'))
 const displayMessage = computed(() => (isError.value ? message.value.substring(7) : message.value))
 const clusterStatusOptions: ClusterStatus[] = ['active', 'suspended']
 
-/** ---- Luigi bootstrap (typed + safe) ---- */
-async function initLuigi() {
-  let LuigiClient: LuigiClientLike | null = null
 
-  try {
-    const mod = await import('@luigi-project/client')
-    LuigiClient = (mod as unknown as { default: unknown }).default as LuigiClientLike
-  } catch {
-    const w = window as unknown as { LuigiClient?: LuigiClientLike }
-    LuigiClient = w.LuigiClient ?? null
-  }
+const {
+  loading,
+//  workspace
+} = useLuigiWorkspace<Workspace>({
+    onReady: (ws) => {
+//      console.log('Workspace initialized:', ws?.name)
+      if (ws) {
+        if (ws.name) {
+          message.value = `Using pre-loaded data for workspace: ${ws.name}`
 
-  if (!LuigiClient) {
-    // Standalone (outside Luigi) -> cannot edit
-    message.value = 'Currently not possible to edit workspace.'
-    loading.value = false
-    return
-  }
+          const rawMembers = Array.isArray(ws.members) ? ws.members : []
+          const normalizedMembers = rawMembers.map((m) => (m?.name ?? '?')
+          )
 
-  LuigiClient.addInitListener?.((ctxUnknown: Record<string, unknown>) => {
-    const ctx = ctxUnknown as InitCtx
+          const extraBuckets = ws.buckets?.filter(b => b.name !== ws.name && b.name.startsWith(ws.name)).map(b => b.name) || []
 
-    if (ctx.workspaceName && ctx.edit) {
-      message.value = `Using pre-loaded data for workspace: ${ctx.workspaceName}`
+          form.value = {
+            name: ws.name,
+            members: normalizedMembers,
+            clusterStatus: ws.cluster?.status ?? form.value.clusterStatus,
+            extraBuckets: extraBuckets ?? form.value.extraBuckets,
+          }
 
-      const rawMembers = Array.isArray(ctx.edit.members) ? ctx.edit.members : []
-      const normalizedMembers = rawMembers.map((m) =>
-        typeof m === 'string' ? m : (m?.name ?? '')
-      )
-
-      form.value = {
-        name: ctx.workspaceName,
-        clusterStatus: ctx.edit.clusterStatus ?? form.value.clusterStatus,
-        extraBuckets: ctx.edit.extraBuckets ?? form.value.extraBuckets,
-        members: normalizedMembers
+        } else
+          message.value = 'Workspace Data not provided.'
       }
-    } else {
-      message.value = 'Currently not possible to edit workspace.'
     }
+  }
+)
 
-    loading.value = false
-  })
-}
 
 /** ---- Submit ---- */
 const submit = async () => {
@@ -202,7 +185,4 @@ const submit = async () => {
   }
 }
 
-onMounted(() => {
-  void initLuigi()
-})
 </script>
