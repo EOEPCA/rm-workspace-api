@@ -71,14 +71,14 @@ The backend behavior is influenced by the following environment variables. Set t
 ```
 
 | Variable Name           | Default Value | Description                                                                                                                            |
-| ----------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| ----------------------- | ------------- |----------------------------------------------------------------------------------------------------------------------------------------|
 | `PREFIX_FOR_NAME`       | `"ws"`        | Prefix used when generating internal Kubernetes workspace names from user input (e.g., `"ws-martin"`).                                 |
 | `WORKSPACE_SECRET_NAME` | `"workspace"` | Name of the Kubernetes `Secret` expected per workspace for credentials (e.g., S3 access keys).                                         |
 | `HARBOR_URL`            | `""` (empty)  | Optional URL to a Harbor container registry. Used if container registry secrets are managed.                                           |
 | `HARBOR_ADMIN_USERNAME` | `""` (empty)  | Optional admin username for Harbor integration (if used).                                                                              |
 | `HARBOR_ADMIN_PASSWORD` | `""` (empty)  | Optional admin password for Harbor integration (if used).                                                                              |
 | `UI_MODE`               | `"no"`        | Set to `"ui"` to activate the Luigi frontend (shell + microfrontend SPA). Otherwise, only the API will be exposed.                     |
-| `FRONTEND_URL`          | `"/ui"`       | Base URL for the frontend. Set to `http://localhost:5173` during development to load the Vue dev server instead of the built frontend. |
+| `FRONTEND_URL`          | `"/ui"`       | Base URL for the frontend. Set to `http://localhost:9000` during development to load the Vue dev server instead of the built frontend. |
 
 
 ### Workspace UI
@@ -87,9 +87,11 @@ For version 2 a UI is included with the API bundle in the directory workspace_ui
 This is a frontend for the Kubernetes-based workspace management application. It consists of two distinct parts:
 
 - **Luigi Shell** — provides the micro frontend navigation and layout
-- **Vue 3 App** — a single-page application (SPA) embedded via Luigi as a view, using Vue + Vuetify
+- **Vue 3 App** — a single-page application (SPA) embedded via Luigi as a view, using Vue + Quasar.js
 
 Both parts are served by a Python FastAPI backend.
+
+> 💡 The UI bundle is still under active development and disabled by default. Use UI_MODE="ui" or url parameter `?devmode=true` to enable it.
 
 #### Main UI Structure
 ```bash
@@ -102,7 +104,7 @@ Both parts are served by a Python FastAPI backend.
     │        ├── logo.svg
     │        └── icons/                       
     ├── vue-app/                  # VueApp
-    │   └── app.html              # Vue app entry point (used inside Luigi iframe)
+    │   └── index.html            # Vue app entry point (used inside Luigi iframe)
     └── dist/                     # Built VueApp, served as static content
 ```
 
@@ -111,10 +113,22 @@ To build or update the UI distribution folder, run:
 cd workspace_ui/vue-app
 
 npm install
-npm run build
+quasar build (or npm run build)
 ```
 
-> 💡 The UI bundle is still under active development and disabled by default. Use `?devmode=true` to enable it.
+For frontend development:
+```bash
+cd workspace_ui/vue-app
+
+quasar dev (or npm run dev)
+```
+Run the Workspace API with the FRONTEND_URL set to the dev server url, e.g. FRONTEND_URL="http://localhost:9000"
+
+```bash
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL=http://localhost:9000 uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app
+```
+
+---
 
 If you're contributing, please base your work on the current `main` branch and rebase your changes before opening a pull request.
 
