@@ -62,10 +62,53 @@ KUBECONFIG=~/.kube/config-eoepca-demo HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HAR
 
 💡 Relevant VS Code configuration files are included to support a streamlined, opinionated development setup.
 
-For v2, a VUE.js-based UI is included with the API bundle. To build or update the UI distribution folder, run:
+### ⚙️ Environment Variables
 
+The backend behavior is influenced by the following environment variables. Set them in your shell or `.env` file
+
+```python
+# workspace_api/config.py
+```
+
+| Variable Name           | Default Value | Description                                                                                                                            |
+| ----------------------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `PREFIX_FOR_NAME`       | `"ws"`        | Prefix used when generating internal Kubernetes workspace names from user input (e.g., `"ws-martin"`).                                 |
+| `WORKSPACE_SECRET_NAME` | `"workspace"` | Name of the Kubernetes `Secret` expected per workspace for credentials (e.g., S3 access keys).                                         |
+| `HARBOR_URL`            | `""` (empty)  | Optional URL to a Harbor container registry. Used if container registry secrets are managed.                                           |
+| `HARBOR_ADMIN_USERNAME` | `""` (empty)  | Optional admin username for Harbor integration (if used).                                                                              |
+| `HARBOR_ADMIN_PASSWORD` | `""` (empty)  | Optional admin password for Harbor integration (if used).                                                                              |
+| `UI_MODE`               | `"no"`        | Set to `"ui"` to activate the Luigi frontend (shell + microfrontend SPA). Otherwise, only the API will be exposed.                     |
+| `FRONTEND_URL`          | `"/ui"`       | Base URL for the frontend. Set to `http://localhost:5173` during development to load the Vue dev server instead of the built frontend. |
+
+
+### Workspace UI
+
+For version 2 a UI is included with the API bundle in the directory workspace_ui.   
+This is a frontend for the Kubernetes-based workspace management application. It consists of two distinct parts:
+
+- **Luigi Shell** — provides the micro frontend navigation and layout
+- **Vue 3 App** — a single-page application (SPA) embedded via Luigi as a view, using Vue + Vuetify
+
+Both parts are served by a Python FastAPI backend.
+
+#### Main UI Structure
 ```bash
-cd workspace_ui
+.
+├── workspace_api/                # Python FastAPI backend
+└── workspace_ui/                 # Luigi shell + Vue frontend views
+    ├── luigi-shell/
+    │   └── public/                
+    │        ├── index.html       # Luigi shell template (rendered by FastAPI)
+    │        ├── logo.svg
+    │        └── icons/                       
+    ├── vue-app/                  # VueApp
+    │   └── app.html              # Vue app entry point (used inside Luigi iframe)
+    └── dist/                     # Built VueApp, served as static content
+```
+
+To build or update the UI distribution folder, run:
+```bash
+cd workspace_ui/vue-app
 
 npm install
 npm run build
