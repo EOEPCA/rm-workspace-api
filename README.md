@@ -17,6 +17,20 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 - **Workspace API** — `workspace_api/` (FastAPI backend)
 - **Workspace UI** — `workspace_ui/` (Quasar/Vue app; built assets placed in `workspace_ui/dist/`)
 
+```bash
+.
+├── workspace_api/                # Python FastAPI backend
+└── workspace_ui/                 # Luigi shell + Vue frontend views
+    ├── luigi-shell/
+    │   └── public/
+    │        ├── index.html       # Luigi shell template (rendered by FastAPI)
+    │        ├── logo.svg
+    │        └── icons/
+    ├── vue-app/                  # VueApp
+    │   └── index.html            # Vue app entry point (used inside Luigi iframe)
+    └── dist/                     # Built VueApp, served as static content
+```
+
 ## Requirements
 
 - Python **3.12** (e.g., via [pyenv](https://github.com/pyenv/pyenv))
