@@ -3,3 +3,9 @@ __pycache__
 
 .pytest_cache
 .venv
+
+# ignore Idea settings
+.idea
+
+# ignore local files
+run*

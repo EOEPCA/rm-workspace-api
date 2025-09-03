@@ -90,25 +90,33 @@ async def create_workspace(
 
 
 class WorkspaceEdit(BaseModel):
-    cluster_status: str
+    name: str
+    clusterStatus: str
     members: List[str]
-    buckets: List[str]
+    extraBuckets: List[str]
 
 
 @app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
 async def update_workspace(workspace_name: str, update: WorkspaceEdit):
+    logger.debug(f"Update {workspace_name} with {update}")
+
     dynamic_client = DynamicClient(kubernetes.client.ApiClient())
     workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
     try:
         workspace_api.get(name=workspace_name, namespace=current_namespace())
         patch_body = {
             "spec": {
-                "vcluster": update.cluster_status,
+                "vcluster": update.clusterStatus,
                 "members": update.members,
-                "extraBuckets": update.buckets,
+                "extraBuckets": update.extraBuckets,
             }
         }
-        workspace_api.patch(name=workspace_name, namespace=current_namespace(), body=patch_body)
+        workspace_api.patch(
+            name=workspace_name,
+            namespace=current_namespace(),
+            body=patch_body,
+            content_type="application/merge-patch+json"
+        )
         return {"name": workspace_name}
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
@@ -320,7 +328,7 @@ async def get_workspace(request: Request, workspace_name: str = Path(...)):
     workspace = get_workspace_internal(workspace_name)
 
     accept_header = request.headers.get("accept", "")
-    if request.query_params.get("devmode") == "true" and "text/html" in accept_header:
+    if config.UI_MODE == "ui" or (request.query_params.get("devmode") == "true" and "text/html") in accept_header:
         workspace_data = base64.b64encode(workspace.model_dump_json().encode("utf-8")).decode("utf-8")
         return templates.TemplateResponse(
             "index.html",
@@ -328,6 +336,7 @@ async def get_workspace(request: Request, workspace_name: str = Path(...)):
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "frontend_url": config.FRONTEND_URL,
             },
         )
     else:
