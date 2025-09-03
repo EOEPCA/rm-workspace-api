@@ -1,8 +1,6 @@
 # Workspace v2
 
-Python FastAPI Backend API (`workspace_api/`) and Quasar/Vue frontend (`workspace_ui/`) for managing Kubernetes `Workspace` Custom Resources.
-
----
+A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for managing Workspace custom resources on Kubernetes clusters, such as the EOEPCA demo cluster.
 
 ## Table of Contents
 
@@ -19,14 +17,10 @@ Python FastAPI Backend API (`workspace_api/`) and Quasar/Vue frontend (`workspac
 - [Docker](#docker)
 - [License](#license)
 
----
-
 ## Structure
 
 - **Workspace API** — `workspace_api/` (Python FastAPI backend)
 - **Workspace UI** — `workspace_ui/` (Quasar/Vue app; built assets placed in `workspace_ui/dist/`)
-
----
 
 ## Requirements
 
@@ -34,8 +28,6 @@ Python FastAPI Backend API (`workspace_api/`) and Quasar/Vue frontend (`workspac
 - [uv](https://github.com/astral-sh/uv) for Python deps
 - Node.js **20.x** + npm for the frontend
 - Docker (optional)
-
----
 
 ## Environment setup
 
@@ -57,8 +49,6 @@ Python FastAPI Backend API (`workspace_api/`) and Quasar/Vue frontend (`workspac
    npm ci
    ```
 
----
-
 ## Development workflow
 
 ### Run the API
@@ -70,8 +60,6 @@ KUBECONFIG=~/.kube/config-eoepca-demo uv run env PYTHONPATH=.. uvicorn workspace
 ```
 
 The API will be at <http://localhost:5000>.
-
----
 
 ### Frontend (Quasar/Vue)
 
@@ -92,7 +80,7 @@ Then in another terminal, run the backend pointing to the dev server:
 From the `workspace_api/` folder:
 
 ```bash
-UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
 ```
 
 Open `http://localhost:5000/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
@@ -117,8 +105,6 @@ KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="/ui" uv run env
 
 > The Docker image (below) builds the UI and copies `workspace_ui/dist/` into the container at `/home/app/static`.
 
----
-
 ### Linting and formatting
 
 Python (from `workspace_api/`):
@@ -141,8 +127,6 @@ Run all pre-commit hooks from repo root:
 uv run pre-commit run --all-files
 ```
 
----
-
 ### Testing
 
 Backend tests live in `workspace_api/tests/`:
@@ -158,8 +142,6 @@ Watch mode:
 uv run pytest-watcher tests --now
 ```
 
----
-
 ## Developer tools
 
 Installed via the backend `dev` extra:
@@ -172,8 +154,6 @@ Installed via the backend `dev` extra:
 
 Run via `uv run <tool>` from `workspace_api/`.
 
----
-
 ## Configuration
 
 Environment variables used by the backend:
@@ -185,8 +165,6 @@ Environment variables used by the backend:
 | `CONTAINER_REGISTRY_SECRET_NAME` | `"container-registry"` | Name of the Kubernetes `Secret` that holds per-workspace container registry credentials. |
 | `UI_MODE` | `"no"` | Set to `"ui"` to enable serving the frontend (templated HTML + SPA). |
 | `FRONTEND_URL` | `"/ui"` | Base path (production) or absolute URL (dev server) for the frontend. Use `http://localhost:9000` with the dev server. |
-
----
 
 ## Docker
 
@@ -201,8 +179,6 @@ Run it:
 ```bash
 docker run --rm --p 8080:8080 --name workspace-api workspace-api:latest
 ```
-
----
 
 ## License
 
