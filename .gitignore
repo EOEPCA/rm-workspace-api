@@ -6,7 +6,8 @@ __pycache__/
 # Node / Quasar
 node_modules/
 .quasar/
-#dist/
+dist/
+!dist/.gitkeep
 quasar.config.*.temporary.compiled*
 
 # Logs
