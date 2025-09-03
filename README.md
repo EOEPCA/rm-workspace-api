@@ -8,18 +8,13 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 - [Requirements](#requirements)
 - [Environment setup](#environment-setup)
 - [Development workflow](#development-workflow)
-  - [Run the API](#run-the-api)
-  - [Frontend (Quasar/Vue)](#frontend-quasarvue)
-  - [Linting and formatting](#linting-and-formatting)
-  - [Testing](#testing)
-  - [Developer tools](#developer-tools)
 - [Configuration](#configuration)
 - [Docker](#docker)
 - [License](#license)
 
 ## Structure
 
-- **Workspace API** — `workspace_api/` (Python FastAPI backend)
+- **Workspace API** — `workspace_api/` (FastAPI backend)
 - **Workspace UI** — `workspace_ui/` (Quasar/Vue app; built assets placed in `workspace_ui/dist/`)
 
 ## Requirements
@@ -40,18 +35,20 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
    uv lock --python python
    uv sync --python python --extra dev
    uv run pre-commit install
+   cd ..
    ```
 
 2. Frontend setup (from repo root):
 
    ```bash
-   cd workspace_ui
+   cd workspace_ui/vue-app
    npm ci
+   cd ...
    ```
 
 ## Development workflow
 
-### Run the API
+### Run backend only
 
 From the `workspace_api/` folder:
 
@@ -61,11 +58,9 @@ KUBECONFIG=~/.kube/config-eoepca-demo uv run env PYTHONPATH=.. uvicorn workspace
 
 The API will be at <http://localhost:5000>.
 
-### Frontend (Quasar/Vue)
+### Runb backend API and Frontend UI
 
-You can develop the UI in two ways: **dev server** (hot reload) or **production build** served by the backend/static files.
-
-#### A) Dev server (hot reload)
+#### A) Dev server mode (hot reload)
 
 Run the Quasar/Vite dev server (default: <http://localhost:9000>):
 
@@ -75,9 +70,7 @@ From the `workspace_ui/vue-app/` folder:
 npm run dev
 ```
 
-Then in another terminal, run the backend pointing to the dev server:
-
-From the `workspace_api/` folder:
+Then in another terminal, from the `workspace_api/` folder:
 
 ```bash
 KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
@@ -85,7 +78,7 @@ KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhos
 
 Open `http://localhost:5000/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
 
-#### B) Production build (no dev server)
+#### B) Production mode (no dev server)
 
 Build the SPA into `workspace_ui/dist/` and let the backend serve it as static content:
 
@@ -95,15 +88,13 @@ From the `workspace_ui/vue-app/` folder:
 npm run build
 ```
 
-Now start the backend in **UI mode** pointing to the static path (mounted at `/ui`):
-
 From the `workspace_api/` folder:
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="/ui" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
 ```
 
-> The Docker image (below) builds the UI and copies `workspace_ui/dist/` into the container at `/home/app/static`.
+> The Docker image (below) builds both the API and the UI and copies `workspace_ui/dist/` into the container.
 
 ### Linting and formatting
 
@@ -115,7 +106,7 @@ uv run ruff format .
 uv run mypy .
 ```
 
-Frontend (from `workspace_ui/`), if you have lint scripts defined:
+Frontend (from `workspace_ui/vue-app/`):
 
 ```bash
 npm run lint
@@ -156,7 +147,7 @@ Run via `uv run <tool>` from `workspace_api/`.
 
 ## Configuration
 
-Environment variables used by the backend:
+Environment variables used by the backend (besides `KUBECONFIG` required for Kubernetes cluster access):
 
 | Variable | Default | Description |
 | --- | --- | --- |
