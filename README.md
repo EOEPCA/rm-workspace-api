@@ -1,137 +1,210 @@
-<br />
-<p align="center">
-  <a href="https://github.com/EOEPCA/rm-workspace-api">
-    <img src="images/logo.png" alt="Logo" width="80" height="80">
-  </a>
+# Workspace v2
 
-  <h3 align="center">EOEPCA Workspace API v2</h3>
-  
-  <p align="center">
-    This repository includes the EOEPCA Workspace API component
-    <br />
-    <a href="https://github.com/EOEPCA/rm-workspace-api"><strong>Explore the docs »</strong></a>
-    <br />
-    <a href="https://github.com/EOEPCA/rm-workspace-api">View Demo</a>
-    ·
-    <a href="https://github.com/EOEPCA/rm-workspace-api/issues">Report Bug</a>
-    ·
-    <a href="https://github.com/EOEPCA/rm-workspace-api/issues">Request Feature</a>
-  </p>
-</p>
+Python FastAPI Backend API (`workspace_api/`) and Quasar/Vue frontend (`workspace_ui/`) for managing Kubernetes `Workspace` Custom Resources.
 
-# Workspace API
-<a name="introduction"></a>
-
-The EOEPCA **Workspace API** is an HTTP interface that allows workspace teams onboarded to an EOEPCA based platform—as well as other connected EOEPCA Building Blocks—to retrieve detailed information about their individual workspace(s).
-
-For version 2, the API is extended to expose additional status information for all fields defined in the Workspace Kubernetes Custom Resource (Workspace CR) of the respective team. The Workspace API also allows users to manage key workspace characteristics such as connected storage buckets and team members, either via API or (soon) via the UI. See the corresponding [Workspace CRD] 
-(https://eoepca.readthedocs.io/projects/workspace/en/latest/api/workspace/) for the full API contract.
-
-Additionally, the API enables platform operators to create new workspaces or delete existing ones.
-
-> 💡 EOEPCA Workspace API v2 is currently in development and is scheduled for release in autumn 2025!
+---
 
 ## Table of Contents
-- [Key Features](#key-features)
-- [Contributing](#contributing)
+
+- [Structure](#structure)
+- [Requirements](#requirements)
+- [Environment setup](#environment-setup)
+- [Development workflow](#development-workflow)
+  - [Run the API](#run-the-api)
+  - [Frontend (Quasar/Vue)](#frontend-quasarvue)
+  - [Linting and formatting](#linting-and-formatting)
+  - [Testing](#testing)
+  - [Developer tools](#developer-tools)
+- [Configuration](#configuration)
+- [Docker](#docker)
 - [License](#license)
 
-## Key Features
-<a name="key-features"></a>
+---
 
-For a broader context, refer to the [Workspace BB](https://eoepca.readthedocs.io/projects/workspace), as the Workspace API serves as a thin layer on top, making workspace details more accessible to end users.
+## Structure
 
-Some specific API details (mainly targeting v1 but still relvant) are outlined in the [Wiki Pages](https://github.com/EOEPCA/rm-workspace-api/wiki)
+- **Workspace API** — `workspace_api/` (Python FastAPI backend)
+- **Workspace UI** — `workspace_ui/` (Quasar/Vue app; built assets placed in `workspace_ui/dist/`)
 
-An OpenAPI specification is published as well — see [https://workspace-api.apx.develop.eoepca.org/docs](https://workspace-api.apx.develop.eoepca.org/docs)
+---
 
-[![OpenAPI Screenshot](./images/screenshot.png)](https://workspace-api.apx.develop.eoepca.org/docs)
+## Requirements
 
-## Contributing
-<a name="contributing"></a>
+- Python **3.12** (e.g., via [pyenv](https://github.com/pyenv/pyenv))
+- [uv](https://github.com/astral-sh/uv) for Python deps
+- Node.js **20.x** + npm for the frontend
+- Docker (optional)
 
-To use the Workspace API, you need to run it against a cluster with the Workspace Building Block installed. The easiest way to get started is by connecting to the `eoepca-demo` cluster with your `KUBECONFIG` set up accordingly:
+---
 
-```bash
-python -m venv .venv && source .venv/bin/activate
+## Environment setup
 
-pip install -r requirements.txt
+1. Backend setup (from repo root):
 
-KUBECONFIG=~/.kube/config-eoepca-demo HARBOR_URL="" HARBOR_ADMIN_USERNAME="" HARBOR_ADMIN_PASSWORD="" PREFIX_FOR_NAME="ws" WORKSPACE_SECRET_NAME="workspace" uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app
-```
+   ```bash
+   cd workspace_api
+   pyenv local 3.12.6
+   python --version   # should be 3.12.6
+   uv lock --python python
+   uv sync --python python --extra dev
+   uv run pre-commit install
+   ```
 
-💡 Relevant VS Code configuration files are included to support a streamlined, opinionated development setup.
+2. Frontend setup (from repo root):
 
-### ⚙️ Environment Variables
+   ```bash
+   cd workspace_ui
+   npm ci
+   ```
 
-The backend behavior is influenced by the following environment variables. Set them in your shell or `.env` file
+---
 
-```python
-# workspace_api/config.py
-```
+## Development workflow
 
-| Variable Name           | Default Value | Description                                                                                                                            |
-| ----------------------- | ------------- |----------------------------------------------------------------------------------------------------------------------------------------|
-| `PREFIX_FOR_NAME`       | `"ws"`        | Prefix used when generating internal Kubernetes workspace names from user input (e.g., `"ws-martin"`).                                 |
-| `WORKSPACE_SECRET_NAME` | `"workspace"` | Name of the Kubernetes `Secret` expected per workspace for credentials (e.g., S3 access keys).                                         |
-| `HARBOR_URL`            | `""` (empty)  | Optional URL to a Harbor container registry. Used if container registry secrets are managed.                                           |
-| `HARBOR_ADMIN_USERNAME` | `""` (empty)  | Optional admin username for Harbor integration (if used).                                                                              |
-| `HARBOR_ADMIN_PASSWORD` | `""` (empty)  | Optional admin password for Harbor integration (if used).                                                                              |
-| `UI_MODE`               | `"no"`        | Set to `"ui"` to activate the Luigi frontend (shell + microfrontend SPA). Otherwise, only the API will be exposed.                     |
-| `FRONTEND_URL`          | `"/ui"`       | Base URL for the frontend. Set to `http://localhost:9000` during development to load the Vue dev server instead of the built frontend. |
+### Run the API
 
-
-### Workspace UI
-
-For version 2 a UI is included with the API bundle in the directory workspace_ui.   
-This is a frontend for the Kubernetes-based workspace management application. It consists of two distinct parts:
-
-- **Luigi Shell** — provides the micro frontend navigation and layout
-- **Vue 3 App** — a single-page application (SPA) embedded via Luigi as a view, using Vue + Quasar.js
-
-Both parts are served by a Python FastAPI backend.
-
-> 💡 The UI bundle is still under active development and disabled by default. Use UI_MODE="ui" or url parameter `?devmode=true` to enable it.
-
-#### Main UI Structure
-```bash
-.
-├── workspace_api/                # Python FastAPI backend
-└── workspace_ui/                 # Luigi shell + Vue frontend views
-    ├── luigi-shell/
-    │   └── public/                
-    │        ├── index.html       # Luigi shell template (rendered by FastAPI)
-    │        ├── logo.svg
-    │        └── icons/                       
-    ├── vue-app/                  # VueApp
-    │   └── index.html            # Vue app entry point (used inside Luigi iframe)
-    └── dist/                     # Built VueApp, served as static content
-```
-
-To build or update the UI distribution folder, run:
-```bash
-cd workspace_ui/vue-app
-
-npm install
-quasar build (or npm run build)
-```
-
-For frontend development:
-```bash
-cd workspace_ui/vue-app
-
-quasar dev (or npm run dev)
-```
-Run the Workspace API with the FRONTEND_URL set to the dev server url, e.g. FRONTEND_URL="http://localhost:9000"
+From the `workspace_api/` folder:
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL=http://localhost:9000 uvicorn --reload --host=0.0.0.0 --port 5000 --log-level=info --reload workspace_api:app
+KUBECONFIG=~/.kube/config-eoepca-demo uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
+```
+
+The API will be at <http://localhost:5000>.
+
+---
+
+### Frontend (Quasar/Vue)
+
+You can develop the UI in two ways: **dev server** (hot reload) or **production build** served by the backend/static files.
+
+#### A) Dev server (hot reload)
+
+Run the Quasar/Vite dev server (default: <http://localhost:9000>):
+
+From the `workspace_ui/vue-app/` folder:
+
+```bash
+npm run dev
+```
+
+Then in another terminal, run the backend pointing to the dev server:
+
+From the `workspace_api/` folder:
+
+```bash
+UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
+```
+
+Open `http://localhost:5000/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
+
+#### B) Production build (no dev server)
+
+Build the SPA into `workspace_ui/dist/` and let the backend serve it as static content:
+
+From the `workspace_ui/vue-app/` folder:
+
+```bash
+npm run build
+```
+
+Now start the backend in **UI mode** pointing to the static path (mounted at `/ui`):
+
+From the `workspace_api/` folder:
+
+```bash
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="/ui" uv run env PYTHONPATH=.. uvicorn workspace_api:app --reload --host=0.0.0.0 --port=5000 --log-level=info
+```
+
+> The Docker image (below) builds the UI and copies `workspace_ui/dist/` into the container at `/home/app/static`.
+
+---
+
+### Linting and formatting
+
+Python (from `workspace_api/`):
+
+```bash
+uv run ruff check .
+uv run ruff format .
+uv run mypy .
+```
+
+Frontend (from `workspace_ui/`), if you have lint scripts defined:
+
+```bash
+npm run lint
+```
+
+Run all pre-commit hooks from repo root:
+
+```bash
+uv run pre-commit run --all-files
 ```
 
 ---
 
-If you're contributing, please base your work on the current `main` branch and rebase your changes before opening a pull request.
+### Testing
+
+Backend tests live in `workspace_api/tests/`:
+
+```bash
+cd workspace_api
+uv run pytest
+```
+
+Watch mode:
+
+```bash
+uv run pytest-watcher tests --now
+```
+
+---
+
+## Developer tools
+
+Installed via the backend `dev` extra:
+
+- **mypy** – static typing
+- **ruff** – linting & formatting
+- **pytest / pytest-watcher** – testing
+- **pre-commit** – git hooks
+- **ipdb** – debugger
+
+Run via `uv run <tool>` from `workspace_api/`.
+
+---
+
+## Configuration
+
+Environment variables used by the backend:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PREFIX_FOR_NAME` | `"ws"` | Prefix used when generating Kubernetes workspace names from user input. |
+| `WORKSPACE_SECRET_NAME` | `"workspace"` | Name of the Kubernetes `Secret` that holds per-workspace storage credentials. |
+| `CONTAINER_REGISTRY_SECRET_NAME` | `"container-registry"` | Name of the Kubernetes `Secret` that holds per-workspace container registry credentials. |
+| `UI_MODE` | `"no"` | Set to `"ui"` to enable serving the frontend (templated HTML + SPA). |
+| `FRONTEND_URL` | `"/ui"` | Base path (production) or absolute URL (dev server) for the frontend. Use `http://localhost:9000` with the dev server. |
+
+---
+
+## Docker
+
+Build the combined image (Python **3.12.6** + built UI) from repo root:
+
+```bash
+docker build . -t workspace-api:latest --build-arg VERSION=$(git rev-parse --short HEAD)
+```
+
+Run it:
+
+```bash
+docker run --rm --p 8080:8080 --name workspace-api workspace-api:latest
+```
+
+---
 
 ## License
 
-[Apache 2.0](LICENSE) (Apache License Version 2.0, January 2004) from https://www.apache.org/licenses/LICENSE-2.0
+[Apache 2.0](LICENSE) (Apache License Version 2.0, January 2004)
+<https://www.apache.org/licenses/LICENSE-2.0>

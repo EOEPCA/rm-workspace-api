@@ -1,7 +1,0 @@
-[tool.ruff]
-line-length = 150
-exclude = ["venv", ".venv"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"

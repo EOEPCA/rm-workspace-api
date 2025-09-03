@@ -1,2 +1,12 @@
-.venv
-.mypy_cache
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+
+# Node / Quasar
+workspace_ui/node_modules/
+workspace_ui/.quasar/
+workspace_ui/dist/
+
+# OS junk files
+.DS_Store
