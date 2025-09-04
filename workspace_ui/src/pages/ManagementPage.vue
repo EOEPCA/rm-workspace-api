@@ -24,14 +24,6 @@
 
         <!-- Form -->
         <q-form v-if="!loading && form.name" @submit.prevent="submit">
-          <q-select
-            v-model="form.cluster_status"
-            :options="clusterStatusOptions"
-            label="Cluster Status"
-            outlined
-            class="q-mb-md"
-          />
-
           <!-- Members -->
           <div class="q-mb-md">
             <div class="text-body1 q-mb-sm">Members</div>
@@ -61,14 +53,14 @@
 
           <!-- Extra Buckets -->
           <div class="q-mb-md">
-            <div class="text-body1 q-mb-sm">Buckets</div>
+            <div class="text-body1 q-mb-sm">Extra Buckets</div>
             <div
-              v-for="(bucket, index) in form.storage_buckets"
+              v-for="(bucket, index) in form.extra_buckets"
               :key="'bucket-' + index"
               class="q-mb-xs"
             >
               <q-input
-                v-model="form.storage_buckets[index]"
+                v-model="form.extra_buckets[index]"
                 outlined
                 dense
                 hide-bottom-space
@@ -79,11 +71,28 @@
               flat
               no-caps
               class="q-mt-sm"
-              @click="form.storage_buckets.push('')"
+              @click="form.extra_buckets.push('')"
             >
               <q-icon name="add" class="q-mr-sm" />
-              Add Bucket
+              Add Extra Bucket
             </q-btn>
+          </div>
+
+          <!-- Linked Buckets -->
+          <div class="q-mb-md">
+            <div class="text-body1 q-mb-sm">Linked Buckets</div>
+            <div
+              v-for="(bucket, index) in form.linked_buckets"
+              :key="'bucket-' + index"
+              class="q-mb-xs"
+            >
+              <q-input
+                v-model="form.linked_buckets[index]"
+                outlined
+                dense
+                hide-bottom-space
+              />
+            </div>
           </div>
 
           <q-btn type="submit" color="primary" unelevated no-caps label="Save Changes" />
@@ -97,21 +106,7 @@
 import {computed, ref} from 'vue'
 import axios from 'axios'
 import type {Workspace, WorkspaceEdit} from 'src/models/models'
-import type {ClusterStatus} from 'src/types/workspace'
 import {useLuigiWorkspace} from 'src/composables/useLuigi'
-
-/*
-type InitCtx = {
-  workspaceName?: string
-  edit?: {
-    name?: string
-    members?: Array<string | { name: string }>
-    clusterStatus?: ClusterStatus
-    extraBuckets?: string[]
-  }
-}
-
- */
 
 /** ---- State ---- */
 const message = ref<string>('')
@@ -119,15 +114,14 @@ const message = ref<string>('')
 
 const form = ref<WorkspaceEdit>({
   name: '',
-  cluster_status: 'auto',
-  storage_buckets: [],
   members: [],
+  extra_buckets: [],
+  linked_buckets: [],
 })
 
 /** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
 const displayMessage = computed(() => (isError.value ? message.value.substring(7) : message.value))
-const clusterStatusOptions: ClusterStatus[] = ['auto', 'active', 'suspended']
 
 
 const {
@@ -141,9 +135,9 @@ const {
           message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
           form.value = {
             name: ws.name,
-            cluster_status: ws.cluster?.status ?? form.value.cluster_status,
-            storage_buckets: ws.storage?.buckets ?? form.value.storage_buckets,
-            members: ws.members ?? form.value.members,
+            members: ws.members ?? [],
+            extra_buckets: ws.storage?.buckets?.filter(b => b != ws.name && b.startsWith(ws.name)) ?? [],
+            linked_buckets: ws.storage?.buckets?.filter(b => !b.startsWith(ws.name)) ?? [],
           }
 
         } else {
@@ -162,11 +156,11 @@ const submit = async () => {
     return
   }
 
-  const prefix = form.value.name
-  const invalidBuckets = form.value.storage_buckets.filter((b) => !!b && !b.startsWith(prefix))
+  const workspaceName = form.value.name
+  const invalidBuckets = form.value.extra_buckets.filter(b => b == workspaceName || !b.startsWith(workspaceName))
 
   if (invalidBuckets.length > 0) {
-    message.value = `Error: The following bucket names must start with '${prefix}': ${invalidBuckets.join(', ')}`
+    message.value = `Error: The following bucket names must start with '${workspaceName}': ${invalidBuckets.join(', ')}`
     return
   }
 

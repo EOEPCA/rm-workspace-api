@@ -92,11 +92,11 @@ class WorkspaceEdit(BaseModel):
     """Data model for updating an existing workspace."""
 
     name: str = Field(..., description="The name of the workspace to edit.")
-    cluster_status: ClusterStatus = Field(..., description="The desired status of the virtual cluster.")
-    storage_buckets: list[str] = Field(
-        ..., description="The definitive list of S3-compatible buckets for the workspace."
-    )
     members: list[str] = Field(..., description="The definitive list of member usernames for the workspace.")
+    extra_buckets: list[str] = Field(..., description="The list of additional S3-compatible buckets for the workspace.")
+    linked_buckets: list[str] = Field(
+        ..., description="The list of linked S3-compatible buckets from others for the workspace."
+    )
 
 
 class StorageCredentials(BaseModel):

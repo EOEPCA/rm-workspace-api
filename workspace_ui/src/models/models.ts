@@ -1,4 +1,4 @@
-import type {ClusterStatus, WorkspaceStatus} from 'src/types/workspace'
+import type {WorkspaceStatus} from 'src/types/workspace'
 
 export interface Endpoint {
   id: string;
@@ -11,11 +11,6 @@ export interface Membership {
   creation_timestamp: string;
 }
 
-
-export interface Cluster {
-  status: ClusterStatus
-}
-
 export interface Storage {
   credentials?: Record<string, unknown>;
   buckets?: string[];
@@ -26,13 +21,12 @@ export interface Workspace {
   version: string
   status: WorkspaceStatus
   storage?: Storage
-  cluster?: Cluster
   members?: string[]
 }
 
 export interface WorkspaceEdit {
   name: string
-  cluster_status: ClusterStatus
-  storage_buckets: string[]
   members: string[]
+  extra_buckets: string[]
+  linked_buckets: string[]
 }

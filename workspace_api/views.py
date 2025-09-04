@@ -118,11 +118,9 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         workspace_api.get(name=workspace_name, namespace=current_namespace())
         patch_body = {
             "spec": {
-                "vcluster": update.cluster_status,
                 "members": update.members,
-                "extraBuckets": [
-                    b for b in (update.storage_buckets or []) if b != workspace_name and b.startswith(workspace_name)
-                ],
+                "extraBuckets": update.extra_buckets,
+                "linkedBuckets": update.linked_buckets,
             }
         }
         workspace_api.patch(
@@ -376,7 +374,6 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
             all_buckets.append(bucket_name)
         all_buckets.extend(spec.get("extraBuckets") or [])
         all_buckets.extend(spec.get("linkedBuckets") or [])
-        all_buckets.extend(spec.get("referenceBuckets") or [])
         members = list(spec.get("members", []) or [])
         cluster_status = spec.get("vcluster", "auto")
 
