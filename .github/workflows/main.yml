@@ -2,15 +2,11 @@ name: main
 
 on:
   push:
-    branches:
-      - "main"
     tags:
-      - "v*"
-  pull_request:
+      - "*"
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
   packages: write
 
 jobs:
@@ -26,8 +22,8 @@ jobs:
       - id: meta
         shell: bash
         run: |
-          OWNER='${{ github.repository_owner }}'
-          REPO='${{ github.event.repository.name }}'
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          REPO="$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${OWNER}/${REPO}"
           RAW_TAG="${GITHUB_REF_NAME}"
           V_TAG="v${RAW_TAG#v}"
