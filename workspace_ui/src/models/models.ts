@@ -3,33 +3,22 @@ import type {ClusterStatus, WorkspaceStatus} from 'src/types/workspace'
 export interface Endpoint {
   id: string;
   url: string;
-  timestamp: string;
+  creation_timestamp: string;
 }
 
 export interface Membership {
   member: string;
-  timestamp: string;
+  creation_timestamp: string;
 }
 
-export interface Grant {
-  bucket: string;
-  permission: string;
-  timestamp: string;
-}
-
-export interface Bucket {
-  name: string
-  permission?: string
-}
 
 export interface Cluster {
   status: ClusterStatus
-  buckets: Bucket[]
 }
 
 export interface Storage {
   credentials?: Record<string, unknown>;
-  buckets?: Bucket[];
+  buckets?: string[];
 }
 
 export interface Workspace {
@@ -44,6 +33,6 @@ export interface Workspace {
 export interface WorkspaceEdit {
   name: string
   cluster_status: ClusterStatus
-  storage_buckets: Bucket[]
+  storage_buckets: string[]
   members: string[]
 }

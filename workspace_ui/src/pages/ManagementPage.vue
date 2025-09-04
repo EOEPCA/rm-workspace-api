@@ -68,7 +68,7 @@
               class="q-mb-xs"
             >
               <q-input
-                v-model="bucket.name"
+                v-model="form.storage_buckets[index]"
                 outlined
                 dense
                 hide-bottom-space
@@ -79,7 +79,7 @@
               flat
               no-caps
               class="q-mt-sm"
-              @click="form.storage_buckets.push({ name: '', permission: 'Owner' })"
+              @click="form.storage_buckets.push('')"
             >
               <q-icon name="add" class="q-mr-sm" />
               Add Bucket
@@ -163,7 +163,7 @@ const submit = async () => {
   }
 
   const prefix = form.value.name
-  const invalidBuckets = form.value.storage_buckets.map(b => b.name).filter((b) => !!b && !b.startsWith(prefix))
+  const invalidBuckets = form.value.storage_buckets.filter((b) => !!b && !b.startsWith(prefix))
 
   if (invalidBuckets.length > 0) {
     message.value = `Error: The following bucket names must start with '${prefix}': ${invalidBuckets.join(', ')}`

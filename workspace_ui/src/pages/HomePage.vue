@@ -69,13 +69,11 @@
             <thead>
             <tr>
               <th class="text-left">Bucket Name</th>
-              <th class="text-left">Permission</th>
             </tr>
             </thead>
             <tbody>
-            <tr v-for="bucket in workspace.storage.buckets" :key="bucket.name">
-              <td>{{ bucket.name }}</td>
-              <td>{{ bucket.permission }}</td>
+            <tr v-for="bucket in workspace.storage.buckets" :key="bucket">
+              <td>{{ bucket }}</td>
             </tr>
             </tbody>
           </q-markup-table>

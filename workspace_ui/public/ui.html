@@ -21,7 +21,7 @@
       const workspaceData = '{{ workspace_data | safe }}';
       const endpointsData = '{{ endpoints_data | safe }}';
       const membershipsData = '{{ memberships_data | safe }}';
-      const grantsData = '{{ grants_data | safe }}';
+      const bucketAccessRequestsData = '{{ bucket_access_requests_data | safe }}';
       const frontendUrl = '{{ frontend_url | safe }}';
 
       function decodeData(base64String) {
@@ -38,7 +38,9 @@
       const workspace = decodeData(workspaceData);
       const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
       const memberships = Array.isArray(decodeData(membershipsData)) ? decodeData(membershipsData) : [];
-      const grants = Array.isArray(decodeData(grantsData)) ? decodeData(grantsData) : [];
+      console.log(memberships)
+      const bucketAccessRequests = Array.isArray(decodeData(bucketAccessRequestsData)) ? decodeData(bucketAccessRequestsData) : [];
+      console.log(bucketAccessRequests)
 
       let children = [
         {
@@ -79,7 +81,7 @@
                 workspace: workspace,
                 endpoints: endpoints,
                 memberships: memberships,
-                grants: grants
+                bucketAccessRequests: bucketAccessRequests
               }
             }
           ]

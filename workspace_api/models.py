@@ -24,24 +24,33 @@ class Membership(BaseModel):
     """Represents a membership between a user and a workspace."""
 
     member: str = Field(..., description="The username of the member.")
-    timestamp: datetime = Field(..., description="The creation timestamp of the membership.")
+    creation_timestamp: datetime = Field(..., description="The creation timestamp of the membership.")
 
 
-class Permission(str, enum.Enum):
-    """Enumeration for the types of access grants for a bucket."""
+class BucketPermission(str, enum.Enum):
+    """Enumeration for the types of access permissions for a bucket."""
 
-    OWNER = "Owner"
-    READ_ONLY = "ReadOnly"
-    READ_WRITE = "ReadWrite"
-    NONE = "None"
+    OWNER = "owner"
+    READWRITE = "readwrite"
+    READONLY = "readonly"
+    NONE = "none"
 
 
-class Grant(BaseModel):
-    """Defines the grant for a member's access to a bucket."""
+class BucketAccessRequest(BaseModel):
+    """Defines the request for access to a bucket."""
 
-    bucket: str = Field(..., description="The name of the granted bucket.")
-    permission: Permission | None = Field(..., description="The granted permission (None if not granted yet).")
-    timestamp: datetime = Field(..., description="The creation timestamp of the grant.")
+    workspace: str = Field(..., description="The name of the workspace requesting access to the bucket.")
+    bucket: str = Field(..., description="The name of the requested bucket.")
+    permission: BucketPermission = Field(..., description="The requested bucket permission.")
+    request_timestamp: datetime | None = Field(
+        ..., description="The timestamp when the request got issue (None if not issued yet)."
+    )
+    grant_timestamp: datetime | None = Field(
+        ..., description="The timestamp when the request got granted (None if not granted yet)."
+    )
+    denied_timestamp: datetime | None = Field(
+        ..., description="The timestamp when the request got denied (None if not denied yet)."
+    )
 
 
 class WorkspaceStatus(str, enum.Enum):
@@ -64,7 +73,9 @@ class Bucket(BaseModel):
     """Represents an S3-compatible bucket within the workspace."""
 
     name: str = Field(..., description="The name of the bucket.")
-    permission: Permission | None = Field(..., description="The granted permission (None if not granted yet).")
+    permission: BucketPermission | None = Field(
+        ..., description="The granted bucket permission (None if not granted yet)."
+    )
 
 
 class WorkspaceCreate(BaseModel):
@@ -82,7 +93,7 @@ class WorkspaceEdit(BaseModel):
 
     name: str = Field(..., description="The name of the workspace to edit.")
     cluster_status: ClusterStatus = Field(..., description="The desired status of the virtual cluster.")
-    storage_buckets: list[Bucket] = Field(
+    storage_buckets: list[str] = Field(
         ..., description="The definitive list of S3-compatible buckets for the workspace."
     )
     members: list[str] = Field(..., description="The definitive list of member usernames for the workspace.")
@@ -104,8 +115,8 @@ class Storage(BaseModel):
     credentials: StorageCredentials = Field(
         ..., description="A structured object containing S3 credentials (bucketname, access, secret, endpoint, region)."
     )
-    buckets: list[Bucket] = Field(
-        default_factory=list, description="A list of all S3-compatible buckets associated with the workspace."
+    buckets: list[str] = Field(
+        ..., description="A list of all S3-compatible bucket names associated with the workspace."
     )
 
 
@@ -131,6 +142,9 @@ class Workspace(BaseModel):
     """The comprehensive data model representing a single workspace and all its components."""
 
     name: str = Field(..., description="The unique, system-generated name of the workspace.")
+    creation_timestamp: datetime | None = Field(
+        None, description="The creation timestamp of the underlying Kubernetes object."
+    )
     version: str | None = Field(
         None, description="The version of the underlying Kubernetes object, used for optimistic locking."
     )
@@ -155,4 +169,4 @@ class Endpoint(BaseModel):
 
     id: str = Field(..., description="A unique identifier for the endpoint (e.g., the Ingress name).")
     url: str = Field(..., description="The public URL of the exposed service.")
-    timestamp: datetime = Field(..., description="The creation timestamp of the endpoint.")
+    creation_timestamp: datetime = Field(..., description="The creation timestamp of the endpoint.")
