@@ -18,18 +18,27 @@
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
     <script>
       const request = '{{ request | safe }}';
-      const serverBasePath = '{{ base_path | safe }}';
       const workspaceData = '{{ workspace_data | safe }}';
+      const endpointsData = '{{ endpoints_data | safe }}';
+      const membershipsData = '{{ memberships_data | safe }}';
+      const grantsData = '{{ grants_data | safe }}';
       const frontendUrl = '{{ frontend_url | safe }}';
 
-      let workspace = null;
-      try {
-        if (workspaceData && workspaceData.trim() !== '') {
-          workspace = JSON.parse(atob(workspaceData));
+      function decodeData(base64String) {
+        try {
+          if (base64String && base64String.trim() !== '') {
+            return JSON.parse(atob(base64String));
+          }
+        } catch (e) {
+          console.warn('Failed to decode data', e);
         }
-      } catch (e) {
-        console.warn('Failed to decode workspace data', e);
+        return null;
       }
+
+      const workspace = decodeData(workspaceData);
+      const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
+      const memberships = Array.isArray(decodeData(membershipsData)) ? decodeData(membershipsData) : [];
+      const grants = Array.isArray(decodeData(grantsData)) ? decodeData(grantsData) : [];
 
       let children = [
         {
@@ -40,7 +49,6 @@
         }
       ];
 
-      let endpoints = Array.isArray(workspace?.endpoints) ? workspace.endpoints : [];
       endpoints.forEach(endpoint => {
         if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
           let targetUrl = endpoint.url;
@@ -68,7 +76,10 @@
               viewUrl: frontendUrl + '/',
               children: children,
               context: {
-                workspace: workspace
+                workspace: workspace,
+                endpoints: endpoints,
+                memberships: memberships,
+                grants: grants
               }
             }
           ]

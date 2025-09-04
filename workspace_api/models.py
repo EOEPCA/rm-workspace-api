@@ -24,7 +24,7 @@ class Membership(BaseModel):
     """Represents a membership between a user and a workspace."""
 
     member: str = Field(..., description="The username of the member.")
-    timestamp: datetime = Field(..., alias="timestamp", description="The creation timestamp of the membership.")
+    timestamp: datetime = Field(..., description="The creation timestamp of the membership.")
 
 
 class Permission(str, enum.Enum):
@@ -41,7 +41,7 @@ class Grant(BaseModel):
 
     bucket: str = Field(..., description="The name of the granted bucket.")
     permission: Permission | None = Field(..., description="The granted permission (None if not granted yet).")
-    timestamp: datetime = Field(..., alias="timestamp", description="The creation timestamp of the grant.")
+    timestamp: datetime = Field(..., description="The creation timestamp of the grant.")
 
 
 class WorkspaceStatus(str, enum.Enum):
@@ -81,10 +81,10 @@ class WorkspaceEdit(BaseModel):
     """Data model for updating an existing workspace."""
 
     name: str = Field(..., description="The name of the workspace to edit.")
-    cluster_status: ClusterStatus = Field(
-        ..., alias="cluster", description="The desired status of the virtual cluster."
+    cluster_status: ClusterStatus = Field(..., description="The desired status of the virtual cluster.")
+    storage_buckets: list[Bucket] = Field(
+        ..., description="The definitive list of S3-compatible buckets for the workspace."
     )
-    buckets: list[Bucket] = Field(..., description="The definitive list of S3-compatible buckets for the workspace.")
     members: list[str] = Field(..., description="The definitive list of member usernames for the workspace.")
 
 
@@ -131,6 +131,9 @@ class Workspace(BaseModel):
     """The comprehensive data model representing a single workspace and all its components."""
 
     name: str = Field(..., description="The unique, system-generated name of the workspace.")
+    version: str | None = Field(
+        None, description="The version of the underlying Kubernetes object, used for optimistic locking."
+    )
     status: WorkspaceStatus = Field(..., description="The current lifecycle status of the workspace.")
     spec: Any | None = Field(
         None, description="The raw `spec` from the Kubernetes Workspace Custom Resource for debugging."
@@ -152,4 +155,4 @@ class Endpoint(BaseModel):
 
     id: str = Field(..., description="A unique identifier for the endpoint (e.g., the Ingress name).")
     url: str = Field(..., description="The public URL of the exposed service.")
-    timestamp: datetime = Field(..., alias="timestamp", description="The creation timestamp of the endpoint.")
+    timestamp: datetime = Field(..., description="The creation timestamp of the endpoint.")

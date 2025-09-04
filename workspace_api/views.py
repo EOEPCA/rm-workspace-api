@@ -119,7 +119,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         workspace_api.get(name=workspace_name, namespace=current_namespace())
         patch_body = {
             "spec": {
-                "vcluster": update.cluster,
+                "vcluster": update.cluster_status,
                 "members": update.members,
             }
         }
@@ -280,7 +280,6 @@ def _get_memberships(workspace_name: str) -> list[Membership]:
 
 def _get_grants(workspace_name: str) -> list[Grant]:
     """Fetch bucket policies via MinIO Crossplane custom resources."""
-    """Fetch bucket grants from MinIO policies via Crossplane custom resources."""
     try:
         api = k8s_client.CustomObjectsApi()
         resp = api.list_cluster_custom_object("minio.crossplane.io", "v1", "policies")
@@ -325,7 +324,12 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
 
     storage_and_envs = _get_storage_and_envs(workspace_name)
     if not storage_and_envs:
-        return Workspace(name=workspace_name, status=WorkspaceStatus.provisioning, spec=spec_clean)
+        return Workspace(
+            name=workspace_name,
+            status=WorkspaceStatus.provisioning,
+            spec=spec_clean,
+            version=workspace_cr.metadata.resourceVersion,
+        )
 
     storage, envs = storage_and_envs
     container_registry = _get_container_registry_credentials(workspace_name)
@@ -364,6 +368,7 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
         container_registry=container_registry,
         cluster=cluster,
         members=members,
+        version=workspace_cr.metadata.resourceVersion,
     )
 
 
@@ -390,13 +395,13 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
         and templates is not None
         and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true")
     ):
-        workspace_data = _to_b64_json(workspace.model_dump(exclude_none=True))
+        workspace_data = _to_b64_json(workspace.model_dump(mode="json", exclude_none=True))
         endpoints = _get_endpoints(workspace_name)
-        endpoints_data = _to_b64_json([e.model_dump(exclude_none=True) for e in endpoints])
+        endpoints_data = _to_b64_json([e.model_dump(mode="json", exclude_none=True) for e in endpoints])
         memberships = _get_memberships(workspace_name)
-        memberships_data = _to_b64_json([m.model_dump(exclude_none=True) for m in memberships])
+        memberships_data = _to_b64_json([m.model_dump(mode="json", exclude_none=True) for m in memberships])
         grants = _get_grants(workspace_name)
-        grants_data = _to_b64_json([g.model_dump(exclude_none=True) for g in grants])
+        grants_data = _to_b64_json([g.model_dump(mode="json", exclude_none=True) for g in grants])
         return templates.TemplateResponse(
             "ui.html",
             {
@@ -409,7 +414,7 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
                 "frontend_url": config.FRONTEND_URL,
             },
         )
-    return JSONResponse(workspace.model_dump(exclude_none=True), status_code=HTTPStatus.OK)
+    return JSONResponse(workspace.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)
 
 
 @app.get(

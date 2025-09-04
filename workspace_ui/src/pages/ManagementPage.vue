@@ -25,9 +25,9 @@
         <!-- Form -->
         <q-form v-if="!loading && form.name" @submit.prevent="submit">
           <q-select
-            v-model="form.clusterStatus"
+            v-model="form.cluster_status"
             :options="clusterStatusOptions"
-            label="vCluster"
+            label="Cluster Status"
             outlined
             class="q-mb-md"
           />
@@ -61,14 +61,14 @@
 
           <!-- Extra Buckets -->
           <div class="q-mb-md">
-            <div class="text-body1 q-mb-sm">Extra Buckets</div>
+            <div class="text-body1 q-mb-sm">Buckets</div>
             <div
-              v-for="(source, index) in form.extraBuckets"
-              :key="'source-' + index"
+              v-for="(bucket, index) in form.storage_buckets"
+              :key="'bucket-' + index"
               class="q-mb-xs"
             >
               <q-input
-                v-model="form.extraBuckets[index]"
+                v-model="bucket.name"
                 outlined
                 dense
                 hide-bottom-space
@@ -79,10 +79,10 @@
               flat
               no-caps
               class="q-mt-sm"
-              @click="form.extraBuckets.push('')"
+              @click="form.storage_buckets.push({ name: '', permission: 'Owner' })"
             >
               <q-icon name="add" class="q-mr-sm" />
-              Add Source
+              Add Bucket
             </q-btn>
           </div>
 
@@ -119,15 +119,15 @@ const message = ref<string>('')
 
 const form = ref<WorkspaceEdit>({
   name: '',
+  cluster_status: 'auto',
+  storage_buckets: [],
   members: [],
-  clusterStatus: 'active',
-  extraBuckets: []
 })
 
 /** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
 const displayMessage = computed(() => (isError.value ? message.value.substring(7) : message.value))
-const clusterStatusOptions: ClusterStatus[] = ['active', 'suspended']
+const clusterStatusOptions: ClusterStatus[] = ['auto', 'active', 'suspended']
 
 
 const {
@@ -138,23 +138,17 @@ const {
 //      console.log('Workspace initialized:', ws?.name)
       if (ws) {
         if (ws.name) {
-          message.value = `Using pre-loaded data for workspace: ${ws.name}`
-
-          const rawMembers = Array.isArray(ws.members) ? ws.members : []
-          const normalizedMembers = rawMembers.map((m) => (m?.name ?? '?')
-          )
-
-          const extraBuckets = ws.buckets?.filter(b => b.name !== ws.name && b.name.startsWith(ws.name)).map(b => b.name) || []
-
+          message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
           form.value = {
             name: ws.name,
-            members: normalizedMembers,
-            clusterStatus: ws.cluster?.status ?? form.value.clusterStatus,
-            extraBuckets: extraBuckets ?? form.value.extraBuckets,
+            cluster_status: ws.cluster?.status ?? form.value.cluster_status,
+            storage_buckets: ws.storage?.buckets ?? form.value.storage_buckets,
+            members: ws.members ?? form.value.members,
           }
 
-        } else
+        } else {
           message.value = 'Workspace Data not provided.'
+        }
       }
     }
   }
@@ -169,7 +163,7 @@ const submit = async () => {
   }
 
   const prefix = form.value.name
-  const invalidBuckets = form.value.extraBuckets.filter((b) => !!b && !b.startsWith(prefix))
+  const invalidBuckets = form.value.storage_buckets.map(b => b.name).filter((b) => !!b && !b.startsWith(prefix))
 
   if (invalidBuckets.length > 0) {
     message.value = `Error: The following bucket names must start with '${prefix}': ${invalidBuckets.join(', ')}`

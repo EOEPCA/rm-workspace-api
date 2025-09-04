@@ -52,8 +52,30 @@
             </tr>
             </thead>
             <tbody>
-            <tr v-for="member in workspace.members" :key="member.name">
-              <td>{{ member.name }}</td>
+            <tr v-for="member in workspace.members" :key="member">
+              <td>{{ member }}</td>
+            </tr>
+            </tbody>
+          </q-markup-table>
+        </q-card-section>
+      </q-card>
+
+      <!-- Buckets Table -->
+      <q-card v-if="workspace.storage?.buckets?.length" class="q-mb-md">
+        <q-card-section class="text-subtitle1">Buckets</q-card-section>
+        <q-separator/>
+        <q-card-section class="q-pa-none">
+          <q-markup-table flat>
+            <thead>
+            <tr>
+              <th class="text-left">Bucket Name</th>
+              <th class="text-left">Permission</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="bucket in workspace.storage.buckets" :key="bucket.name">
+              <td>{{ bucket.name }}</td>
+              <td>{{ bucket.permission }}</td>
             </tr>
             </tbody>
           </q-markup-table>
@@ -100,7 +122,6 @@ const {
     }
   }
 )
-
 
 </script>
 
