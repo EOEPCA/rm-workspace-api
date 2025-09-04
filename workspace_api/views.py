@@ -14,7 +14,7 @@
 
 import base64
 import binascii
-import enum
+import json
 import logging
 import re
 import uuid
@@ -28,14 +28,27 @@ from fastapi.responses import JSONResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.dynamic import DynamicClient
-from pydantic import BaseModel, Field
 from slugify import slugify
 
 from workspace_api import app, config, templates
 
+from .models import (
+    Bucket,
+    Cluster,
+    ContainerRegistryCredentials,
+    Endpoint,
+    Grant,
+    Membership,
+    Permission,
+    Storage,
+    Workspace,
+    WorkspaceCreate,
+    WorkspaceEdit,
+    WorkspaceStatus,
+)
+
 logger = logging.getLogger(__name__)
 
-# Validate workspace names to start with "<PREFIX_FOR_NAME>-", e.g., "ws-..."
 WORKSPACE_NAME_PATTERN = rf"^{re.escape(config.PREFIX_FOR_NAME)}-"
 workspace_path_type = Path(..., pattern=WORKSPACE_NAME_PATTERN)
 
@@ -63,11 +76,6 @@ def fetch_secret(secret_name: str, namespace: str) -> k8s_client.V1Secret | None
         if e.status == HTTPStatus.NOT_FOUND:
             return None
         raise
-
-
-class WorkspaceCreate(BaseModel):
-    preferred_name: str = ""
-    default_owner: str = ""
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
@@ -101,13 +109,6 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     return {"name": workspace_name}
 
 
-class WorkspaceEdit(BaseModel):
-    name: str
-    cluster_status: str = Field(..., alias="clusterStatus")
-    members: list[str]
-    extra_buckets: list[str] = Field(..., alias="extraBuckets")
-
-
 @app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
 async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
     logger.debug(f"Update {workspace_name} with {update}")
@@ -118,9 +119,8 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         workspace_api.get(name=workspace_name, namespace=current_namespace())
         patch_body = {
             "spec": {
-                "vcluster": update.cluster_status,
+                "vcluster": update.cluster,
                 "members": update.members,
-                "extraBuckets": update.extra_buckets,
             }
         }
         workspace_api.patch(
@@ -142,55 +142,6 @@ def workspace_name_from_preferred_name(preferred_name: str) -> str:
     if not safe_name:
         safe_name = str(uuid.uuid4())
     return config.PREFIX_FOR_NAME + "-" + safe_name
-
-
-class WorkspaceStatus(str, enum.Enum):
-    provisioning = "provisioning"
-    ready = "ready"
-    unknown = "unknown"
-
-
-class Storage(BaseModel):
-    credentials: dict[str, str]
-
-
-class Cluster(BaseModel):
-    config: str | None = None
-    status: str
-
-
-class Endpoint(BaseModel):
-    id: str
-    url: str
-
-
-class ContainerRegistryCredentials(BaseModel):
-    username: str
-    password: str
-
-    def base64_encode_as_single_string(self) -> str:
-        return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
-
-
-class Member(BaseModel):
-    name: str
-
-
-class Bucket(BaseModel):
-    name: str
-    policy: str
-
-
-class Workspace(BaseModel):
-    name: str
-    status: WorkspaceStatus
-    spec: Any | None = None
-    storage: Storage | None = None
-    container_registry: ContainerRegistryCredentials | None = None
-    cluster: Cluster | None = None
-    endpoints: list[Endpoint] = Field(default_factory=list)
-    members: list[Member] = Field(default_factory=list)
-    buckets: list[Bucket] = Field(default_factory=list)
 
 
 def _get_workspace_resource(workspace_name: str, dynamic_client: DynamicClient) -> Any | None:
@@ -218,7 +169,7 @@ def _get_workspace_spec(workspace_cr: Any) -> dict[str, Any] | None:
         "compositionUpdatePolicy",
         "resourceRef",
     }
-    return {k: v for k, v in spec_dict.items() if k not in ignored_keys}
+    return {k: v for k, v in (spec_dict or {}).items() if k not in ignored_keys}
 
 
 def _get_storage_and_envs(workspace_name: str) -> tuple[Storage, dict[str, str]] | None:
@@ -261,11 +212,16 @@ def _get_endpoints(workspace_name: str) -> list[Endpoint]:
     """Fetch endpoints from Ingresses and ApisixRoutes."""
     endpoints: list[Endpoint] = []
     try:
-        ingresses = k8s_client.NetworkingV1Api().list_namespaced_ingress(namespace=workspace_name)
+        ing_api = k8s_client.NetworkingV1Api()
+        ingresses = ing_api.list_namespaced_ingress(namespace=workspace_name)
         endpoints.extend(
-            Endpoint(id=ingress.metadata.name, url=ingress.spec.rules[0].host)
-            for ingress in ingresses.items
-            if ingress.metadata and ingress.spec and ingress.spec.rules
+            Endpoint(
+                id=ing.metadata.name,
+                url=ing.spec.rules[0].host,
+                timestamp=ing.metadata.creation_timestamp,
+            )
+            for ing in ingresses.items
+            if ing.metadata and ing.metadata.creation_timestamp and ing.spec and ing.spec.rules
         )
     except kubernetes.client.rest.ApiException as e:
         logger.warning(f"Failed to load ingresses for '{workspace_name}': {e}")
@@ -273,55 +229,89 @@ def _get_endpoints(workspace_name: str) -> list[Endpoint]:
     try:
         api = k8s_client.CustomObjectsApi()
         apisix_routes = api.list_namespaced_custom_object("apisix.apache.org", "v2", workspace_name, "apisixroutes")
-        for route in apisix_routes.get("items", []):
-            hosts = {
-                match
-                for http in route.get("spec", {}).get("http", [])
-                for match in http.get("match", {}).get("hosts", [])
-            }
-            if hosts:
-                endpoints.append(
-                    Endpoint(
-                        id=route.get("metadata", {}).get("name"),
-                        url=",".join(sorted(hosts)),
-                    )
-                )
+        items = apisix_routes.get("items", [])
+        endpoints.extend(
+            Endpoint(
+                id=metadata.get("name"),
+                url=",".join(sorted(hosts)),
+                timestamp=metadata.get("creationTimestamp"),
+            )
+            for route in items
+            for metadata in [(route.get("metadata") or {})]
+            for hosts in [
+                {
+                    match
+                    for http in ((route.get("spec") or {}).get("http", []) or [])
+                    for match in ((http.get("match") or {}).get("hosts", []) or [])
+                }
+            ]
+            if hosts and metadata.get("creationTimestamp")
+        )
     except kubernetes.client.rest.ApiException as e:
         logger.warning(f"Failed to load APISIX routes for '{workspace_name}': {e}")
+
     return endpoints
 
 
-def _get_members(workspace_name: str) -> list[Member]:
-    """Fetch workspace members from Keycloak."""
+def _get_memberships(workspace_name: str) -> list[Membership]:
+    """Fetch workspace members via Keycloak Crossplane custom resources."""
     try:
         api = k8s_client.CustomObjectsApi()
-        memberships = api.list_cluster_custom_object("group.keycloak.crossplane.io", "v1alpha1", "memberships")["items"]
-        return [
-            Member(name=username)
-            for m in memberships
-            if m.get("spec", {}).get("forProvider", {}).get("groupIdRef", {}).get("name") == workspace_name
-            for username in m.get("spec", {}).get("forProvider", {}).get("members", [])
-        ]
+        resp = api.list_cluster_custom_object("group.keycloak.crossplane.io", "v1alpha1", "memberships")
+        all_memberships = resp.get("items", [])
     except kubernetes.client.rest.ApiException as e:
         logger.warning(f"Failed to load Keycloak memberships for '{workspace_name}': {e}")
         return []
+    else:
+        memberships = [
+            Membership(
+                member=username,
+                timestamp=(m.get("metadata", {}) or {}).get("creationTimestamp"),
+            )
+            for m in all_memberships
+            if (
+                m.get("spec", {}).get("forProvider", {}).get("groupIdRef", {}).get("name") == workspace_name
+                and (m.get("metadata", {}) or {}).get("creationTimestamp")
+            )
+            for username in (m.get("spec", {}).get("forProvider", {}).get("members", []) or [])
+        ]
+        return memberships
 
 
-def _get_buckets(workspace_name: str) -> list[Bucket]:
-    """Fetch bucket policies from MinIO."""
+def _get_grants(workspace_name: str) -> list[Grant]:
+    """Fetch bucket policies via MinIO Crossplane custom resources."""
+    """Fetch bucket grants from MinIO policies via Crossplane custom resources."""
     try:
         api = k8s_client.CustomObjectsApi()
-        policies = api.list_cluster_custom_object("minio.crossplane.io", "v1", "policies")["items"]
-        return [
-            Bucket(name=parts[2], policy=parts[1])
-            for policy in policies
-            if (parts := policy.get("metadata", {}).get("name", "").split("."))
-            and len(parts) == 3
-            and parts[0] == workspace_name
-        ]
+        resp = api.list_cluster_custom_object("minio.crossplane.io", "v1", "policies")
+        policies = resp.get("items", [])
     except kubernetes.client.rest.ApiException as e:
         logger.warning(f"Failed to load MinIO policies for '{workspace_name}': {e}")
         return []
+    else:
+        grants: list[Grant] = []
+        for policy in policies:
+            metadata = policy.get("metadata", {}) or {}
+            name = metadata.get("name", "") or ""
+            parts = name.split(".")
+            if len(parts) != 3 or parts[0] != workspace_name:
+                continue
+
+            creation_timestamp = metadata.get("creationTimestamp")
+            if not creation_timestamp:
+                continue
+
+            try:
+                grants.append(
+                    Grant(
+                        bucket=parts[2],
+                        permission=Permission(parts[1]),
+                        timestamp=creation_timestamp,
+                    )
+                )
+            except ValueError:
+                logger.warning(f"Skipping MinIO policy '{name}' with unknown permission part '{parts[1]}'.")
+        return grants
 
 
 def get_workspace_internal(workspace_name: str) -> Workspace:
@@ -331,42 +321,68 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
     if not workspace_cr:
         return Workspace(name=workspace_name, status=WorkspaceStatus.unknown)
 
-    spec = _get_workspace_spec(workspace_cr)
-    storage_and_envs = _get_storage_and_envs(workspace_name)
+    spec_clean = _get_workspace_spec(workspace_cr)
 
+    storage_and_envs = _get_storage_and_envs(workspace_name)
     if not storage_and_envs:
-        return Workspace(name=workspace_name, status=WorkspaceStatus.provisioning, spec=spec)
+        return Workspace(name=workspace_name, status=WorkspaceStatus.provisioning, spec=spec_clean)
 
     storage, envs = storage_and_envs
     container_registry = _get_container_registry_credentials(workspace_name)
-    endpoints = _get_endpoints(workspace_name)
-    members = _get_members(workspace_name)
-    buckets = _get_buckets(workspace_name)
 
-    cluster_status = "active" if any(e.id == "vcluster" for e in endpoints) else "suspended"
-    cluster = Cluster(config=envs.get("KUBECONFIG"), status=cluster_status)
+    spec_raw = (
+        workspace_cr.spec.to_dict()
+        if hasattr(workspace_cr, "spec") and hasattr(workspace_cr.spec, "to_dict")
+        else getattr(workspace_cr, "spec", {})
+    )
+    spec: dict[str, Any] = spec_raw if isinstance(spec_raw, dict) else {}
+
+    buckets: list[Bucket] = []
+
+    if bucket_name := spec.get("defaultBucket"):
+        buckets.append(Bucket(name=bucket_name, permission=Permission.OWNER))
+
+    buckets.extend(Bucket(name=b, permission=Permission.OWNER) for b in (spec.get("extraBuckets") or []))
+
+    buckets.extend(Bucket(name=b, permission=Permission.READ_WRITE) for b in (spec.get("linkedBuckets") or []))
+
+    buckets.extend(Bucket(name=b, permission=Permission.READ_ONLY) for b in (spec.get("referenceBuckets") or []))
+
+    storage.buckets = buckets
+
+    members: list[str] = list(spec.get("members", []) or [])
+
+    cluster_status = spec.get("vcluster", "auto")
+
+    cluster = Cluster(kubeconfig=envs.get("KUBECONFIG") or "", status=cluster_status)
 
     return Workspace(
         name=workspace_name,
         status=WorkspaceStatus.ready,
-        spec=spec,
+        spec=spec_clean if spec_clean is not None else spec,
         storage=storage,
         container_registry=container_registry,
         cluster=cluster,
-        endpoints=endpoints,
         members=members,
-        buckets=buckets,
     )
+
+
+def _to_b64_json(obj: Any) -> str:
+    return base64.b64encode(json.dumps(obj).encode("utf-8")).decode("utf-8")
 
 
 @app.get(
     "/workspaces/{workspace_name}",
     status_code=HTTPStatus.OK,
     response_model=Workspace,
+    response_model_exclude_none=True,
 )
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
     logger.warning("GET workspace %s", workspace_name)
     workspace = get_workspace_internal(workspace_name)
+
+    if request.query_params.get("debug") != "true":
+        workspace.spec = None
 
     accept_header = request.headers.get("accept", "")
     if (
@@ -374,17 +390,62 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
         and templates is not None
         and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true")
     ):
-        workspace_data = base64.b64encode(workspace.model_dump_json().encode("utf-8")).decode("utf-8")
+        workspace_data = _to_b64_json(workspace.model_dump(exclude_none=True))
+        endpoints = _get_endpoints(workspace_name)
+        endpoints_data = _to_b64_json([e.model_dump(exclude_none=True) for e in endpoints])
+        memberships = _get_memberships(workspace_name)
+        memberships_data = _to_b64_json([m.model_dump(exclude_none=True) for m in memberships])
+        grants = _get_grants(workspace_name)
+        grants_data = _to_b64_json([g.model_dump(exclude_none=True) for g in grants])
         return templates.TemplateResponse(
             "ui.html",
             {
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "endpoints_data": endpoints_data,
+                "memberships_data": memberships_data,
+                "grants_data": grants_data,
                 "frontend_url": config.FRONTEND_URL,
             },
         )
-    return JSONResponse(workspace.model_dump(), status_code=HTTPStatus.OK)
+    return JSONResponse(workspace.model_dump(exclude_none=True), status_code=HTTPStatus.OK)
+
+
+@app.get(
+    "/workspaces/{workspace_name}/endpoints",
+    status_code=HTTPStatus.OK,
+    response_model=list[Endpoint],
+    response_model_exclude_none=True,
+)
+async def get_endpoints(workspace_name: str = workspace_path_type) -> list[Endpoint]:
+    """Get all endpoints for a given workspace."""
+    logger.info("GET endpoints for workspace %s", workspace_name)
+    return _get_endpoints(workspace_name)
+
+
+@app.get(
+    "/workspaces/{workspace_name}/memberships",
+    status_code=HTTPStatus.OK,
+    response_model=list[Membership],
+    response_model_exclude_none=True,
+)
+async def get_memberships(workspace_name: str = workspace_path_type) -> list[Membership]:
+    """Get all memberships for a given workspace."""
+    logger.info("GET memberships for workspace %s", workspace_name)
+    return _get_memberships(workspace_name)
+
+
+@app.get(
+    "/workspaces/{workspace_name}/grants",
+    status_code=HTTPStatus.OK,
+    response_model=list[Grant],
+    response_model_exclude_none=True,
+)
+async def get_grants(workspace_name: str = workspace_path_type) -> list[Grant]:
+    """Get all grants for a given workspace."""
+    logger.info("GET grants for workspace %s", workspace_name)
+    return _get_grants(workspace_name)
 
 
 @app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
