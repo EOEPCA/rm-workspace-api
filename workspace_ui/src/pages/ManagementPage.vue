@@ -27,7 +27,7 @@
           <q-select
             v-model="form.clusterStatus"
             :options="clusterStatusOptions"
-            label="Cluster Status"
+            label="vCluster"
             outlined
             class="q-mb-md"
           />

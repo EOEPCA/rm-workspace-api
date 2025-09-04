@@ -1,12 +1,17 @@
 # Python
 __pycache__/
+.mypy_cache/
 .pytest_cache/
+.ruff_cache/
 .venv/
 
 # Node / Quasar
-workspace_ui/node_modules/
-workspace_ui/.quasar/
-workspace_ui/dist/
+node_modules/
+.quasar/
+dist/
+!dist/.gitkeep
+quasar.config.*.temporary.compiled*
 
 # OS junk files
 .DS_Store
+.thumbs.db

@@ -1,5 +1,5 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/workspace_api/.venv/bin/python",
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "python.testing.cwd": "${workspaceFolder}/workspace_api",
     "python.testing.pytestArgs": [
         "workspace_api/tests"

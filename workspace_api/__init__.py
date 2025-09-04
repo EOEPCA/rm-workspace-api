@@ -17,6 +17,7 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
@@ -27,32 +28,37 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics  # type: ign
 from workspace_api import config
 
 app = FastAPI()
+templates = None
 
 app.add_middleware(PrometheusMiddleware)
 app.add_route("/metrics", handle_metrics)
 
-BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
-UI_BASE_DIR = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui"))
-LUIGI_BASE_DIR = os.path.join(UI_BASE_DIR, "luigi-shell")
 
-PUBLIC_DIR = os.path.join(LUIGI_BASE_DIR, "public")
-TEMPLATE_DIR = os.path.join(LUIGI_BASE_DIR, "public")
-VUE_DIST_DIR = os.path.join(UI_BASE_DIR, "dist")
+def get_dist_dir() -> Path | None:
+    if (p := os.getenv("UI_DIST_DIR")) and Path(p).exists():
+        return Path(p)
 
-templates = Jinja2Templates(directory=TEMPLATE_DIR)
+    dist_dir = Path(__file__).resolve().parents[1] / "workspace_ui" / "dist"
+    if dist_dir.exists():
+        return dist_dir
+    return None
 
-app.mount("/public", StaticFiles(directory=PUBLIC_DIR, html=True), name="ui_public")
 
 # Conditionally mount the built Vue app only if UI_MODE is "ui"
 # and we are not using a remote frontend dev server.
-if config.UI_MODE == "ui" and config.FRONTEND_URL == "/ui":
-    if not os.path.exists(VUE_DIST_DIR):
-        logging.getLogger(__name__).warning(
-            f"UI_MODE is 'ui', but the dist directory '{VUE_DIST_DIR}' was not found. "
-            "The UI will not be served. Did you forget to build the frontend?"
-        )
-    else:
-        app.mount("/ui", StaticFiles(directory=VUE_DIST_DIR, html=True), name="ui_dist_assets")
+if config.UI_MODE == "ui":
+    dist_dir = get_dist_dir()
+    templates = Jinja2Templates(directory=dist_dir)
+
+    if config.FRONTEND_URL == "/ui":
+        if dist_dir is None:
+            logging.getLogger(__name__).warning(
+                f"UI_MODE is 'ui', but the dist directory '{dist_dir}' was not found. "
+                "The UI will not be served. Did you forget to build the frontend?"
+            )
+        else:
+            app.mount("/ui", StaticFiles(directory=dist_dir, html=True))
+
 
 if __name__ != "__main__":
     gunicorn_logger = logging.getLogger("gunicorn.error")

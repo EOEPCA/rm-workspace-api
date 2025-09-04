@@ -30,9 +30,7 @@ def load_copyright_header(filepath: str) -> str:
     copyright_header_template = _filepath.read_text()
     copyright_header = copyright_header_template.format(year=datetime.now(tz=UTC).year)
     if COPYRIGHT_HEADER_VALIDATION_REGEX.search(copyright_header):
-        return "\n".join(
-            f"# {line}".rstrip() for line in copyright_header.rstrip().split("\n")
-        ).rstrip()
+        return "\n".join(f"# {line}".rstrip() for line in copyright_header.rstrip().split("\n")).rstrip()
     msg = 'Copyright header should start by "Copyright".'
     raise ValueError(msg)
 
@@ -49,16 +47,12 @@ def add_copyright_header(filepath_: str, /, copyright_header: str) -> bool:
         file_copyright_header = m.group()
         if file_copyright_header == copyright_header:
             return False
-        new_file_content = file_content.replace(
-            file_copyright_header, copyright_header, 1
-        )
+        new_file_content = file_content.replace(file_copyright_header, copyright_header, 1)
         filepath.write_text(new_file_content)
     elif m := COMMENTS_HEADER_REGEX.search(file_content):
         comments_header = m.group()
         new_file_content = file_content.replace(comments_header, "", 1).lstrip()
-        filepath.write_text(
-            f"{comments_header}\n{copyright_header}\n\n{new_file_content}"
-        )
+        filepath.write_text(f"{comments_header}\n{copyright_header}\n\n{new_file_content}")
     else:
         filepath.write_text(f"{copyright_header}\n\n{file_content}")
     return True

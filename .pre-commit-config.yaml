@@ -58,7 +58,7 @@ repos:
     rev: v1.11.2
     hooks:
       - id: mypy
-        args: ["--config", "workspace_api/pyproject.toml"]
+        args: ["--config", "pyproject.toml"]
         files: ^workspace_api/
         additional_dependencies:
           - types-python-slugify>=8.0.0.1,<9

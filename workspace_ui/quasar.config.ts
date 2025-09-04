@@ -51,7 +51,7 @@ export default defineConfig((ctx) => {
 
       // rebuildCache: true, // rebuilds Vite/linter/etc cache on startup
 
-      distDir: '../dist',
+      distDir: 'dist',
       // publicPath must be the path that is configured in __init__.py
       publicPath: '/ui',
       // analyze: true,

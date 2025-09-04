@@ -11,8 +11,7 @@
             "justMyCode": true,
             "env": {
                 "KUBECONFIG": "${env:HOME}/.kube/config-eoepca-demo",
-                "UI_MODE": "ui",
-                "FRONTEND_URL": "/ui"
+                "UI_MODE": "ui"
             },
             "args": [
                 "workspace_api:app",
@@ -20,7 +19,7 @@
                 "--host",
                 "0.0.0.0",
                 "--port",
-                "5000",
+                "8080",
                 "--log-level",
                 "info"
             ]

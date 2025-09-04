@@ -57,4 +57,4 @@ def mock_secret() -> k8s_client.V1Secret:
 
 def test_get_workspace_only_works_on_prefixed_path(client: TestClient) -> None:
     response = client.get("/workspaces/notaprefix")
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY  # noqa: S101
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY

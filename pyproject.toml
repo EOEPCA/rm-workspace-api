@@ -71,6 +71,9 @@ prod = [
 [tool.hatch.build.targets.wheel]
 packages = ["workspace_api"]
 
+[tool.hatch.build]
+include = ["workspace_api/**", "pyproject.toml", "README.md"]
+
 [tool.hatch.version]
 source = "vcs"
 fallback-version = "0.1.0"
