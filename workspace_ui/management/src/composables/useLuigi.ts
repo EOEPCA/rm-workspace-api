@@ -1,11 +1,18 @@
 import { onMounted, ref } from 'vue'
 import type { LuigiClientLike } from 'src/types/luigi'
+import type {Bucket, Membership, Workspace} from 'src/models/models'
 
-type Options<T> = {
+export type InitCtx = {
+  workspace?: Workspace
+  memberships?: Membership[],
+  bucketAccessRequests?: Bucket[]
+}
+
+type Options = {
   /** If true, initLuigi() will be called on mounting (default: true) */
   autoInit?: boolean
   /** Optional callback fired once workspace has been initialized */
-  onReady?: (workspace: T | null) => void
+  onReady?: (workspace: InitCtx | null) => void
 }
 
 const isUxManager = (v: unknown): v is { setViewReady?: () => void } =>
@@ -21,13 +28,9 @@ async function resolveLuigiClient(): Promise<LuigiClientLike | null> {
   }
 }
 
-export function useLuigiWorkspace<T>(opts: Options<T> = { autoInit: true }) {
+export function useLuigiWorkspace(opts: Options = { autoInit: true }) {
   const loading = ref<boolean>(true)
-  const workspace = ref<T | null>(null)
-
-  type InitCtx = {
-    workspace?: T
-  }
+  const context = ref<InitCtx | null>(null)
 
   async function initLuigi(): Promise<void> {
     loading.value = true
@@ -36,7 +39,7 @@ export function useLuigiWorkspace<T>(opts: Options<T> = { autoInit: true }) {
     // No Luigi-Shell present → exit gracefully
     if (!LuigiClient) {
       loading.value = false
-      workspace.value = null
+      context.value = null
       opts.onReady?.(null)
       return
     }
@@ -44,19 +47,16 @@ export function useLuigiWorkspace<T>(opts: Options<T> = { autoInit: true }) {
     LuigiClient.addInitListener?.((ctx: InitCtx) => {
       loading.value = false
 
-      const ws = ctx.workspace
-      if (ws && typeof ws === 'object') {
-        workspace.value = ws
+      context.value = ctx
+      if (ctx && typeof ctx === 'object') {
         const ux = LuigiClient?.uxManager?.()
         if (isUxManager(ux)) {
           ux.setViewReady?.()
         }
-      } else {
-        workspace.value = null
       }
 
       // Call the optional callback after initialization
-      opts.onReady?.(workspace.value)
+      opts.onReady?.(ctx)
     })
   }
 
@@ -69,7 +69,7 @@ export function useLuigiWorkspace<T>(opts: Options<T> = { autoInit: true }) {
   return {
     // reactive state
     loading,
-    workspace,
+//    workspace,
     // public actions
     initLuigi,
   }

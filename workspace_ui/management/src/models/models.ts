@@ -9,6 +9,15 @@ export interface Endpoint {
 export interface Membership {
   member: string;
   creation_timestamp: string;
+  isNew?: boolean
+}
+
+export interface Bucket {
+  workspace: string;
+  bucket: string;
+  permission: string;
+  request_timestamp: string;
+  grant_timestamp: string;
 }
 
 export interface Storage {
@@ -24,6 +33,15 @@ export interface Workspace {
   members?: string[]
 }
 
+export interface WorkspaceEditUI {
+  name: string
+  memberships: Membership[],
+  extra_buckets: string[]
+  linked_buckets: string[]
+  bucketAccessRequests?: Bucket[]
+}
+
+// Corresponding to Backend
 export interface WorkspaceEdit {
   name: string
   members: string[]

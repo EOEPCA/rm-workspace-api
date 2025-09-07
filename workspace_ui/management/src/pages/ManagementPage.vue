@@ -33,7 +33,7 @@
             outside-arrows
             mobile-arrows
           >
-            <q-tab name="members" label="Members" :alert="form.members.length === 0" />
+            <q-tab name="members" label="Members" :alert="form.memberships.length === 0" />
             <q-tab name="buckets" label="Buckets" />
           </q-tabs>
 
@@ -46,17 +46,27 @@
               <div class="text-body1 q-mb-sm">Members</div>
 
               <div
-                v-for="(member, index) in form.members"
+                v-for="(member, index) in form.memberships"
                 :key="'member-' + index"
                 class="row items-center q-col-gutter-sm q-mb-xs"
               >
                 <div class="col">
                   <q-input
-                    v-model="form.members[index]"
+                    v-model="member.member"
                     outlined
                     dense
                     hide-bottom-space
-                    placeholder="user@example.org"
+                    placeholder="user"
+                    :readonly="!member.isNew"
+                  />
+                </div>
+                <div class="col">
+                  <q-input
+                    v-model="member.creation_timestamp"
+                    outlined
+                    dense
+                    hide-bottom-space
+                    readonly
                   />
                 </div>
                 <div class="col-auto">
@@ -66,7 +76,7 @@
                     dense
                     icon="delete"
                     color="negative"
-                    @click="form.members.splice(index, 1)"
+                    @click="form.memberships.splice(index, 1)"
                   />
                 </div>
               </div>
@@ -76,7 +86,7 @@
                 flat
                 no-caps
                 class="q-mt-sm"
-                @click="form.members.push('')"
+                @click="form.memberships.push({member:'', isNew: true} as Membership)"
               >
                 <q-icon name="add" class="q-mr-sm" />
                 Add Member
@@ -167,15 +177,18 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import axios from 'axios'
-import type { Workspace, WorkspaceEdit } from 'src/models/models'
+import type {Membership, WorkspaceEdit, WorkspaceEditUI} from 'src/models/models'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
+import {useQuasar} from 'quasar'
+
+const $q = useQuasar()
 
 /** ---- State ---- */
 const message = ref<string>('')
 
-const form = ref<WorkspaceEdit>({
+const form = ref<WorkspaceEditUI>({
   name: '',
-  members: [],
+  memberships: [],
   extra_buckets: [],
   linked_buckets: [],
 })
@@ -189,14 +202,15 @@ const displayMessage = computed(() =>
   isError.value ? message.value.substring(7) : message.value
 )
 
-const { loading } = useLuigiWorkspace<Workspace>({
-  onReady: (ws) => {
-    if (ws) {
+const { loading } = useLuigiWorkspace({
+  onReady: (ctx) => {
+    if (ctx && ctx.workspace) {
+      const ws = ctx.workspace
       if (ws.name) {
         message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
         form.value = {
           name: ws.name,
-          members: ws.members ?? [],
+          memberships: (ctx.memberships ?? []).map(m => ({ ...m, isNew: false })),
           extra_buckets:
             ws.storage?.buckets?.filter((b) => b !== ws.name && b.startsWith(ws.name)) ?? [],
           linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
@@ -210,12 +224,12 @@ const { loading } = useLuigiWorkspace<Workspace>({
 
 /** ---- Submit ---- */
 const submit = async () => {
-  if (!form.value.name) {
+  const workspaceName = form.value.name
+  if (!workspaceName) {
     message.value = 'Error: Workspace name is missing. Cannot save.'
     return
   }
 
-  const workspaceName = form.value.name
   const invalidBuckets = form.value.extra_buckets.filter(
     (b) => b === workspaceName || !b.startsWith(workspaceName)
   )
@@ -226,12 +240,25 @@ const submit = async () => {
     return
   }
 
+  const workspaceEdit = {
+    name: workspaceName,
+    members: (form.value.memberships ?? []).map(m => m.member),
+    extra_buckets: form.value.extra_buckets,
+    linked_buckets: form.value.linked_buckets,
+  } as WorkspaceEdit
+
   try {
-    await axios.put(`/workspaces/${encodeURIComponent(form.value.name)}`, form.value)
-    message.value = 'Workspace updated successfully!'
+    await axios.put(`/workspaces/${encodeURIComponent(workspaceName)}`, workspaceEdit)
+    $q.notify({
+      type: 'positive',
+      message: 'Workspace updated successfully!'
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    message.value = `Error: Error saving workspace: ${msg}`
+    $q.notify({
+      type: 'negative',
+      message: `Error saving workspace: ${msg}`
+    })
   }
 }
 </script>

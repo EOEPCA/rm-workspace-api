@@ -96,7 +96,7 @@ import type {Workspace} from 'src/models/models'
 /** ---- State ---- */
 // const loading = ref<boolean>(true)
 const errorMessage = ref<string>('')
-// const workspace = ref<Workspace | null>(null)
+const workspace = ref<Workspace | null>(null)
 
 /** ---- Computed helpers ---- */
 const hasCredentials = computed<boolean>(() => {
@@ -110,12 +110,13 @@ const prettyCredentials = computed<string>(() =>
 
 const {
   loading,
-  workspace
-} = useLuigiWorkspace<Workspace>({
-    onReady: (ws) => {
+} = useLuigiWorkspace({
+    onReady: (ctx) => {
 //      console.log('Workspace initialized:', ws?.name)
-      if (!ws) {
+      if (!ctx || !ctx.workspace) {
         errorMessage.value = 'Workspace Data not provided.'
+      } else {
+        workspace.value = ctx.workspace
       }
     }
   }
