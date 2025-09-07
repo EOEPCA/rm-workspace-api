@@ -24,76 +24,138 @@
 
         <!-- Form -->
         <q-form v-if="!loading && form.name" @submit.prevent="submit">
-          <!-- Members -->
-          <div class="q-mb-md">
-            <div class="text-body1 q-mb-sm">Members</div>
-            <div
-              v-for="(member, index) in form.members"
-              :key="'member-' + index"
-              class="q-mb-xs"
-            >
-              <q-input
-                v-model="form.members[index]"
-                outlined
-                dense
-                hide-bottom-space
-              />
-            </div>
-            <q-btn
-              color="primary"
-              flat
-              no-caps
-              class="q-mt-sm"
-              @click="form.members.push('')"
-            >
-              <q-icon name="add" class="q-mr-sm" />
-              Add Member
-            </q-btn>
-          </div>
+          <!-- Tabs header -->
+          <q-tabs
+            v-model="activeTab"
+            class="text-primary q-mb-md"
+            align="justify"
+            dense
+            outside-arrows
+            mobile-arrows
+          >
+            <q-tab name="members" label="Members" :alert="form.members.length === 0" />
+            <q-tab name="buckets" label="Buckets" />
+          </q-tabs>
 
-          <!-- Extra Buckets -->
-          <div class="q-mb-md">
-            <div class="text-body1 q-mb-sm">Extra Buckets</div>
-            <div
-              v-for="(bucket, index) in form.extra_buckets"
-              :key="'bucket-' + index"
-              class="q-mb-xs"
-            >
-              <q-input
-                v-model="form.extra_buckets[index]"
-                outlined
-                dense
-                hide-bottom-space
-              />
-            </div>
-            <q-btn
-              color="primary"
-              flat
-              no-caps
-              class="q-mt-sm"
-              @click="form.extra_buckets.push('')"
-            >
-              <q-icon name="add" class="q-mr-sm" />
-              Add Extra Bucket
-            </q-btn>
-          </div>
+          <q-separator />
 
-          <!-- Linked Buckets -->
-          <div class="q-mb-md">
-            <div class="text-body1 q-mb-sm">Linked Buckets</div>
-            <div
-              v-for="(bucket, index) in form.linked_buckets"
-              :key="'bucket-' + index"
-              class="q-mb-xs"
-            >
-              <q-input
-                v-model="form.linked_buckets[index]"
-                outlined
-                dense
-                hide-bottom-space
-              />
-            </div>
-          </div>
+          <!-- Tabs content -->
+          <q-tab-panels v-model="activeTab" animated>
+            <!-- MEMBERS TAB -->
+            <q-tab-panel name="members">
+              <div class="text-body1 q-mb-sm">Members</div>
+
+              <div
+                v-for="(member, index) in form.members"
+                :key="'member-' + index"
+                class="row items-center q-col-gutter-sm q-mb-xs"
+              >
+                <div class="col">
+                  <q-input
+                    v-model="form.members[index]"
+                    outlined
+                    dense
+                    hide-bottom-space
+                    placeholder="user@example.org"
+                  />
+                </div>
+                <div class="col-auto">
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    icon="delete"
+                    color="negative"
+                    @click="form.members.splice(index, 1)"
+                  />
+                </div>
+              </div>
+
+              <q-btn
+                color="primary"
+                flat
+                no-caps
+                class="q-mt-sm"
+                @click="form.members.push('')"
+              >
+                <q-icon name="add" class="q-mr-sm" />
+                Add Member
+              </q-btn>
+            </q-tab-panel>
+
+            <!-- BUCKETS TAB -->
+            <q-tab-panel name="buckets">
+              <!-- Extra Buckets -->
+              <div class="text-body1 q-mb-sm">Extra Buckets</div>
+              <div
+                v-for="(bucket, index) in form.extra_buckets"
+                :key="'extra-bucket-' + index"
+                class="row items-center q-col-gutter-sm q-mb-xs"
+              >
+                <div class="col">
+                  <q-input
+                    v-model="form.extra_buckets[index]"
+                    outlined
+                    dense
+                    hide-bottom-space
+                    placeholder="workspace-name-extra"
+                  />
+                </div>
+                <div class="col-auto">
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    icon="delete"
+                    color="negative"
+                    @click="form.extra_buckets.splice(index, 1)"
+                  />
+                </div>
+              </div>
+              <q-btn
+                color="primary"
+                flat
+                no-caps
+                class="q-mt-sm q-mb-lg"
+                @click="form.extra_buckets.push('')"
+              >
+                <q-icon name="add" class="q-mr-sm" />
+                Add Extra Bucket
+              </q-btn>
+
+              <q-separator class="q-my-md" />
+
+              <!-- Linked Buckets -->
+              <div class="text-body1 q-mb-sm">Linked Buckets</div>
+              <div
+                v-for="(bucket, index) in form.linked_buckets"
+                :key="'linked-bucket-' + index"
+                class="row items-center q-col-gutter-sm q-mb-xs"
+              >
+                <div class="col">
+                  <q-input
+                    v-model="form.linked_buckets[index]"
+                    outlined
+                    dense
+                    hide-bottom-space
+                    placeholder="some-other-bucket"
+                  />
+                </div>
+                <div class="col-auto">
+                  <q-btn
+                    flat
+                    round
+                    dense
+                    icon="delete"
+                    color="negative"
+                    @click="form.linked_buckets.splice(index, 1)"
+                  />
+                </div>
+              </div>
+            </q-tab-panel>
+          </q-tab-panels>
+
+          <q-separator class="q-my-md" />
 
           <q-btn type="submit" color="primary" unelevated no-caps label="Save Changes" />
         </q-form>
@@ -103,14 +165,13 @@
 </template>
 
 <script setup lang="ts">
-import {computed, ref} from 'vue'
+import { computed, ref } from 'vue'
 import axios from 'axios'
-import type {Workspace, WorkspaceEdit} from 'src/models/models'
-import {useLuigiWorkspace} from 'src/composables/useLuigi'
+import type { Workspace, WorkspaceEdit } from 'src/models/models'
+import { useLuigiWorkspace } from 'src/composables/useLuigi'
 
 /** ---- State ---- */
 const message = ref<string>('')
-// const loading = ref<boolean>(true)
 
 const form = ref<WorkspaceEdit>({
   name: '',
@@ -119,35 +180,33 @@ const form = ref<WorkspaceEdit>({
   linked_buckets: [],
 })
 
+/** Tabs */
+const activeTab = ref<'members' | 'buckets'>('members')
+
 /** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
-const displayMessage = computed(() => (isError.value ? message.value.substring(7) : message.value))
+const displayMessage = computed(() =>
+  isError.value ? message.value.substring(7) : message.value
+)
 
-
-const {
-  loading,
-//  workspace
-} = useLuigiWorkspace<Workspace>({
-    onReady: (ws) => {
-//      console.log('Workspace initialized:', ws?.name)
-      if (ws) {
-        if (ws.name) {
-          message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
-          form.value = {
-            name: ws.name,
-            members: ws.members ?? [],
-            extra_buckets: ws.storage?.buckets?.filter(b => b != ws.name && b.startsWith(ws.name)) ?? [],
-            linked_buckets: ws.storage?.buckets?.filter(b => !b.startsWith(ws.name)) ?? [],
-          }
-
-        } else {
-          message.value = 'Workspace Data not provided.'
+const { loading } = useLuigiWorkspace<Workspace>({
+  onReady: (ws) => {
+    if (ws) {
+      if (ws.name) {
+        message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
+        form.value = {
+          name: ws.name,
+          members: ws.members ?? [],
+          extra_buckets:
+            ws.storage?.buckets?.filter((b) => b !== ws.name && b.startsWith(ws.name)) ?? [],
+          linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
         }
+      } else {
+        message.value = 'Workspace Data not provided.'
       }
     }
   }
-)
-
+})
 
 /** ---- Submit ---- */
 const submit = async () => {
@@ -157,10 +216,13 @@ const submit = async () => {
   }
 
   const workspaceName = form.value.name
-  const invalidBuckets = form.value.extra_buckets.filter(b => b == workspaceName || !b.startsWith(workspaceName))
+  const invalidBuckets = form.value.extra_buckets.filter(
+    (b) => b === workspaceName || !b.startsWith(workspaceName)
+  )
 
   if (invalidBuckets.length > 0) {
     message.value = `Error: The following bucket names must start with '${workspaceName}': ${invalidBuckets.join(', ')}`
+    activeTab.value = 'buckets'
     return
   }
 
@@ -172,5 +234,4 @@ const submit = async () => {
     message.value = `Error: Error saving workspace: ${msg}`
   }
 }
-
 </script>
