@@ -39,9 +39,9 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 2. Frontend setup (from repo root):
 
    ```bash
-   cd workspace_ui/vue-app
+   cd workspace_ui
    npm ci
-   cd ...
+   cd ..
    ```
 
 ## Development workflow
