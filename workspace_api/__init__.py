@@ -58,6 +58,11 @@ if config.UI_MODE == "ui":
             )
         else:
             app.mount("/ui", StaticFiles(directory=dist_dir, html=True))
+    else:
+        # for development server mount public to /ui to serve static files
+        BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
+        ui_public_dir = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "public"))
+        app.mount("/ui", StaticFiles(directory=ui_public_dir, html=True))
 
 
 if __name__ != "__main__":
