@@ -20,7 +20,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import (
-    AnyHttpUrl,
     BaseModel,
     Field,
     SecretStr,
@@ -274,7 +273,7 @@ class Endpoint(BaseModel):
     """A network endpoint (e.g., an Ingress) exposed by the workspace."""
 
     id: str = Field(..., description="Unique identifier (e.g., Ingress name).")
-    url: AnyHttpUrl = Field(..., description="Public URL of the exposed service.")
+    url: str = Field(..., description="Public URL of the exposed service.")
     creation_timestamp: datetime = Field(..., description="When the endpoint was created (UTC).")
 
     @field_validator("creation_timestamp", mode="after")
