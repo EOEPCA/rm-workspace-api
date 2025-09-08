@@ -39,6 +39,7 @@ from .models import (
     ContainerRegistryCredentials,
     Endpoint,
     Membership,
+    MembershipRole,
     Storage,
     Workspace,
     WorkspaceCreate,
@@ -266,6 +267,7 @@ def _get_memberships(workspace: Workspace) -> list[Membership]:
         memberships = [
             Membership(
                 member=username,
+                role=MembershipRole.CONTRIBUTOR if username in workspace.members else MembershipRole.OWNER,
                 creation_timestamp=(m.get("metadata", {}) or {}).get("creationTimestamp"),
             )
             for m in all_memberships
@@ -307,7 +309,7 @@ def _get_bucket_access_requests(workspace: Workspace) -> list[BucketAccessReques
             try:
                 permission = BucketPermission(parts[1])
                 if permission == BucketPermission.OWNER:
-                    if parts[0] != workspace.name:
+                    if parts[0] != parts[2] and parts[0] != workspace.name:
                         request_timestamp = None
                         if parts[2] in linked_buckets:
                             request_timestamp = workspace.creation_timestamp
@@ -315,7 +317,7 @@ def _get_bucket_access_requests(workspace: Workspace) -> list[BucketAccessReques
                         potential_requests.append(
                             BucketAccessRequest(
                                 bucket=parts[2],
-                                permission=BucketPermission.READWRITE,
+                                permission=BucketPermission.READ_WRITE,
                                 workspace=workspace.name,
                                 request_timestamp=request_timestamp,
                                 grant_timestamp=None,
@@ -349,7 +351,7 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
     dynamic_client = DynamicClient(k8s_client.ApiClient())
     workspace_cr = _get_workspace_resource(workspace_name, dynamic_client)
     if not workspace_cr:
-        return Workspace(name=workspace_name, status=WorkspaceStatus.unknown)
+        return Workspace(name=workspace_name, status=WorkspaceStatus.UNKNOWN)
 
     spec = _get_workspace_spec(workspace_cr)
 
@@ -357,7 +359,7 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
     if not storage_and_envs:
         return Workspace(
             name=workspace_name,
-            status=WorkspaceStatus.provisioning,
+            status=WorkspaceStatus.PROVISIONING,
             spec=spec,
             creation_timestamp=workspace_cr.metadata.creationTimestamp,
             version=workspace_cr.metadata.resourceVersion,
@@ -383,7 +385,7 @@ def get_workspace_internal(workspace_name: str) -> Workspace:
 
     return Workspace(
         name=workspace_name,
-        status=WorkspaceStatus.ready,
+        status=WorkspaceStatus.READY,
         spec=spec,
         storage=storage,
         container_registry=container_registry,
