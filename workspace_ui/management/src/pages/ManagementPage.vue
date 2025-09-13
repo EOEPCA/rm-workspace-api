@@ -1,5 +1,5 @@
 <template>
-  <div class="q-pa-md" style="max-width: 700px; margin: 0 auto;">
+  <div class="q-pa-md" style="max-width: 1000px; margin: 0 auto;">
     <q-card>
       <q-card-section>
 
@@ -137,31 +137,36 @@
 
               <!-- Linked Buckets -->
               <div class="text-body1 q-mb-sm">Linked Buckets</div>
-              <div
-                v-for="(bucket, index) in form.linked_buckets"
-                :key="'linked-bucket-' + index"
-                class="row items-center q-col-gutter-sm q-mb-xs"
+              <q-table
+                :rows="linkedRows"
+                :columns="columnsLinked"
+                row-key="id"
+                flat
+                :loading="loading"
+                :rows-per-page-options="[10,25,50]"
               >
-                <div class="col">
-                  <q-input
-                    v-model="form.linked_buckets[index]"
-                    outlined
-                    dense
-                    hide-bottom-space
-                    placeholder="some-other-bucket"
-                  />
-                </div>
-                <div class="col-auto">
-                  <q-btn
-                    flat
-                    round
-                    dense
-                    icon="delete"
-                    color="negative"
-                    @click="form.linked_buckets.splice(index, 1)"
-                  />
-                </div>
-              </div>
+                <template #body-cell-status="props">
+                  <q-td :props="props">
+                    <q-badge v-if="props.row.grant_timestamp" color="positive" outline>
+                      Granted · {{ formatDate(props.row.grant_timestamp) }}
+                    </q-badge>
+                    <q-badge v-else color="warning" outline>
+                      Requested · {{ formatDate(props.row.request_timestamp) }}
+                    </q-badge>
+                  </q-td>
+                </template>
+                <template #body-cell-actions="props">
+                  <q-td :props="props" class="q-gutter-xs">
+                    <q-btn dense flat icon="open_in_new" @click="openBucket(props.row.bucket)">
+                      <q-tooltip>Open bucket</q-tooltip>
+                    </q-btn>
+                    <q-btn dense flat icon="link_off" color="negative" @click="unlink(props.row)">
+                      <q-tooltip>Unlink</q-tooltip>
+                    </q-btn>
+                  </q-td>
+                </template>
+              </q-table>
+
             </q-tab-panel>
           </q-tab-panels>
 
@@ -177,9 +182,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import axios from 'axios'
-import type {Membership, WorkspaceEdit, WorkspaceEditUI} from 'src/models/models'
+import type {Bucket, Membership, WorkspaceEdit, WorkspaceEditUI} from 'src/models/models'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
 import {useQuasar} from 'quasar'
+import type {QTableColumn} from 'quasar'
+// import formatDate = date.formatDate
 
 const $q = useQuasar()
 
@@ -202,6 +209,28 @@ const displayMessage = computed(() =>
   isError.value ? message.value.substring(7) : message.value
 )
 
+function formatDate (iso?: string | null): string {
+  if (!iso) return '—'
+  try {
+    const d = new Date(iso)
+    return d.toLocaleString()
+  } catch {
+    return iso ?? '—'
+  }
+}
+
+function sortByGrantDesc (a: Bucket, b: Bucket) {
+  return (b.grant_timestamp ?? '').localeCompare(a.grant_timestamp ?? '')
+}
+function sortByRequestDesc (a: Bucket, b: Bucket) {
+  return (b.request_timestamp ?? '').localeCompare(a.request_timestamp ?? '')
+}
+function sortByGrantThenRequestDesc (a: Bucket, b: Bucket) {
+  const g = sortByGrantDesc(a, b)
+  if (g !== 0) return g
+  return sortByRequestDesc(a, b)
+}
+
 const { loading } = useLuigiWorkspace({
   onReady: (ctx) => {
     if (ctx && ctx.workspace) {
@@ -213,7 +242,8 @@ const { loading } = useLuigiWorkspace({
           memberships: (ctx.memberships ?? []).map(m => ({ ...m, isNew: false })),
           extra_buckets:
             ws.storage?.buckets?.filter((b) => b !== ws.name && b.startsWith(ws.name)) ?? [],
-          linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
+          // linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
+          linked_buckets: ctx.bucketAccessRequests ?? [],
         }
       } else {
         message.value = 'Workspace Data not provided.'
@@ -221,6 +251,56 @@ const { loading } = useLuigiWorkspace({
     }
   }
 })
+
+const linkedRows = computed(() =>
+  form.value.linked_buckets
+    .filter(r => r.workspace === form.value.name)
+    .sort(sortByGrantThenRequestDesc)
+)
+
+const columnsLinked: QTableColumn<Bucket>[] = [
+  { name: 'bucket', label: 'Bucket', field: 'bucket', align: 'left', sortable: true },
+  { name: 'permission', label: 'Permission', field: 'permission', align: 'left', sortable: true },
+  {
+    name: 'requested',
+    label: 'Requested',
+    field: 'request_timestamp',
+    align: 'left',
+    sortable: true,
+    format: (val) => formatDate(val as string | null)   // (val, row) möglich, row hier nicht gebraucht
+  },
+  {
+    name: 'granted',
+    label: 'Granted',
+    field: 'grant_timestamp',
+    align: 'left',
+    sortable: true,
+    format: (val) => formatDate(val as string | null)
+  },
+  { name: 'status', label: 'Status', field: (row) => row.grant_timestamp ? 'Granted' : 'Requested', align: 'left' },
+  { name: 'actions', label: 'Actions', field: 'bucket', align: 'right' }
+]
+
+function unlink (row: Bucket) {
+  // DELETE /bucket-access-requests/:id or appropriate endpoint
+  // allAccess.value = allAccess.value.filter(r => r.id !== row.id)
+  console.log('unlink', row)
+}
+/*
+function grant (row: BucketAccess) {
+  // POST /bucket-access-requests/:id/grant
+  row.grant_timestamp = new Date().toISOString()
+}
+function deny (row: BucketAccess) {
+  // POST /bucket-access-requests/:id/deny (or delete)
+  allAccess.value = allAccess.value.filter(r => r.id !== row.id)
+}
+
+ */
+function openBucket (bucketName: string) {
+  // navigate to bucket detail view
+  console.log('Open bucket', bucketName)
+}
 
 /** ---- Submit ---- */
 const submit = async () => {
@@ -244,7 +324,7 @@ const submit = async () => {
     name: workspaceName,
     members: (form.value.memberships ?? []).map(m => m.member),
     extra_buckets: form.value.extra_buckets,
-    linked_buckets: form.value.linked_buckets,
+//    linked_buckets: form.value.linked_buckets,
   } as WorkspaceEdit
 
   try {

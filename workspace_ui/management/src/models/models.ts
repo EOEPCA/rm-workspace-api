@@ -37,7 +37,7 @@ export interface WorkspaceEditUI {
   name: string
   memberships: Membership[],
   extra_buckets: string[]
-  linked_buckets: string[]
+  linked_buckets: Bucket[]
   bucketAccessRequests?: Bucket[]
 }
 
