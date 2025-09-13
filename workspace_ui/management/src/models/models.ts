@@ -7,7 +7,9 @@ export interface Endpoint {
 }
 
 export interface Membership {
+  id?: string;  // client-side Id
   member: string;
+  role: string;
   creation_timestamp: string;
   isNew?: boolean
 }
