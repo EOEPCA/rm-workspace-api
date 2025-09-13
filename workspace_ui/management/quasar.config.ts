@@ -52,8 +52,8 @@ export default defineConfig((ctx) => {
       // rebuildCache: true, // rebuilds Vite/linter/etc cache on startup
 
       distDir: 'dist',
-      // publicPath must be the path that is configured in __init__.py
-      publicPath: '/ui',
+      // for production (using distrib), publicPath must be the path that is configured in env variable FRONTEND_URL
+      publicPath: ctx.dev ? '/' : '/ui/management',
       // analyze: true,
       // env: {},
       // rawDefine: {}
@@ -104,7 +104,7 @@ export default defineConfig((ctx) => {
       proxy: {
         // proxy all requests starting with /workspaces
         '/workspaces': {
-          target: 'http://localhost:5000/workspaces',
+          target: 'http://localhost:8080/workspaces',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/workspaces/, ''),
         },

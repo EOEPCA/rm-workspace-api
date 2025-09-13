@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<!--
+ Luigi shell file for standalone frontend development without Python backend
+ Prepared to be served bei the Quasar dev server
+ Browser-URL: http://localhost:9000/ui.html
+-->
+<html>
+  <head>
+    <title>Workspace-App</title>
+    <base href="/">
+    <meta
+      name="viewport"
+      content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1"
+    />
+    <link rel="icon" href="/icons/favicon.ico" type="image/x-icon">
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.css"
+    />
+  </head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
+    <script src="/config/app-config.js"></script>
+    <script>
+      const request = '{{ request | safe }}';
+      // const workspaceData = '{{ workspace_data | safe }}';
+      // const endpointsData = '{{ endpoints_data | safe }}';
+      // const membershipsData = '{{ memberships_data | safe }}';
+      // const bucketAccessRequestsData = '{{ bucket_access_requests_data | safe }}';
+      const frontendUrl = '/'; // '{{ frontend_url | safe }}';
+
+      function decodeData(base64String) {
+          return base64String;
+          /*
+        try {
+          if (base64String && base64String.trim() !== '') {
+            return JSON.parse(atob(base64String));
+          }
+        } catch (e) {
+          console.warn('Failed to decode data', e);
+        }
+        return null;
+
+           */
+      }
+
+      const workspace = decodeData(workspaceData);
+      const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
+      const memberships = Array.isArray(decodeData(membershipsData)) ? decodeData(membershipsData) : [];
+      console.log(memberships)
+      const bucketAccessRequests = Array.isArray(decodeData(bucketAccessRequestsData)) ? decodeData(bucketAccessRequestsData) : [];
+      console.log(bucketAccessRequests)
+
+      let children = [
+        {
+          pathSegment: 'management',
+          label: 'Management',
+          icon: 'action-settings',
+          viewUrl: frontendUrl + '#/management'
+        }
+      ];
+
+      endpoints.forEach(endpoint => {
+        if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
+          let targetUrl = endpoint.url;
+          if (targetUrl && !targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+            targetUrl = 'https://' + targetUrl;
+          } else if (!targetUrl) {
+            targetUrl = '#';
+          }
+
+          children.push({
+            category: { label: 'Links', icon: 'link' },
+            label: endpoint.id,
+            externalLink: { url: targetUrl }
+          });
+        }
+      });
+
+      const luigiConfig = {
+        navigation: {
+          nodes: () => [
+            {
+              pathSegment: 'home',
+              label: workspace.name,
+              icon: 'home',
+              viewUrl: frontendUrl,
+              children: children,
+              context: {
+                workspace: workspace,
+                memberships: memberships,
+                bucketAccessRequests: bucketAccessRequests
+              }
+            }
+          ]
+        },
+        routing: {
+          useHashRouting: true
+        },
+        settings: {
+          header: {
+            title: `Workspace: ${workspace.name}`,
+            logo: '/logo.svg',
+            profile: false
+          },
+          responsiveNavigation: 'semiCollapsible'
+        }
+      };
+
+      Luigi.setConfig(luigiConfig);
+    </script>
+  </body>
+</html>

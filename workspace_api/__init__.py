@@ -48,21 +48,22 @@ def get_dist_dir() -> Path | None:
 # and we are not using a remote frontend dev server.
 if config.UI_MODE == "ui":
     dist_dir = get_dist_dir()
-    templates = Jinja2Templates(directory=dist_dir)
 
-    if config.FRONTEND_URL == "/ui":
+    if config.FRONTEND_URL.startswith("/ui"):
         if dist_dir is None:
             logging.getLogger(__name__).warning(
                 f"UI_MODE is 'ui', but the dist directory '{dist_dir}' was not found. "
                 "The UI will not be served. Did you forget to build the frontend?"
             )
         else:
+            templates = Jinja2Templates(directory=dist_dir)
             app.mount("/ui", StaticFiles(directory=dist_dir, html=True))
     else:
-        # for development server mount public to /ui to serve static files
+        # for development server mount luigi-shell to /ui to serve luigi
         BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
-        ui_public_dir = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "public"))
-        app.mount("/ui", StaticFiles(directory=ui_public_dir, html=True))
+        ui_luigi_dir = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "luigi-shell"))
+        templates = Jinja2Templates(directory=ui_luigi_dir)
+        app.mount("/ui", StaticFiles(directory=ui_luigi_dir, html=True))
 
 
 if __name__ != "__main__":

@@ -7,11 +7,16 @@ COPY workspace_api/ ./workspace_api
 RUN pip wheel --no-cache-dir --wheel-dir /api/wheels .[prod]
 
 FROM node:22-alpine AS ui-builder
+RUN apk add --no-cache \
+    bash=5.2.26-r0 \
+    rsync=3.3.0-r0
 WORKDIR /ui
-COPY workspace_ui/package.json workspace_ui/package-lock.json workspace_ui/quasar.config.ts workspace_ui/index.html ./
-RUN npm ci
-COPY workspace_ui/ ./
-RUN npm run build
+#COPY workspace_ui/package.json workspace_ui/package-lock.json workspace_ui/quasar.config.ts workspace_ui/index.html ./
+#RUN npm ci
+COPY workspace_ui/build_dist.sh .
+COPY workspace_ui/luigi-shell ./luigi-shell
+COPY workspace_ui/management ./management
+RUN ./build_dist.sh
 
 FROM python:3.12.6-slim-bookworm
 

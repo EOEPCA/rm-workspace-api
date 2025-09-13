@@ -16,6 +16,24 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 
 - **Workspace API** — `workspace_api/` (FastAPI backend)
 - **Workspace UI** — `workspace_ui/` (Quasar/Vue app; built assets placed in `workspace_ui/dist/`)
+  - **Luigi Shell** — provides the micro frontend navigation and layout
+  - **Management app** — a single-page application (SPA) embedded via Luigi as a view, using Quasar.js/Vue
+
+### Directoy layout
+
+```bash
+.
+├── workspace_api/                # Python FastAPI backend
+└── workspace_ui/                 # Luigi shell + Vue frontend views
+    ├── luigi-shell/
+    │   ├── ui.html               # Luigi shell template (rendered by FastAPI)
+    │   ├── logo.svg              # Main logo
+    │   └── icons/                # favicon.ico
+    ├── management/               # Quasar App
+    │   ├── index.html            # Vue app entry point (used inside Luigi iframe)
+    │   └── dist/                 # Built Quasar App
+    └── dist/                     # Combined built UI code, served as static content
+```
 
 ## Requirements
 
@@ -40,7 +58,7 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 
    ```bash
    cd workspace_ui
-   npm ci
+   ./build_dist.sh
    cd ..
    ```
 
@@ -52,7 +70,7 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
 KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
 ```
 
-The API will be at <http://localhost:5000>.
+The API will be at <http://localhost:8080>.
 
 ### Runb backend API and Frontend UI
 
@@ -60,7 +78,7 @@ The API will be at <http://localhost:5000>.
 
 Run the Quasar/Vite dev server (default: <http://localhost:9000>):
 
-From the `workspace_ui/` folder:
+From the `workspace_ui/management` folder:
 
 ```bash
 npm run dev
@@ -72,7 +90,7 @@ Then in another terminal, from the `workspace_api/` folder:
 KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
 ```
 
-Open `http://localhost:5000/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
+Open `http://localhost:8080/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
 
 #### B) Production mode (no dev server)
 
@@ -81,7 +99,7 @@ Build the SPA into `workspace_ui/dist/` and let the backend serve it as static c
 From the `workspace_ui/` folder:
 
 ```bash
-npm run build
+./build_dist.sh
 ```
 
 ```bash
@@ -100,7 +118,7 @@ uv run ruff format .
 uv run mypy .
 ```
 
-Frontend (from `workspace_ui/`):
+Management Frontend (from `workspace_ui/management`):
 
 ```bash
 npm run lint
@@ -143,13 +161,13 @@ Run via `uv run <tool>` from `workspace_api/`.
 
 Environment variables used by the backend (besides `KUBECONFIG` required for Kubernetes cluster access):
 
-| Variable | Default | Description |
-| --- | --- | --- |
-| `PREFIX_FOR_NAME` | `"ws"` | Prefix used when generating Kubernetes workspace names from user input. |
-| `WORKSPACE_SECRET_NAME` | `"workspace"` | Name of the Kubernetes `Secret` that holds per-workspace storage credentials. |
+| Variable | Default                | Description |
+| --- |------------------------| --- |
+| `PREFIX_FOR_NAME` | `"ws"`                 | Prefix used when generating Kubernetes workspace names from user input. |
+| `WORKSPACE_SECRET_NAME` | `"workspace"`          | Name of the Kubernetes `Secret` that holds per-workspace storage credentials. |
 | `CONTAINER_REGISTRY_SECRET_NAME` | `"container-registry"` | Name of the Kubernetes `Secret` that holds per-workspace container registry credentials. |
-| `UI_MODE` | `"no"` | Set to `"ui"` to enable serving the frontend (templated HTML + SPA). |
-| `FRONTEND_URL` | `"/ui"` | Base path (production) or absolute URL (dev server) for the frontend. Use `http://localhost:9000` with the dev server. |
+| `UI_MODE` | `"no"`                 | Set to `"ui"` to enable serving the frontend (templated HTML + SPA). |
+| `FRONTEND_URL` | `"/ui/management"`     | Base path (production) or absolute URL (dev server) for the frontend. Use `http://localhost:9000` with the dev server. |
 
 ## Docker
 

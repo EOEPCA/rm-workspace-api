@@ -20,4 +20,4 @@ CONTAINER_REGISTRY_SECRET_NAME = os.environ.get("CONTAINER_REGISTRY_SECRET_NAME"
 # set UI_MODE to "ui" to activate UI
 UI_MODE = os.environ.get("UI_MODE", "no")
 # set FRONTEND_URL to "http://localhost:9000" to use dev server
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "/ui")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "/ui/management")
