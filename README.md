@@ -19,7 +19,7 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
   - **Luigi Shell** — provides the micro frontend navigation and layout
   - **Management app** — a single-page application (SPA) embedded via Luigi as a view, using Quasar.js/Vue
 
-### Directoy layout
+### Directory layout
 
 ```bash
 .
