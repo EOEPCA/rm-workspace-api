@@ -36,6 +36,8 @@
       }
 
       const workspace = decodeData(workspaceData);
+      console.log('workspace')
+      console.log(workspace)
       const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
       const memberships = Array.isArray(decodeData(membershipsData)) ? decodeData(membershipsData) : [];
       console.log(memberships)
