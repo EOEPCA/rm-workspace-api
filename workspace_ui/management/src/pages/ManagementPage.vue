@@ -1,5 +1,5 @@
 <template>
-  <div class="q-pa-md" style="max-width: 1000px; margin: 0 auto;">
+  <div class="q-pa-md" style="min-width: 1000px; max-width: calc(80vw); margin: 0 auto;">
     <q-card>
       <q-card-section>
 
@@ -50,6 +50,7 @@
               <q-table
                 ref="memberTable"
                 class="my-sticky-header-table"
+                style="height: calc(100vh - 330px)"
                 :rows="form.memberships"
                 :columns="memberColumns"
                 row-key="id"
@@ -141,14 +142,25 @@
               <q-separator class="q-my-md"/>
 
               <!-- Linked Buckets -->
-              <div class="text-body1 q-mb-sm">Linked Buckets</div>
+              <div class="row">
+                <div class="text-body1 q-mb-sm">Linked Buckets</div>
+                  <q-space/>
+                  <q-toggle
+                    v-model="allAvailableBuckets"
+                    label="Show all available buckets"
+                  />
+              </div>
               <q-table
-                :rows="linkedRows"
+                class="my-sticky-header-table"
+                style="height: calc(100vh - 500px)"
+                :rows="linkedBuckets"
                 :columns="linkedColumns"
                 row-key="id"
+                bordered
                 flat
                 :loading="loading"
-                :rows-per-page-options="[10,25,50]"
+                :rows-per-page-options="[0]"
+                :pagination="bucketInitialPagination"
               >
                 <template #body-cell-status="props">
                   <q-td :props="props">
@@ -162,12 +174,17 @@
                 </template>
                 <template #body-cell-actions="props">
                   <q-td :props="props" class="q-gutter-xs">
+                    <q-btn dense flat icon="key" :disable="!!props.row.request_timestamp" @click="requestBucket(props.row)">
+                      <q-tooltip>Request bucket access</q-tooltip>
+                    </q-btn>
                     <q-btn dense flat icon="open_in_new" @click="openBucket(props.row.bucket)">
                       <q-tooltip>Open bucket</q-tooltip>
                     </q-btn>
+                    <!--
                     <q-btn dense flat icon="link_off" color="negative" @click="unlink(props.row)">
                       <q-tooltip>Unlink</q-tooltip>
                     </q-btn>
+                    -->
                   </q-td>
                 </template>
               </q-table>
@@ -204,6 +221,8 @@ const form = ref<WorkspaceEditUI>({
   linked_buckets: []
 })
 
+const allAvailableBuckets = ref<boolean>(false)
+
 /** Tabs */
 const activeTab = ref<'members' | 'buckets'>('members')
 
@@ -223,6 +242,12 @@ function formatDate(iso?: string | null): string {
   }
 }
 
+/*
+function sortByBucketNameAsc(a: Bucket, b: Bucket) {
+  return (a.bucket ?? '').localeCompare(b.bucket ?? '')
+}
+*/
+
 function sortByGrantDesc(a: Bucket, b: Bucket) {
   return (b.grant_timestamp ?? '').localeCompare(a.grant_timestamp ?? '')
 }
@@ -231,10 +256,10 @@ function sortByRequestDesc(a: Bucket, b: Bucket) {
   return (b.request_timestamp ?? '').localeCompare(a.request_timestamp ?? '')
 }
 
-function sortByGrantThenRequestDesc(a: Bucket, b: Bucket) {
-  const g = sortByGrantDesc(a, b)
+function sortByRequestThenGrantDesc(a: Bucket, b: Bucket) {
+  const g = sortByRequestDesc(a, b)
   if (g !== 0) return g
-  return sortByRequestDesc(a, b)
+  return sortByGrantDesc(a, b)
 }
 
 const {loading} = useLuigiWorkspace({
@@ -321,11 +346,17 @@ function addMember() {
   })
 }
 
+const bucketInitialPagination = {
+  sortBy: '',
+  descending: false,
+  page: 0,
+  rowsPerPage: 0,
+}
 
-const linkedRows = computed(() =>
+const linkedBuckets = computed(() =>
   form.value.linked_buckets
-    .filter(r => r.workspace === form.value.name)
-    .sort(sortByGrantThenRequestDesc)
+    .filter(r => r.workspace === form.value.name && (allAvailableBuckets.value || !!r.request_timestamp))
+    .sort(sortByRequestThenGrantDesc)
 )
 
 const linkedColumns: QTableColumn<Bucket>[] = [
@@ -351,10 +382,17 @@ const linkedColumns: QTableColumn<Bucket>[] = [
   {name: 'actions', label: 'Actions', field: 'bucket', align: 'right'}
 ]
 
+/*
 function unlink(row: Bucket) {
   // DELETE /bucket-access-requests/:id or appropriate endpoint
   // allAccess.value = allAccess.value.filter(r => r.id !== row.id)
   console.log('unlink', row)
+}
+ */
+
+function requestBucket (row: Bucket) {
+  console.log('request bucket', row.bucket)
+  row.request_timestamp = new Date().toISOString()
 }
 
 /*
@@ -394,8 +432,8 @@ const submit = async () => {
   const workspaceEdit = {
     name: workspaceName,
     members: (form.value.memberships ?? []).filter(m => !!m.member).map(m => m.member),
-    extra_buckets: form.value.extra_buckets
-//    linked_buckets: form.value.linked_buckets,
+    extra_buckets: form.value.extra_buckets,
+    linked_buckets: form.value.linked_buckets.filter(r => !!r.request_timestamp).map(r => r.bucket),
   } as WorkspaceEdit
 
   try {
@@ -416,21 +454,17 @@ const submit = async () => {
 
 <style lang="sass">
 .my-sticky-header-table
-  --hdr1: 48px    /* normale Header-Zeile */
-
-  height: calc(100vh - 350px)
+  --hdr1: 48px
 
   .q-table__top,
   .q-table__bottom,
   thead tr th
     background-color: white
 
-  /* beide Header-Zeilen sticky machen */
   thead tr th
     position: sticky
     z-index: 2
 
-  /* 1. Zeile (Standard-Header) ganz oben */
   thead tr:first-child th
     top: 0
     z-index: 3
@@ -440,21 +474,4 @@ const submit = async () => {
 
   tbody
     scroll-margin-top: calc(var(--hdr1))
-</style>
-
-<style lang="sass" scoped>
-.q-page
-  display: flex
-  flex-direction: column
-
-.toolbar
-  padding: 0px
-
-.showAll
-  background-color: gray /* Example pressed background color */
-  box-shadow: inset 0 3px 5px rgba(0, 0, 0, 0.2) /* Simulate pressed effect */
-  transform: translateY(2px) /* Slight move down to mimic a pressed state */
-
-.textField
-  max-width: 300px
 </style>

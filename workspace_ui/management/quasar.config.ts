@@ -117,8 +117,7 @@ export default defineConfig((ctx) => {
         'Notify'
       ],
       config: {
-      }
-
+      },
       // iconSet: 'material-icons', // Quasar icon set
       // lang: 'en-US', // Quasar language pack
 
