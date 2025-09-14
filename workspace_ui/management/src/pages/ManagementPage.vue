@@ -77,15 +77,13 @@
                   </q-td>
                 </template>
 
-                <!--
                 <template v-slot:body-cell-actions="props">
                   <q-td :props="props">
-                    <q-btn v-if="props.row.role !== 'owner'" dense flat icon="delete" color="negative" @click="form.memberships.splice(props.rowIndex, 1)">
+                    <q-btn v-if="props.row.role !== 'owner' && props.row.isNew" dense flat icon="delete" color="negative" @click="form.memberships.splice(props.rowIndex, 1)">
                       <q-tooltip>Remove member</q-tooltip>
                     </q-btn>
                   </q-td>
                 </template>
-                -->
               </q-table>
 
               <q-btn
@@ -107,7 +105,7 @@
               <q-table
                 ref="extraBucketTable"
                 class="my-sticky-header-table"
-                style="max-height: calc(400px)"
+                style="max-height: calc(350px)"
                 :rows="form.extra_buckets"
                 :columns="extraBucketsColumns"
                 row-key="id"
@@ -135,7 +133,7 @@
 
                 <template v-slot:body-cell-actions="props">
                   <q-td :props="props">
-                    <q-btn dense flat icon="delete" color="negative" @click="deleteExtraBucket(props.row)">
+                    <q-btn v-if="props.row.isNew" dense flat icon="delete" color="negative" @click="deleteExtraBucket(props.row)">
                       <q-tooltip>Delete bucket</q-tooltip>
                     </q-btn>
                   </q-td>
@@ -189,14 +187,14 @@
                 </template>
                 <template #body-cell-actions="props">
                   <q-td :props="props" class="q-gutter-xs">
-                    <q-btn dense flat icon="key" :disable="!!props.row.request_timestamp"
+                    <q-btn v-if="!props.row.request_timestamp" dense flat icon="key" :disable="!!props.row.request_timestamp"
                            @click="requestBucket(props.row)">
                       <q-tooltip>Request bucket access</q-tooltip>
                     </q-btn>
+                    <!--
                     <q-btn dense flat icon="open_in_new" @click="openBucket(props.row.bucket)">
                       <q-tooltip>Open bucket</q-tooltip>
                     </q-btn>
-                    <!--
                     <q-btn dense flat icon="link_off" color="negative" @click="unlink(props.row)">
                       <q-tooltip>Unlink</q-tooltip>
                     </q-btn>
@@ -349,15 +347,10 @@ const {loading} = useLuigiWorkspace({
           // linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
           linked_buckets: ctx.bucketAccessRequests ?? []
         }
-        let i = 0
-        form.value.linked_buckets.forEach((b: Bucket) => {
 
+        // prepare number of requests and grants for extraBuckets
+        form.value.linked_buckets.forEach((b: Bucket) => {
           if (b.workspace !== ws.name) {
-            // TODO remove
-            if (i % 2 === 0) {
-              b.grant_timestamp = ''
-            }
-            i++
             const extraBucket = form.value.extra_buckets.find((ex => ex.bucket === b.bucket))
             if (extraBucket) {
               if (b.request_timestamp) {
@@ -426,16 +419,13 @@ const memberColumns: QTableColumn<Membership>[] = [
     field: 'creation_timestamp',
     align: 'left',
     format: (val) => formatDate(val as string | null)
-  }
-  /*
+  },
   {
     name: 'actions',
     label: '',
     field: 'role',
     align: 'center'
   }
-
-   */
 ]
 
 const memberTable = ref()
@@ -492,12 +482,14 @@ const extraBucketsColumns: QTableColumn<ExtraBucketUI>[] = [
 
 const extraBucketTable = ref()
 const btnAddExtraBucket = ref()
+const newExtraBuckets = ref(0)
 
 function addExtraBucket() {
   console.log('add bucket')
   const idxNew = form.value.extra_buckets.findIndex((b) => !b.bucket)
   if (idxNew < 0) {
     form.value.extra_buckets.push({isNew: true} as ExtraBucketUI)
+    newExtraBuckets.value++
   }
 
   scrollToAndFocusLastRow(extraBucketTable.value)
@@ -508,6 +500,7 @@ function deleteExtraBucket(row: ExtraBucketUI) {
   const index = form.value.extra_buckets.findIndex(b => b.bucket === row.bucket)
   if (index !== -1) {
     form.value.extra_buckets.splice(index, 1)
+    newExtraBuckets.value--
   }
 }
 
@@ -520,14 +513,21 @@ const bucketInitialPagination = {
 }
 
 const linkedBucketStyle = computed(() => {
+  /*
+  let top
   if (btnAddExtraBucket.value) {
     const el = btnAddExtraBucket.value?.$el
-    const top = el.getBoundingClientRect().top
-    console.log(top)
+    top = el.getBoundingClientRect().top
+  } else {
+    top = 300
   }
+
+   */
+  const top = 55* Math.min(newExtraBuckets.value, 5)
+  console.log(top)
   return {
     // height: `${state.table1Height}px`,
-    height: `calc(100vh - 600px)`
+    height: `calc(100vh - ${top}px - 650px)`
 //  overflow: 'auto'
   }
 })
@@ -619,10 +619,12 @@ function denyBucket(row: Bucket) {
   // POST /bucket-access-requests/:id/deny (or delete)
 }
 
+/*
 function openBucket(bucketName: string) {
   // navigate to bucket detail view
   console.log('Open bucket', bucketName)
 }
+ */
 
 /** ---- Submit ---- */
 const submit = async () => {
