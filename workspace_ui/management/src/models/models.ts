@@ -35,10 +35,17 @@ export interface Workspace {
   members?: string[]
 }
 
+export interface ExtraBucketUI {
+  bucket: string;
+  requests: number;
+  grants: number;
+  isNew?: boolean
+}
+
 export interface WorkspaceEditUI {
   name: string
   memberships: Membership[],
-  extra_buckets: string[]
+  extra_buckets: ExtraBucketUI[]
   linked_buckets: Bucket[]
   bucketAccessRequests?: Bucket[]
 }
