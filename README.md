@@ -28,7 +28,8 @@ A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for man
     ├── luigi-shell/
     │   ├── ui.html               # Luigi shell template (rendered by FastAPI)
     │   ├── logo.svg              # Main logo
-    │   └── icons/                # favicon.ico
+    │   ├── icons/                # favicon.ico
+    │   └── standalone/           # Luigi shell with statically defined workspace data
     ├── management/               # Quasar App
     │   ├── index.html            # Vue app entry point (used inside Luigi iframe)
     │   └── dist/                 # Built Quasar App
@@ -72,7 +73,7 @@ KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload 
 
 The API will be at <http://localhost:8080>.
 
-### Runb backend API and Frontend UI
+### Run backend API and Frontend UI
 
 #### A) Dev server mode (hot reload)
 

@@ -12,7 +12,9 @@
     "test": "echo \"No test specified\" && exit 0",
     "dev": "quasar dev",
     "build": "quasar build",
-    "postinstall": "quasar prepare"
+    "postinstall": "quasar prepare",
+    "shell": "python3 -m http.server 8080 -d ../luigi-shell/standalone",
+    "shell+dev": "concurrently -k -n SHELL,QUASAR -c cyan,magenta \"npm:shell\" \"npm:dev\""
   },
   "dependencies": {
     "@luigi-project/client": "^2.23.1",
@@ -32,6 +34,7 @@
     "@vue/eslint-config-prettier": "^10.1.0",
     "@vue/eslint-config-typescript": "^14.4.0",
     "autoprefixer": "^10.4.2",
+    "concurrently": "^9.2.1",
     "eslint": "^9.14.0",
     "eslint-plugin-vue": "^9.30.0",
     "globals": "^15.12.0",

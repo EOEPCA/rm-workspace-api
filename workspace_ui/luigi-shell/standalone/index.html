@@ -1,9 +1,7 @@
 <!DOCTYPE html>
 <!--
- Luigi shell file for standalone frontend development without Python backend
- Prepared to be served bei the Quasar dev server
- Browser-URL: http://localhost:9000/ui.html
--->
+ Luigi shell file for standalone frontend development without full Python backend with statically provided data
+ -->
 <html>
   <head>
     <title>Workspace-App</title>
@@ -28,7 +26,7 @@
       // const endpointsData = '{{ endpoints_data | safe }}';
       // const membershipsData = '{{ memberships_data | safe }}';
       // const bucketAccessRequestsData = '{{ bucket_access_requests_data | safe }}';
-      const frontendUrl = '/'; // '{{ frontend_url | safe }}';
+      const frontendUrl = 'http://localhost:9000/'; // '{{ frontend_url | safe }}';
 
       function decodeData(base64String) {
           return base64String;
@@ -85,7 +83,7 @@
               pathSegment: 'home',
               label: workspace.name,
               icon: 'home',
-              viewUrl: frontendUrl,
+              viewUrl: frontendUrl + '#/home',
               children: children,
               context: {
                 workspace: workspace,
