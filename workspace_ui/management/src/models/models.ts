@@ -12,6 +12,7 @@ export interface Membership {
   role: string;
   creation_timestamp: string;
   isNew?: boolean
+  isPending?: boolean
 }
 
 export interface Bucket {
@@ -40,6 +41,7 @@ export interface ExtraBucketUI {
   requests: number;
   grants: number;
   isNew?: boolean
+  isPending?: boolean
 }
 
 export interface WorkspaceEditUI {

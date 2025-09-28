@@ -14,8 +14,6 @@ export function sortByRequestThenGrantDesc(a: Bucket, b: Bucket) {
   return g !== 0 ? g : sortByGrantDesc(a, b)
 }
 
-/*
 export function sortByBucketNameAsc(a: Bucket, b: Bucket) {
   return (a.bucket ?? '').localeCompare(b.bucket ?? '')
 }
-*/

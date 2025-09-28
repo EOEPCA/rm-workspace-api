@@ -1,4 +1,4 @@
-import type {QTable} from 'quasar'
+import type {QInput, QTable} from 'quasar'
 import {nextTick} from 'vue'
 
 export function formatDate(iso?: string | null): string {
@@ -37,11 +37,29 @@ export function scrollToAndFocusLastRow(tableRef: QTable | null) {
         // Small micro-delay helps if the field is still animating
         requestAnimationFrame(() => {
           inputEl.focus()
-          inputEl.select()
+//          inputEl.select()
+          const len = inputEl.value.length
+          inputEl.setSelectionRange(len, len) // move caret to end
+          inputEl.focus()
         })
       }
     }
   }).catch(err => {
     console.error('nextTick failed:', err)
   })
+}
+
+export async function moveCaretToEnd(inputRef: QInput | null) {
+  if (!inputRef) {
+    return
+  }
+
+  await nextTick()
+  // Access the native input element inside QInput
+  const inputEl = inputRef.getNativeElement?.()
+  if (inputEl) {
+    const len = inputEl.value.length
+    inputEl.setSelectionRange(len, len) // move caret to end
+    inputEl.focus()
+  }
 }

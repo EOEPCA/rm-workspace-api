@@ -1,6 +1,21 @@
 <template>
   <!-- Extra Buckets -->
-  <div class="text-body1 q-mb-sm">Extra Buckets</div>
+  <div class="row items-center q-gutter-sm">
+    <div class="text-body1 q-mb-sm">Extra Buckets</div>
+    <q-space/>
+    <q-btn
+      ref="btnAddExtraBucket"
+      color="primary"
+      flat
+      no-caps
+      class="q-mt-sm q-mb-lg"
+      @click="addExtraBucket"
+    >
+      <q-icon name="add" class="q-mr-sm"/>
+      Add Extra Bucket
+    </q-btn>
+  </div>
+
   <q-table
     ref="extraBucketTable"
     class="my-sticky-header-table"
@@ -17,14 +32,25 @@
     <template v-slot:body-cell-bucket="props">
       <q-td :props="props">
         <q-input
+          ref="newBucket"
           v-if="props.row.isNew"
           v-model="props.row.bucket"
           outlined
           dense
           hide-bottom-space
           placeholder="Bucket name"
-        />
-        <span v-else>
+          :rules="[val => !!val || 'Name is required',
+            val => val.startsWith(workspaceName) || 'Name must start with ' + workspaceName,
+            val => (val !== workspaceName && val != workspaceName + '-') || 'Name must be different from ' + workspaceName]"
+        >
+        <template v-slot:append>
+          <q-btn dense flat icon="save" color="green"
+                 @click="createExtraBucket">
+            <q-tooltip>Save added Extra Bucket</q-tooltip>
+          </q-btn>
+        </template>
+        </q-input>
+          <span v-else>
           {{ props.row.bucket }}
         </span>
       </q-td>
@@ -38,18 +64,6 @@
       </q-td>
     </template>
   </q-table>
-
-  <q-btn
-    ref="btnAddExtraBucket"
-    color="primary"
-    flat
-    no-caps
-    class="q-mt-sm q-mb-lg"
-    @click="addExtraBucket"
-  >
-    <q-icon name="add" class="q-mr-sm"/>
-    Add Extra Bucket
-  </q-btn>
 
   <q-separator class="q-my-md"/>
 
@@ -78,7 +92,7 @@
         <q-badge v-if="props.row.grant_timestamp" color="positive" outline>
           Granted · {{ formatDate(props.row.grant_timestamp) }}
         </q-badge>
-        <q-badge v-else color="warning" outline>
+        <q-badge v-else-if="props.row.request_timestamp" color="warning" outline>
           Requested · {{ formatDate(props.row.request_timestamp) }}
         </q-badge>
       </q-td>
@@ -105,10 +119,12 @@
 
 <script setup lang="ts">
 import {computed, ref, watch} from 'vue'
-import type { QTable, QTableColumn } from 'quasar'
+import type {QTableColumn} from 'quasar'
+import {QTable, useQuasar} from 'quasar'
 import type {Bucket, ExtraBucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
-import {sortByRequestThenGrantDesc} from 'src/services/sorting'
+import {sortByBucketNameAsc} from 'src/services/sorting'
+import {saveExtraBuckets, saveRequestedBuckets} from 'src/services/api'
 
 const props = defineProps<{
   workspaceName: string
@@ -124,6 +140,8 @@ const emit = defineEmits<{
   (e: 'update:show-all', v: boolean): void
 }>()
  */
+
+const $q = useQuasar()
 
 const allAvailableBuckets = ref<boolean>(false)
 
@@ -158,12 +176,14 @@ watch(
 const myLinkedBuckets = computed(() =>
   props.linkedBuckets
     .filter(r => r.workspace === props.workspaceName && (allAvailableBuckets.value || !!r.request_timestamp))
-    .sort(sortByRequestThenGrantDesc)
+    // .sort(sortByRequestThenGrantDesc)
+    .sort(sortByBucketNameAsc)
 )
 
 const extraBucketTable = ref<QTable | null>(null)
 const newExtraBucketsCount = ref(0)
 const btnAddExtraBucket = ref()
+const newBucket = ref()
 
 const extraBucketsColumns: QTableColumn<ExtraBucketUI>[] = [
   {
@@ -183,6 +203,12 @@ const extraBucketsColumns: QTableColumn<ExtraBucketUI>[] = [
     label: 'Grants',
     field: 'grants',
     align: 'right'
+  },
+  {
+    name: 'status',
+    label: 'Status',
+    field: (row) => row.isPending ? 'Pending' : '',
+    align: 'center'
   },
   {
     name: 'actions',
@@ -235,10 +261,10 @@ const linkedBucketStyle = computed(() => {
 
    */
   const top = 55* Math.min(newExtraBucketsCount.value, 5)
-  console.log(top)
+//  console.log(top)
   return {
     // height: `${state.table1Height}px`,
-    height: `calc(100vh - ${top}px - 650px)`
+    height: `calc(100vh - ${top}px - 500px)`
 //  overflow: 'auto'
   }
 })
@@ -246,9 +272,9 @@ const linkedBucketStyle = computed(() => {
 
 function addExtraBucket() {
   console.log('add extra bucket')
-  const idxNew = myExtraBuckets.value.findIndex((b) => !b.bucket)
+  const idxNew = myExtraBuckets.value.findIndex((b) => !b.bucket || b.isNew)
   if (idxNew < 0) {
-    myExtraBuckets.value.push({isNew: true} as ExtraBucketUI)
+    myExtraBuckets.value.push({bucket: props.workspaceName + '-', isNew: true} as ExtraBucketUI)
     newExtraBucketsCount.value++
   }
 
@@ -256,13 +282,46 @@ function addExtraBucket() {
 }
 
 function deleteExtraBucket(row: ExtraBucketUI) {
-  console.log('delete bucket', row.bucket)
   const index = myExtraBuckets.value.findIndex(b => b.bucket === row.bucket)
   if (index !== -1) {
     myExtraBuckets.value.splice(index, 1)
     newExtraBucketsCount.value--
   }
 }
+
+function createExtraBucket() {
+
+  newBucket.value.validate()
+
+  if (newBucket.value.hasError) {
+    return
+  }
+
+  const buckets = myExtraBuckets.value.filter(b => !!b.bucket).map(b => b.bucket)
+  saveExtraBuckets(props.workspaceName, buckets)
+    .then(() => {
+      myExtraBuckets.value.forEach( (bucket: ExtraBucketUI) => {
+          if (bucket.isNew) {
+            bucket.isPending = true
+          }
+        bucket.isNew = false
+        })
+        $q.notify({
+          type: 'positive',
+          message: 'Extra Bucket was successfully submitted!'
+        })
+      }
+    )
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      $q.notify({
+        type: 'negative',
+        message: `Error creating Extra Buckets: ${msg}`
+      })
+    })
+}
+
+
 
 /*
 function unlink(row: Bucket) {
@@ -281,7 +340,23 @@ function openBucket(bucketName: string) {
 
 function requestBucket(row: Bucket) {
   console.log('request bucket', row.bucket)
-  row.request_timestamp = new Date().toISOString()
+  const requestedBuckets = [row.bucket]
+  saveRequestedBuckets(props.workspaceName, requestedBuckets)
+    .then(() => {
+        row.request_timestamp = new Date().toISOString()
+        $q.notify({
+          type: 'positive',
+          message: 'Request for Bucket access was successfully submitted!'
+        })
+      }
+    )
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      $q.notify({
+        type: 'negative',
+        message: `Error requesting Bucket access: ${msg}`
+      })
+    })
 }
 
 </script>

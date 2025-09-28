@@ -45,6 +45,7 @@
             <!-- MEMBERS TAB -->
             <q-tab-panel name="members">
               <MembersTab
+                :workspace-name="form.name"
                 v-model:memberships="form.memberships"
               />
             </q-tab-panel>
@@ -52,9 +53,9 @@
             <!-- BUCKETS TAB -->
             <q-tab-panel name="buckets">
               <BucketsTab
+                :workspace-name="form.name"
                 v-model:extra-buckets="form.extra_buckets"
                 v-model:linked-buckets="form.linked_buckets"
-                :workspace-name="form.name"
               />
 
             </q-tab-panel>
@@ -62,17 +63,16 @@
             <!-- REQUESTED BUCKETS TAB -->
             <q-tab-panel name="bucketRequests">
               <BucketRequestsTab
-                v-model:linked-buckets="form.linked_buckets"
                 :workspace-name="form.name"
+                v-model:linked-buckets="form.linked_buckets"
               />
             </q-tab-panel>
-
-
           </q-tab-panels>
 
+          <!--
           <q-separator class="q-my-md"/>
-
           <q-btn type="submit" color="primary" unelevated no-caps label="Save Changes"/>
+          -->
         </q-form>
       </q-card-section>
     </q-card>

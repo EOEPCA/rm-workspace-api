@@ -1,7 +1,18 @@
 <template>
-  <!--
-<div class="text-body1 q-mb-sm">Members</div>
--->
+  <div class="row items-center q-gutter-sm">
+    <div class="text-body1 q-mb-sm">Members</div>
+    <q-space/>
+    <q-btn
+      color="primary"
+      flat
+      no-caps
+      class="q-mt-sm"
+      @click="addMemberRow"
+    >
+      <q-icon name="add" class="q-mr-sm"/>
+      Add Member
+    </q-btn>
+  </div>
 
   <q-table
     ref="memberTable"
@@ -25,7 +36,16 @@
           dense
           hide-bottom-space
           placeholder="Member name"
-        />
+        >
+          <!--
+          <template v-slot:append>
+            <q-btn dense flat icon="save" color="green"
+                   @click="addMember">
+              <q-tooltip>Save added member</q-tooltip>
+            </q-btn>
+          </template>
+          -->
+        </q-input>
         <span v-else>
           {{ props.row.member }}
         </span>
@@ -40,31 +60,37 @@
         </q-btn>
       </q-td>
     </template>
+
+    <!--
+    <template v-slot:bottom="">
+      <div class="row items-center q-gutter-sm">
+        <div>
+          <q-btn color="primary" no-caps label="Create Members" @click="createMembers"/>
+        </div>
+        <q-space/>
+        <div>{{ myMemberships.length }}</div>
+      </div>
+    </template>
+    -->
+
   </q-table>
 
-  <q-btn
-    color="primary"
-    flat
-    no-caps
-    class="q-mt-sm"
-    @click="addMember"
-  >
-    <q-icon name="add" class="q-mr-sm"/>
-    Add Member
-  </q-btn>
+  <q-btn color="primary" no-caps label="Create Members" @click="createMembers" style="margin-top: 5px" :disable="!hasChanged" />
 
 </template>
 
 <script setup lang="ts">
-import {ref, watch} from 'vue'
-import type {QTableColumn} from 'quasar';
-import { QTable } from 'quasar'
+import {computed, onMounted, ref, watch} from 'vue'
+import type {QTable, QTableColumn} from 'quasar';
+import { useQuasar} from 'quasar'
 import type {Membership} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
+import {saveMembers} from 'src/services/api'
 
 /** v-model */
 const props = defineProps<{
-  memberships: (Membership)[]
+  workspaceName: string,
+  memberships: Membership[]
 }>()
 
 /*
@@ -74,12 +100,23 @@ const emit = defineEmits<{
 }>()
  */
 
+const $q = useQuasar()
+const initialMemberCount = ref(0)
+
 const myMemberships = ref<Membership[]>([])
 watch(
   () => props.memberships,
-  (v) => { myMemberships.value = v.map(x => ({ ...x })) },
-  { immediate: true }
+  (v) => {
+    myMemberships.value = v.map(x => ({...x}))
+  },
+  {immediate: true}
 )
+
+onMounted(() => {
+  initialMemberCount.value = props.memberships.length
+})
+
+const hasChanged = computed(() => myMemberships.value.length !== initialMemberCount.value)
 
 const memberTable = ref<QTable | null>(null)
 
@@ -99,9 +136,10 @@ const memberColumns: QTableColumn<Membership>[] = [
   {
     name: 'creation_timestamp',
     label: 'Created',
-    field: 'creation_timestamp',
+//    field: 'creation_timestamp',
+    field: (row) => row.creation_timestamp ? formatDate(row.creation_timestamp) : (row.isPending ? 'Pending' : ''),
     align: 'left',
-    format: (val) => formatDate(val as string | null)
+//    format: (val) => formatDate(val as string | null)
   },
   {
     name: 'actions',
@@ -118,7 +156,7 @@ const initialPagination = {
   rowsPerPage: 0
 }
 
-function addMember() {
+function addMemberRow() {
   const newRow = {
     id: crypto.randomUUID(),
     member: '',
@@ -133,5 +171,39 @@ function addMember() {
 
   scrollToAndFocusLastRow(memberTable.value)
 }
+
+/*
+function addMember() {
+  console.log('addMemberRow ', )
+  // TODO submit to server
+}
+
+ */
+
+function createMembers() {
+  const members = myMemberships.value.filter(m => !!m.member).map(m => m.member)
+  saveMembers(props.workspaceName, members)
+    .then(() => {
+      myMemberships.value.forEach( (member: Membership) => {
+        if (member.isNew) {
+          member.isPending = true
+        }
+        member.isNew = false
+      })
+        $q.notify({
+          type: 'positive',
+          message: 'Members were successfully submitted!'
+        })
+      }
+    )
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      $q.notify({
+        type: 'negative',
+        message: `Error creating members: ${msg}`
+      })
+    })
+}
+
 
 </script>
