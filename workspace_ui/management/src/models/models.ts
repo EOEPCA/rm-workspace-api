@@ -16,11 +16,13 @@ export interface Membership {
 }
 
 export interface Bucket {
-  workspace: string;
-  bucket: string;
-  permission: string;
-  request_timestamp: string;
-  grant_timestamp: string;
+  workspace: string
+  bucket: string
+  permission: string
+  request_timestamp?: string | undefined
+  grant_timestamp?: string | undefined
+  denied_timestamp?: string | undefined
+  isPending?: boolean
 }
 
 export interface Storage {
@@ -58,4 +60,5 @@ export interface WorkspaceEdit {
   members: string[]
   extra_buckets: string[]
   linked_buckets: string[]
+  bucket_access_requests?: Bucket[]
 }

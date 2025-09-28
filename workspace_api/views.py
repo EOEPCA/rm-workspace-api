@@ -109,6 +109,14 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     return {"name": workspace_name}
 
 
+# Called from the UI to submit data
+# Each entity is sent separate
+# Only added entities are sent
+# The state of bucket_access_requests is defined via the timestamps
+# grant:   grant_timestamp = datetime, deny_timestamp = undefined
+# deny:    grant = undefined, deny_timestamp = datetime
+# revoked: grant = datetime, deny_timestamp = datetime
+#
 @app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
 async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
     logger.debug(f"Update {workspace_name} with {update}")
@@ -122,6 +130,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
                 "members": update.members,
                 "extraBuckets": update.extra_buckets,
                 "linkedBuckets": update.linked_buckets,
+                # do something useful with update.bucket_access_requests
             }
         }
         workspace_api.patch(

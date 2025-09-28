@@ -23,7 +23,7 @@
         </div>
 
         <!-- Form -->
-        <q-form v-if="!loading && form.name" @submit.prevent="submit">
+        <q-form v-if="!loading && form.name">
           <!-- Tabs header -->
           <q-tabs
             v-model="activeTab"
@@ -69,10 +69,6 @@
             </q-tab-panel>
           </q-tab-panels>
 
-          <!--
-          <q-separator class="q-my-md"/>
-          <q-btn type="submit" color="primary" unelevated no-caps label="Save Changes"/>
-          -->
         </q-form>
       </q-card-section>
     </q-card>
@@ -81,15 +77,11 @@
 
 <script setup lang="ts">
 import {computed, ref} from 'vue'
-import axios from 'axios'
-import type {Bucket, ExtraBucketUI, WorkspaceEdit, WorkspaceEditUI} from 'src/models/models'
+import type {Bucket, ExtraBucketUI, WorkspaceEditUI} from 'src/models/models'
 import {useLuigiWorkspace} from 'src/composables/useLuigi'
-import {useQuasar} from 'quasar'
 import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
 import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
-
-const $q = useQuasar()
 
 /** ---- State ---- */
 const message = ref<string>('')
@@ -126,7 +118,6 @@ const {loading} = useLuigiWorkspace({
               requests: 0,
               grants: 0
             } as ExtraBucketUI)) ?? [],
-          // linked_buckets: ws.storage?.buckets?.filter((b) => !b.startsWith(ws.name)) ?? [],
           linked_buckets: ctx.bucketAccessRequests ?? []
         }
 
@@ -151,45 +142,6 @@ const {loading} = useLuigiWorkspace({
   }
 })
 
-/** ---- Submit ---- */
-const submit = async () => {
-  const workspaceName = form.value.name
-  if (!workspaceName) {
-    message.value = 'Error: Workspace name is missing. Cannot save.'
-    return
-  }
-
-  const invalidBuckets = form.value.extra_buckets.filter(
-    (b) => b.bucket === workspaceName || !b.bucket.startsWith(workspaceName)
-  ).map((b) => b.bucket)
-
-  if (invalidBuckets.length > 0) {
-    message.value = `Error: The following bucket names must start with '${workspaceName}': ${invalidBuckets.join(', ')}`
-    activeTab.value = 'buckets'
-    return
-  }
-
-  const workspaceEdit = {
-    name: workspaceName,
-    members: (form.value.memberships ?? []).filter(m => !!m.member).map(m => m.member),
-    extra_buckets: form.value.extra_buckets.map(b => b.bucket),
-    linked_buckets: form.value.linked_buckets.filter(r => !!r.request_timestamp).map(r => r.bucket)
-  } as WorkspaceEdit
-
-  try {
-    await axios.put(`/workspaces/${encodeURIComponent(workspaceName)}`, workspaceEdit)
-    $q.notify({
-      type: 'positive',
-      message: 'Workspace updated successfully!'
-    })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    $q.notify({
-      type: 'negative',
-      message: `Error saving workspace: ${msg}`
-    })
-  }
-}
 </script>
 
 <style lang="sass">

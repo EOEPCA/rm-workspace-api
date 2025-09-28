@@ -183,6 +183,7 @@ class WorkspaceEdit(BaseModel):
     members: list[str] = Field(..., description="Definitive list of member usernames.")
     extra_buckets: list[str] = Field(default_factory=list, description="Additional S3 buckets for the workspace.")
     linked_buckets: list[str] = Field(default_factory=list, description="Linked S3 buckets from other workspaces.")
+    bucket_access_requests: list[BucketAccessRequest] = Field(default_factory=list, description="Requested S3 buckets.")
 
     @field_validator("members")
     @classmethod

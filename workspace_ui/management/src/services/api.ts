@@ -1,6 +1,6 @@
 import type {AxiosError, AxiosResponse} from 'axios';
 import axios from 'axios'
-import type {WorkspaceEdit} from 'src/models/models'
+import type {Bucket, WorkspaceEdit} from 'src/models/models'
 
 export function saveMembers(workspaceName: string, members: string[]) {
   const workspaceEdit = {
@@ -26,6 +26,16 @@ export function saveRequestedBuckets(workspaceName: string, requestedBuckets: st
     name: workspaceName,
     members: [],
     linked_buckets: requestedBuckets
+  } as unknown as WorkspaceEdit
+
+  return saveWorkspace(workspaceName, workspaceEdit)
+}
+
+export function saveBucketGrants(workspaceName: string, grantedBuckets: Bucket[]) {
+  const workspaceEdit = {
+    name: workspaceName,
+    members: [],
+    bucket_access_requests: grantedBuckets
   } as unknown as WorkspaceEdit
 
   return saveWorkspace(workspaceName, workspaceEdit)
