@@ -52,6 +52,12 @@ def _workspace_name_pattern() -> str:
     return r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 
+def _iso(ts: datetime | None) -> str | None:
+    if ts is None:
+        return None
+    return ts.isoformat() if isinstance(ts, datetime) else str(ts)
+
+
 WORKSPACE_NAME_PATTERN = _workspace_name_pattern()
 workspace_path_type = Path(..., pattern=WORKSPACE_NAME_PATTERN)
 
@@ -226,47 +232,20 @@ def _dedup_preserve(items: list[str]) -> list[str]:
 
 
 def _perm_from_str(s: str | None) -> BucketPermission:
-    raw = (s or "none").strip().lower()
-    try:
-        return BucketPermission(raw)
-    except Exception:
-        logger.warning("Unknown permission %r; defaulting to 'none'", s)
-        return BucketPermission.NONE
+    raw = (s or "none").strip().lower().replace("_", "").replace("-", "")
 
-
-def _extract_own_bucket_access_requests(workspace_name: str, storage_spec: dict[str, Any] | None) -> list[BucketAccessRequest]:
-    if not storage_spec:
-        return []
-
-    items = storage_spec.get("bucketAccessRequests") or []
-    out: list[BucketAccessRequest] = []
-
-    for item in items:
-        if not isinstance(item, dict):
-            logger.warning("Skipping non-dict bucket access request: %r", item)
-            continue
-
-        bucket_name = (item.get("bucketName") or item.get("bucket") or "").strip()
-        if not bucket_name:
-            continue
-
-        req_at = item.get("requestedAt") or item.get("requested_at")
-        if not req_at:
-            logger.warning("Missing requestedAt for bucket %s; skipping.", bucket_name)
-            continue
-
-        out.append(
-            BucketAccessRequest(
-                workspace=workspace_name,
-                bucket=bucket_name,
-                permission=_perm_from_str(item.get("permission")),
-                request_timestamp=req_at,
-                grant_timestamp=None,
-                denied_timestamp=None,
-            )
-        )
-
-    return out
+    match raw:
+        case "none":
+            return BucketPermission.NONE
+        case "readwrite":
+            return BucketPermission.READ_WRITE
+        case "writeonly":
+            return BucketPermission.WRITE_ONLY
+        case "readonly":
+            return BucketPermission.READ_ONLY
+        case _:
+            logger.warning("Unknown permission %r; defaulting to 'none'", s)
+            return BucketPermission.NONE
 
 
 def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
@@ -309,22 +288,31 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                     logger.warning("Skipping non-dict bucket access request: %r", r)
                     continue
 
-                bucket_name = (r.get("bucketName") or r.get("bucket") or "").strip()
+                bucket_name = (r.get("bucketName") or "").strip()
                 if not bucket_name:
                     continue
                 if not (principal == wanted_principal or (bucket_name in wanted_buckets)):
                     continue
 
-                req_at = r.get("requestedAt") or r.get("requested_at")
+                req_at = r.get("requestedAt")
                 if not req_at:
                     logger.warning("Missing requestedAt for bucket %s; skipping.", bucket_name)
                     continue
+
+                reason = (r.get("reason") or "").strip().lower()
+
+                if "readonly" in reason or "read-only" in reason:
+                    perm = BucketPermission.READ_ONLY
+                elif "writeonly" in reason or "write-only" in reason:
+                    perm = BucketPermission.WRITE_ONLY
+                else:
+                    perm = BucketPermission.READ_WRITE
 
                 out.append(
                     BucketAccessRequest(
                         workspace=workspace_name,
                         bucket=bucket_name,
-                        permission=BucketPermission.NONE,
+                        permission=perm,
                         request_timestamp=req_at,
                         grant_timestamp=None,
                         denied_timestamp=None,
@@ -352,7 +340,7 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                     BucketAccessRequest(
                         workspace=wanted_workspace,
                         bucket=bucket_name,
-                        permission=BucketPermission.NONE,
+                        permission=BucketPermission.READ_WRITE,
                         request_timestamp=None,
                         grant_timestamp=None,
                         denied_timestamp=None,
@@ -385,9 +373,9 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
 
                 for existing in out:
                     if existing.bucket == bucket_name and existing.workspace == grantee_workspace:
-                        perm = _perm_from_str(g.get("permission"))
-                        existing.permission = perm
+                        # don't change existing permission
                         existing.request_timestamp = g.get("requestedAt") or granted_at
+                        perm = _perm_from_str(g.get("permission"))
                         existing.grant_timestamp = granted_at if perm != BucketPermission.NONE else None
                         existing.denied_timestamp = granted_at if perm == BucketPermission.NONE else None
                         break
@@ -427,15 +415,8 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     bucket = primary[0] if primary else None
     extra_buckets = _dedup_preserve(discoverable)
 
-    own_bucket_access_requests = _extract_own_bucket_access_requests(workspace_name, storage_spec)
-
     wanted = [b for b in [bucket] if b] + list(extra_buckets)
     relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(wanted, principal)
-
-    merged: dict[tuple[str, str], BucketAccessRequest] = {(r.workspace, r.bucket): r for r in own_bucket_access_requests}
-    for r in relevant_bucket_access_requests:
-        k = (r.workspace, r.bucket)
-        merged[k] = r
 
     users = (datalab_spec or {}).get("users") or []
     now = datetime.now(UTC)
@@ -485,7 +466,7 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         credentials=credentials,
         container_registry=container_registry,
         memberships=memberships,
-        bucket_access_requests=list(merged.values()),
+        bucket_access_requests=relevant_bucket_access_requests,
     )
 
 
@@ -558,15 +539,8 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     return JSONResponse(ws.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)
 
 
-def _serialize_request(r: BucketAccessRequest) -> dict[str, Any]:
-    return {
-        "bucketName": r.bucket,
-        "requestedAt": (r.request_timestamp.isoformat() if isinstance(r.request_timestamp, datetime) else r.request_timestamp),
-    }
-
-
 @app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
-async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:  # noqa: C901, PLR0912
+async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:  # noqa: C901, PLR0912, PLR0915
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
 
     try:
@@ -584,16 +558,68 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         if bname not in existing_names:
             buckets.append({"bucketName": bname, "discoverable": True})
 
-    curr_reqs = _extract_own_bucket_access_requests(workspace_name, storage_spec)
-    by_key: dict[tuple[str, str], BucketAccessRequest] = {(r.workspace, r.bucket): r for r in curr_reqs}
+    requests: list[dict] = storage_spec.get("bucketAccessRequests") or []
+    grants: list[dict] = storage_spec.get("bucketAccessGrants") or []
 
-    for r in update.patch_bucket_access_requests or []:
-        by_key[(r.workspace, r.bucket)] = r
+    req_by_bucket: dict[str, dict] = {(r.get("bucketName") or "").strip(): r for r in requests if isinstance(r, dict)}
+    gr_by_key: dict[tuple[str, str], dict] = {
+        ((g.get("bucketName") or "").strip(), (g.get("grantee") or "").strip()): g for g in grants if isinstance(g, dict)
+    }
+
+    for p in update.patch_bucket_access_requests or []:
+        bucket = (p.bucket or "").strip()
+        if not bucket:
+            continue
+
+        if p.workspace == workspace_name:
+            if bucket not in req_by_bucket:
+                requests.append(
+                    {
+                        "bucketName": bucket,
+                        "reason": "requesting access",
+                        "requestedAt": _iso(p.request_timestamp),
+                    }
+                )
+                req_by_bucket[bucket] = requests[-1]
+            else:
+                r = req_by_bucket[bucket]
+                r.setdefault("requestedAt", _iso(p.request_timestamp))
+        else:
+            grantee_principal = p.workspace
+            prefix = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
+            if p and p.workspace.startswith(prefix + "-"):
+                grantee_principal = p.workspace[len(prefix) + 1 :]
+
+            key = (bucket, grantee_principal)
+            g = gr_by_key.get(key)
+
+            if p.denied_timestamp:
+                perm = BucketPermission.NONE
+                granted_at = _iso(p.denied_timestamp)
+            elif p.grant_timestamp:
+                perm = _perm_from_str(p.permission)
+                granted_at = _iso(p.grant_timestamp)
+            else:
+                continue
+
+            if g is None:
+                g = {
+                    "bucketName": bucket,
+                    "grantee": grantee_principal,
+                    "permission": perm,
+                    "grantedAt": granted_at,
+                }
+                grants.append(g)
+                gr_by_key[key] = g
+            else:
+                g["permission"] = perm
+                g["grantedAt"] = granted_at
 
     storage_patch: dict[str, Any] = {
         "spec": {
             "buckets": buckets,
-            "bucketAccessRequests": [_serialize_request(r) for r in by_key.values()],
+            "bucketAccessRequests": requests,
+            "bucketAccessGrants": grants,
         }
     }
 

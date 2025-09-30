@@ -12,8 +12,8 @@
             "env": {
                 "KUBECONFIG": "${env:HOME}/.kube/config-kalpha",
                 "PREFIX_FOR_NAME": "s",
-                "AWS_REGION": "eu-nl",
-                "AWS_ENDPOINT_URL": "https://obs.eu-nl.otc.t-systems.com",
+                "AWS_REGION": "region-kalpha",
+                "AWS_ENDPOINT_URL": "https://endpoint-kalpha",
                 "UI_MODE": "ui"
             },
             "args": [

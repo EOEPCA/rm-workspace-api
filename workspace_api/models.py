@@ -16,11 +16,10 @@ class MembershipRole(str, enum.Enum):
 
 
 class BucketPermission(str, enum.Enum):
-    OWNER = "owner"
-    READ_WRITE = "readwrite"
-    READ_ONLY = "readonly"
-    WRITE_ONLY = "writeonly"
-    NONE = "none"
+    READ_WRITE = "ReadWrite"
+    READ_ONLY = "ReadOnly"
+    WRITE_ONLY = "WriteOnly"
+    NONE = "None"
 
 
 class WorkspaceStatus(str, enum.Enum):
