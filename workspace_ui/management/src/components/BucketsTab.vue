@@ -340,10 +340,10 @@ function openBucket(bucketName: string) {
 
 function requestBucket(row: Bucket) {
   console.log('request bucket', row.bucket)
-  const requestedBuckets = [row.bucket]
+  row.request_timestamp = new Date().toISOString()
+  const requestedBuckets = [row]
   saveRequestedBuckets(props.workspaceName, requestedBuckets)
     .then(() => {
-        row.request_timestamp = new Date().toISOString()
         $q.notify({
           type: 'positive',
           message: 'Request for Bucket access was successfully submitted!'
@@ -351,6 +351,7 @@ function requestBucket(row: Bucket) {
       }
     )
     .catch((err) => {
+      row.request_timestamp = undefined
       const msg = err instanceof Error ? err.message : String(err)
       $q.notify({
         type: 'negative',

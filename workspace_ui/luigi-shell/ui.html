@@ -20,8 +20,6 @@
       const request = '{{ request | safe }}';
       const workspaceData = '{{ workspace_data | safe }}';
       const endpointsData = '{{ endpoints_data | safe }}';
-      const membershipsData = '{{ memberships_data | safe }}';
-      const bucketAccessRequestsData = '{{ bucket_access_requests_data | safe }}';
       const frontendUrl = '{{ frontend_url | safe }}';
 
       function decodeData(base64String) {
@@ -39,11 +37,6 @@
       console.log('workspace')
       console.log(workspace)
       const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
-      const memberships = Array.isArray(decodeData(membershipsData)) ? decodeData(membershipsData) : [];
-      console.log(memberships)
-      const bucketAccessRequests = Array.isArray(decodeData(bucketAccessRequestsData)) ? decodeData(bucketAccessRequestsData) : [];
-      console.log(bucketAccessRequests)
-
       let children = [
         {
           pathSegment: 'management',
@@ -80,9 +73,7 @@
               viewUrl: frontendUrl + '/',
               children: children,
               context: {
-                workspace: workspace,
-                memberships: memberships,
-                bucketAccessRequests: bucketAccessRequests
+                workspace: workspace
               }
             }
           ]

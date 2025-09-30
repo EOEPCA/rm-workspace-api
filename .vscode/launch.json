@@ -10,7 +10,10 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "env": {
-                "KUBECONFIG": "${env:HOME}/.kube/config-eoepca-demo",
+                "KUBECONFIG": "${env:HOME}/.kube/config-kalpha",
+                "PREFIX_FOR_NAME": "s",
+                "AWS_REGION": "eu-nl",
+                "AWS_ENDPOINT_URL": "https://obs.eu-nl.otc.t-systems.com",
                 "UI_MODE": "ui"
             },
             "args": [

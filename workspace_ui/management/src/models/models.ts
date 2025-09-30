@@ -25,17 +25,15 @@ export interface Bucket {
   isPending?: boolean
 }
 
-export interface Storage {
-  credentials?: Record<string, unknown>;
-  buckets?: string[];
-}
-
 export interface Workspace {
   name: string
   version: string
   status: WorkspaceStatus
-  storage?: Storage
-  members?: string[]
+  bucket?: string
+  extra_buckets?: string[]
+  credentials?: Record<string, unknown>
+  memberships?: Membership[]
+  bucket_access_requests?: Bucket[]
 }
 
 export interface ExtraBucketUI {
@@ -51,14 +49,11 @@ export interface WorkspaceEditUI {
   memberships: Membership[],
   extra_buckets: ExtraBucketUI[]
   linked_buckets: Bucket[]
-  bucketAccessRequests?: Bucket[]
 }
 
 // Corresponding to Backend
 export interface WorkspaceEdit {
-  name: string
-  members: string[]
-  extra_buckets: string[]
-  linked_buckets: string[]
-  bucket_access_requests?: Bucket[]
+  add_members: string[]
+  add_extra_buckets: string[]
+  patch_bucket_access_requests?: Bucket[]
 }

@@ -1,11 +1,9 @@
 import { onMounted, ref } from 'vue'
 import type { LuigiClientLike } from 'src/types/luigi'
-import type {Bucket, Membership, Workspace} from 'src/models/models'
+import type {Workspace} from 'src/models/models'
 
 export type InitCtx = {
   workspace?: Workspace
-  memberships?: Membership[],
-  bucketAccessRequests?: Bucket[]
 }
 
 type Options = {

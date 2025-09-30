@@ -134,14 +134,15 @@ const requestedBucketsColumns: QTableColumn<Bucket>[] = [
 ]
 
 function grantBucket(row: Bucket) {
-  // POST /bucket-access-requests/:id/grant
-  row.grant_timestamp = new Date().toISOString()
-  row.denied_timestamp = undefined
+  const now = new Date().toISOString()
+  if (!row.request_timestamp) row.request_timestamp = now
+  row.grant_timestamp = now
+  delete row.denied_timestamp
   row.isPending = true
+
   const bucketGrants = [row]
   saveBucketGrants(props.workspaceName, bucketGrants)
     .then(() => {
-        row.request_timestamp = new Date().toISOString()
         $q.notify({
           type: 'positive',
           message: 'Bucket grant was successfully submitted!'
@@ -149,19 +150,22 @@ function grantBucket(row: Bucket) {
       }
     )
     .catch((err) => {
+      row.grant_timestamp = undefined
       const msg = err instanceof Error ? err.message : String(err)
       $q.notify({
         type: 'negative',
         message: `Error granting Bucket access: ${msg}`
       })
     })
-
 }
 
 function revokeBucket(row: Bucket) {
+  const now = new Date().toISOString()
+  if (!row.request_timestamp) row.request_timestamp = now
   // keep row.grant_timestamp unchanged
-  row.denied_timestamp = new Date().toISOString()
+  row.denied_timestamp = now
   row.isPending = true
+
   const bucketGrants = [row]
   saveBucketGrants(props.workspaceName, bucketGrants)
     .then(() => {
@@ -182,9 +186,12 @@ function revokeBucket(row: Bucket) {
 }
 
 function denyBucket(row: Bucket) {
-  row.grant_timestamp = undefined
-  row.denied_timestamp = new Date().toISOString()
+  const now = new Date().toISOString()
+  if (!row.request_timestamp) row.request_timestamp = now
+  row.denied_timestamp = now
+  delete row.grant_timestamp
   row.isPending = true
+
   const bucketGrants = [row]
   saveBucketGrants(props.workspaceName, bucketGrants)
     .then(() => {

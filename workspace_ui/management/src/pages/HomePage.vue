@@ -41,7 +41,7 @@
       </q-card>
 
       <!-- Members Table -->
-      <q-card v-if="workspace.members?.length" class="q-mb-md">
+      <q-card v-if="workspace.memberships?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Members</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -52,8 +52,8 @@
             </tr>
             </thead>
             <tbody>
-            <tr v-for="member in workspace.members" :key="member">
-              <td>{{ member }}</td>
+            <tr v-for="membership in workspace.memberships" :key="membership.member">
+              <td>{{ membership.member }}</td>
             </tr>
             </tbody>
           </q-markup-table>
@@ -61,20 +61,20 @@
       </q-card>
 
       <!-- Buckets Table -->
-      <q-card v-if="workspace.storage?.buckets?.length" class="q-mb-md">
+      <q-card v-if="(workspace?.bucket || workspace?.extra_buckets)?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Buckets</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
           <q-markup-table flat>
             <thead>
-            <tr>
-              <th class="text-left">Bucket Name</th>
-            </tr>
+              <tr>
+                <th class="text-left">Bucket Name</th>
+              </tr>
             </thead>
             <tbody>
-            <tr v-for="bucket in workspace.storage.buckets" :key="bucket">
-              <td>{{ bucket }}</td>
-            </tr>
+              <tr v-for="bucket in [ ...(workspace?.bucket ? [workspace.bucket] : []), ...(workspace?.extra_buckets || []) ]" :key="bucket">
+                <td>{{ bucket }}</td>
+              </tr>
             </tbody>
           </q-markup-table>
         </q-card-section>
@@ -100,12 +100,12 @@ const workspace = ref<Workspace | null>(null)
 
 /** ---- Computed helpers ---- */
 const hasCredentials = computed<boolean>(() => {
-  const creds = workspace.value?.storage?.credentials
+  const creds = workspace.value?.credentials
   return !!creds && Object.keys(creds).length > 0
 })
 
 const prettyCredentials = computed<string>(() =>
-  JSON.stringify(workspace.value?.storage?.credentials ?? {}, null, 2)
+  JSON.stringify(workspace.value?.credentials ?? {}, null, 2)
 )
 
 const {
