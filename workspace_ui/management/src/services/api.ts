@@ -5,17 +5,17 @@ import type {Bucket, WorkspaceEdit} from 'src/models/models'
 export function saveMembers(workspaceName: string, members: string[]) {
   const workspaceEdit = {
     add_members: members,
-    add_extra_buckets: [],
+    add_buckets: [],
     patch_bucket_access_requests: []
   } as WorkspaceEdit
 
   return saveWorkspace(workspaceName, workspaceEdit)
 }
 
-export function saveExtraBuckets(workspaceName: string, extraBuckets: string[]) {
+export function saveBuckets(workspaceName: string, buckets: string[]) {
   const workspaceEdit = {
     add_members: [],
-    add_extra_buckets: extraBuckets,
+    add_buckets: buckets,
     patch_bucket_access_requests: []
   } as WorkspaceEdit
 
@@ -25,7 +25,7 @@ export function saveExtraBuckets(workspaceName: string, extraBuckets: string[]) 
 export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bucket[]) {
   const workspaceEdit = {
     add_members: [],
-    add_extra_buckets: [],
+    add_buckets: [],
     patch_bucket_access_requests: requestedBuckets
   } as WorkspaceEdit
 
@@ -35,7 +35,7 @@ export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bu
 export function saveBucketGrants(workspaceName: string, grantedBuckets: Bucket[]) {
   const workspaceEdit = {
     add_members: [],
-    add_extra_buckets: [],
+    add_buckets: [],
     patch_bucket_access_requests: grantedBuckets
   } as WorkspaceEdit
 

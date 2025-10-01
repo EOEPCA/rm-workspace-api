@@ -1,11 +1,12 @@
 window.workspaceData =
 {
   "name": "s-john",
-  "creation_timestamp": "2025-09-30T07:10:51Z",
-  "version": "5037686636",
+  "creation_timestamp": "2025-10-01T10:32:54Z",
+  "version": "5057782805",
   "status": "ready",
-  "bucket": "s-john",
-  "extra_buckets": [],
+  "buckets": [
+    "s-john"
+  ],
   "credentials": {
     "bucketname": "s-john",
     "access": "REDACTED",

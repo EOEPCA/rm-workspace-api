@@ -1,14 +1,14 @@
 window.workspaceData =
 {
   "name": "s-joe",
-  "creation_timestamp": "2025-09-30T07:10:51Z",
-  "version": "5037682393",
+  "creation_timestamp": "2025-10-01T10:32:54Z",
+  "version": "5057603368",
   "status": "ready",
-  "extra_buckets": [
+  "buckets": [
     "s-joe"
   ],
   "credentials": {
-    "bucketname": "",
+    "bucketname": "s-joe",
     "access": "REDACTED",
     "secret": "REDACTED",
     "endpoint": "https://endpoint-kalpha",
@@ -18,12 +18,7 @@ window.workspaceData =
     {
       "member": "joe",
       "role": "owner",
-      "creation_timestamp": "2025-09-30T10:59:30.486738Z"
-    },
-    {
-      "member": "tom",
-      "role": "contributor",
-      "creation_timestamp": "2025-09-30T10:59:30.486738Z"
+      "creation_timestamp": "2025-10-01T12:31:52.908641Z"
     }
   ],
   "bucket_access_requests": [
@@ -46,6 +41,11 @@ window.workspaceData =
       "bucket": "s-joe",
       "permission": "ReadWrite",
       "request_timestamp": "2025-09-29T10:25:00Z"
+    },
+    {
+      "workspace": "s-joe",
+      "bucket": "s-john",
+      "permission": "ReadWrite"
     }
   ]
 }

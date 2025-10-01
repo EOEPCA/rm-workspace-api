@@ -61,7 +61,7 @@
       </q-card>
 
       <!-- Buckets Table -->
-      <q-card v-if="(workspace?.bucket || workspace?.extra_buckets)?.length" class="q-mb-md">
+      <q-card v-if="workspace?.buckets?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Buckets</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -72,7 +72,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="bucket in [ ...(workspace?.bucket ? [workspace.bucket] : []), ...(workspace?.extra_buckets || []) ]" :key="bucket">
+              <tr v-for="bucket in workspace?.buckets || []" :key="bucket">
                 <td>{{ bucket }}</td>
               </tr>
             </tbody>

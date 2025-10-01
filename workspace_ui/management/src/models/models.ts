@@ -29,14 +29,13 @@ export interface Workspace {
   name: string
   version: string
   status: WorkspaceStatus
-  bucket?: string
-  extra_buckets?: string[]
+  buckets?: string[]
   credentials?: Record<string, unknown>
   memberships?: Membership[]
   bucket_access_requests?: Bucket[]
 }
 
-export interface ExtraBucketUI {
+export interface BucketUI {
   bucket: string;
   requests: number;
   grants: number;
@@ -47,13 +46,13 @@ export interface ExtraBucketUI {
 export interface WorkspaceEditUI {
   name: string
   memberships: Membership[],
-  extra_buckets: ExtraBucketUI[]
+  buckets: BucketUI[]
   linked_buckets: Bucket[]
 }
 
 // Corresponding to Backend
 export interface WorkspaceEdit {
   add_members: string[]
-  add_extra_buckets: string[]
+  add_buckets: string[]
   patch_bucket_access_requests?: Bucket[]
 }

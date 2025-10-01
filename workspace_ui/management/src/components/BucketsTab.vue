@@ -1,27 +1,27 @@
 <template>
-  <!-- Extra Buckets -->
+  <!-- Buckets -->
   <div class="row items-center q-gutter-sm">
-    <div class="text-body1 q-mb-sm">Extra Buckets</div>
+    <div class="text-body1 q-mb-sm">Own Buckets</div>
     <q-space/>
     <q-btn
-      ref="btnAddExtraBucket"
+      ref="btnAddBucket"
       color="primary"
       flat
       no-caps
       class="q-mt-sm q-mb-lg"
-      @click="addExtraBucket"
+      @click="addBucket"
     >
       <q-icon name="add" class="q-mr-sm"/>
-      Add Extra Bucket
+      Add Bucket
     </q-btn>
   </div>
 
   <q-table
-    ref="extraBucketTable"
+    ref="bucketTable"
     class="my-sticky-header-table"
     style="max-height: calc(350px)"
-    :rows="myExtraBuckets"
-    :columns="extraBucketsColumns"
+    :rows="myBuckets"
+    :columns="bucketsColumns"
     row-key="id"
     flat
     bordered
@@ -45,8 +45,8 @@
         >
         <template v-slot:append>
           <q-btn dense flat icon="save" color="green"
-                 @click="createExtraBucket">
-            <q-tooltip>Save added Extra Bucket</q-tooltip>
+                 @click="createBucket">
+            <q-tooltip>Save added Bucket</q-tooltip>
           </q-btn>
         </template>
         </q-input>
@@ -58,7 +58,7 @@
 
     <template v-slot:body-cell-actions="props">
       <q-td :props="props">
-        <q-btn v-if="props.row.isNew" dense flat icon="delete" color="negative" @click="deleteExtraBucket(props.row)">
+        <q-btn v-if="props.row.isNew" dense flat icon="delete" color="negative" @click="deleteBucket(props.row)">
           <q-tooltip>Delete bucket</q-tooltip>
         </q-btn>
       </q-td>
@@ -121,20 +121,20 @@
 import {computed, ref, watch} from 'vue'
 import type {QTableColumn} from 'quasar'
 import {QTable, useQuasar} from 'quasar'
-import type {Bucket, ExtraBucketUI} from 'src/models/models'
+import type {Bucket, BucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {sortByBucketNameAsc} from 'src/services/sorting'
-import {saveExtraBuckets, saveRequestedBuckets} from 'src/services/api'
+import {saveBuckets, saveRequestedBuckets} from 'src/services/api'
 
 const props = defineProps<{
   workspaceName: string
-  extraBuckets: ExtraBucketUI[]
+  buckets: BucketUI[]
   linkedBuckets: Bucket[]
 }>()
 
 /*
 const emit = defineEmits<{
-  (e: 'update:extra-buckets', v: ExtraBucketUI[]): void
+  (e: 'update:buckets', v: BucketUI[]): void
   (e: 'update:linked-buckets', v: Bucket[]): void
   (e: 'update:show', v: boolean): void
   (e: 'update:show-all', v: boolean): void
@@ -147,9 +147,9 @@ const allAvailableBuckets = ref<boolean>(false)
 
 /** local proxies for v-model */
 /*
-const extraBuckets = computed({
-  get: () => props.extraBuckets,
-  set: (v) => emit('update:extra-buckets', v)
+const buckets = computed({
+  get: () => props.buckets,
+  set: (v) => emit('update:buckets', v)
 })
 const linkedBuckets = computed({
   get: () => props.linkedBuckets,
@@ -157,10 +157,10 @@ const linkedBuckets = computed({
 })
  */
 
-const myExtraBuckets = ref<ExtraBucketUI[]>([])
+const myBuckets = ref<BucketUI[]>([])
 watch(
-  () => props.extraBuckets,
-  (v) => { myExtraBuckets.value = v.map(x => ({ ...x })) },
+  () => props.buckets,
+  (v) => { myBuckets.value = v.map(x => ({ ...x })) },
   { immediate: true }
 )
 
@@ -180,12 +180,12 @@ const myLinkedBuckets = computed(() =>
     .sort(sortByBucketNameAsc)
 )
 
-const extraBucketTable = ref<QTable | null>(null)
-const newExtraBucketsCount = ref(0)
-const btnAddExtraBucket = ref()
+const bucketTable = ref<QTable | null>(null)
+const newBucketsCount = ref(0)
+const btnAddBucket = ref()
 const newBucket = ref()
 
-const extraBucketsColumns: QTableColumn<ExtraBucketUI>[] = [
+const bucketsColumns: QTableColumn<BucketUI>[] = [
   {
     name: 'bucket',
     label: 'Bucket',
@@ -252,15 +252,15 @@ const bucketInitialPagination = {
 const linkedBucketStyle = computed(() => {
   /*
   let top
-  if (btnAddExtraBucket.value) {
-    const el = btnAddExtraBucket.value?.$el
+  if (btnAddBucket.value) {
+    const el = btnAddBucket.value?.$el
     top = el.getBoundingClientRect().top
   } else {
     top = 300
   }
 
    */
-  const top = 55* Math.min(newExtraBucketsCount.value, 5)
+  const top = 55* Math.min(newBucketsCount.value, 5)
 //  console.log(top)
   return {
     // height: `${state.table1Height}px`,
@@ -270,26 +270,26 @@ const linkedBucketStyle = computed(() => {
 })
 
 
-function addExtraBucket() {
-  console.log('add extra bucket')
-  const idxNew = myExtraBuckets.value.findIndex((b) => !b.bucket || b.isNew)
+function addBucket() {
+  console.log('add bucket')
+  const idxNew = myBuckets.value.findIndex((b) => !b.bucket || b.isNew)
   if (idxNew < 0) {
-    myExtraBuckets.value.push({bucket: props.workspaceName + '-', isNew: true} as ExtraBucketUI)
-    newExtraBucketsCount.value++
+    myBuckets.value.push({bucket: props.workspaceName + '-', isNew: true} as BucketUI)
+    newBucketsCount.value++
   }
 
-  scrollToAndFocusLastRow(extraBucketTable.value)
+  scrollToAndFocusLastRow(bucketTable.value)
 }
 
-function deleteExtraBucket(row: ExtraBucketUI) {
-  const index = myExtraBuckets.value.findIndex(b => b.bucket === row.bucket)
+function deleteBucket(row: BucketUI) {
+  const index = myBuckets.value.findIndex(b => b.bucket === row.bucket)
   if (index !== -1) {
-    myExtraBuckets.value.splice(index, 1)
-    newExtraBucketsCount.value--
+    myBuckets.value.splice(index, 1)
+    newBucketsCount.value--
   }
 }
 
-function createExtraBucket() {
+function createBucket() {
 
   newBucket.value.validate()
 
@@ -297,10 +297,10 @@ function createExtraBucket() {
     return
   }
 
-  const buckets = myExtraBuckets.value.filter(b => !!b.bucket).map(b => b.bucket)
-  saveExtraBuckets(props.workspaceName, buckets)
+  const buckets = myBuckets.value.filter(b => !!b.bucket).map(b => b.bucket)
+  saveBuckets(props.workspaceName, buckets)
     .then(() => {
-      myExtraBuckets.value.forEach( (bucket: ExtraBucketUI) => {
+      myBuckets.value.forEach( (bucket: BucketUI) => {
           if (bucket.isNew) {
             bucket.isPending = true
           }
@@ -308,7 +308,7 @@ function createExtraBucket() {
         })
         $q.notify({
           type: 'positive',
-          message: 'Extra Bucket was successfully submitted!'
+          message: 'Bucket was successfully submitted!'
         })
       }
     )
@@ -316,7 +316,7 @@ function createExtraBucket() {
       const msg = err instanceof Error ? err.message : String(err)
       $q.notify({
         type: 'negative',
-        message: `Error creating Extra Buckets: ${msg}`
+        message: `Error creating Buckets: ${msg}`
       })
     })
 }

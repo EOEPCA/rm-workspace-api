@@ -1,11 +1,11 @@
 window.workspaceData =
 {
   "name": "s-jeff",
-  "creation_timestamp": "2025-09-30T07:10:50Z",
-  "version": "5034883088",
+  "creation_timestamp": "2025-10-01T10:32:54Z",
+  "version": "5056521995",
   "status": "ready",
-  "bucket": "s-jeff",
-  "extra_buckets": [
+  "buckets": [
+    "s-jeff",
     "s-jeff-shared"
   ],
   "credentials": {
@@ -32,10 +32,9 @@ window.workspaceData =
       "grant_timestamp": "2025-09-29T10:15:00Z"
     },
     {
-      "workspace": "s-john",
-      "bucket": "s-jeff",
-      "permission": "ReadWrite",
-      "request_timestamp": "2025-09-29T10:26:00Z"
+      "workspace": "s-jeff",
+      "bucket": "s-john",
+      "permission": "ReadWrite"
     }
   ]
 }

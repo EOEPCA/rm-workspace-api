@@ -156,7 +156,7 @@ class WorkspaceEdit(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace edit (patch) request."})
 
     add_members: list[str] = Field(default_factory=list, description="Members to add.")
-    add_extra_buckets: list[str] = Field(default_factory=list, description="Buckets to add.")
+    add_buckets: list[str] = Field(default_factory=list, description="Buckets to add.")
     patch_bucket_access_requests: list[BucketAccessRequest] = Field(
         default_factory=list,
         description="Bucket access requests/grants to upsert. Each entry MUST have workspace, bucket, and request_timestamp.",
@@ -174,7 +174,7 @@ class WorkspaceEdit(BaseModel):
                 out.append(m2)
         return out
 
-    @field_validator("add_extra_buckets")
+    @field_validator("add_buckets")
     @classmethod
     def _check_buckets(cls, v: list[str]) -> list[str]:
         return _validate_bucket_list(v)
@@ -226,8 +226,7 @@ class Workspace(BaseModel):
     creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the S3 credentials secret.")
     version: str | None = Field(None, description="Resource version for optimistic locking.")
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
-    bucket: str | None = Field(None, description="Primary/default S3 bucket.")
-    extra_buckets: list[str] = Field(default_factory=list, description="Extra buckets.")
+    buckets: list[str] = Field(default_factory=list, description="Owned Buckets.")
     credentials: Credentials | None = Field(None, description="S3 credentials (bucket, keys, endpoint, region).")
     container_registry: ContainerRegistryCredentials | None = Field(None, description="Credentials for the workspace's container registry.")
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
@@ -241,14 +240,7 @@ class Workspace(BaseModel):
     def _ts_utc_opt(cls, v: datetime | None) -> datetime | None:
         return _coerce_utc(v)
 
-    @field_validator("bucket")
-    @classmethod
-    def _bucket_single(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        return _validate_bucket_name(v)
-
-    @field_validator("extra_buckets")
+    @field_validator("buckets")
     @classmethod
     def _bucket_lists(cls, v: list[str]) -> list[str]:
         return _validate_bucket_list(v)

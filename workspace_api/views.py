@@ -399,24 +399,18 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     principal = storage_spec.get("principal") or config.WORKSPACE_SECRET_NAME
 
     buckets = storage_spec.get("buckets") or []
-
-    primary: list[str] = []
-    discoverable: list[str] = []
+    all_buckets: list[str] = []
+    discoverable_buckets: list[str] = []
 
     for it in buckets:
         bname = _bucketname_from(it or {}) or ""
         if not bname:
             continue
+        all_buckets.append(bname)
         if _as_bool((it or {}).get("discoverable")):
-            discoverable.append(bname)
-        else:
-            primary.append(bname)
+            discoverable_buckets.append(bname)
 
-    bucket = primary[0] if primary else None
-    extra_buckets = _dedup_preserve(discoverable)
-
-    wanted = [b for b in [bucket] if b] + list(extra_buckets)
-    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(wanted, principal)
+    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(_dedup_preserve(discoverable_buckets), principal)
 
     users = (datalab_spec or {}).get("users") or []
     now = datetime.now(UTC)
@@ -441,7 +435,7 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         try:
             envs = {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
             credentials = Credentials(
-                bucketname=bucket or (envs.get("BUCKET") or ""),
+                bucketname=all_buckets[0] if buckets else (envs.get("BUCKET") or ""),
                 access=envs.get("AWS_ACCESS_KEY_ID", envs.get("access", envs.get("attribute.access", ""))),
                 secret=envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", envs.get("attribute.secret", ""))),
                 endpoint=envs.get("AWS_ENDPOINT_URL", envs.get("endpoint", envs.get("attribute.endpoint", config.ENDPOINT))),
@@ -461,8 +455,7 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         creation_timestamp=creation_timestamp,
         version=version,
         status=status,
-        bucket=bucket,
-        extra_buckets=extra_buckets,
+        buckets=all_buckets,
         credentials=credentials,
         container_registry=container_registry,
         memberships=memberships,
@@ -554,7 +547,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
 
     buckets = storage_spec.get("buckets") or []
     existing_names = {(_bucketname_from(b) or ""): b for b in buckets}
-    for bname in update.add_extra_buckets or []:
+    for bname in update.add_buckets or []:
         if bname not in existing_names:
             buckets.append({"bucketName": bname, "discoverable": True})
 

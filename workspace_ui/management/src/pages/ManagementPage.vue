@@ -54,7 +54,7 @@
             <q-tab-panel name="buckets">
               <BucketsTab
                 :workspace-name="form.name"
-                v-model:extra-buckets="form.extra_buckets"
+                v-model:buckets="form.buckets"
                 v-model:linked-buckets="form.linked_buckets"
               />
 
@@ -77,7 +77,7 @@
 
 <script setup lang="ts">
 import {computed, ref} from 'vue'
-import type {Bucket, ExtraBucketUI, WorkspaceEditUI} from 'src/models/models'
+import type {Bucket, BucketUI, WorkspaceEditUI} from 'src/models/models'
 import {useLuigiWorkspace} from 'src/composables/useLuigi'
 import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
@@ -89,7 +89,7 @@ const message = ref<string>('')
 const form = ref<WorkspaceEditUI>({
   name: '',
   memberships: [],
-  extra_buckets: [],
+  buckets: [],
   linked_buckets: []
 })
 
@@ -112,24 +112,24 @@ const {loading} = useLuigiWorkspace({
         form.value = {
           name: ws.name,
           memberships: (ws.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
-          extra_buckets: (ws.extra_buckets ?? []).map(b => ({
+          buckets: (ws.buckets ?? []).map(b => ({
               bucket: b,
               requests: 0,
               grants: 0
-            } as ExtraBucketUI)) ?? [],
+            } as BucketUI)) ?? [],
           linked_buckets: ws.bucket_access_requests ?? []
         }
 
-        // prepare number of requests and grants for extraBuckets
+        // prepare number of requests and grants for buckets
         form.value.linked_buckets.forEach((b: Bucket) => {
           if (b.workspace !== ws.name) {
-            const extraBucket = form.value.extra_buckets.find((ex => ex.bucket === b.bucket))
-            if (extraBucket) {
+            const bucket = form.value.buckets.find((ex => ex.bucket === b.bucket))
+            if (bucket) {
               if (b.request_timestamp) {
-                extraBucket.requests++
+                bucket.requests++
               }
               if (b.grant_timestamp) {
-                extraBucket.grants++
+                bucket.grants++
               }
             }
           }
