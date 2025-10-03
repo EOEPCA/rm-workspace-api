@@ -2,18 +2,19 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Run FastAPI App",
+            "name": "Debug",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
+            "justMyCode": true,
             "env": {
-                "HARBOR_URL": "",
-                "HARBOR_ADMIN_USERNAME": "",
-                "HARBOR_ADMIN_PASSWORD": "",
-                "PREFIX_FOR_NAME": "ws",
-                "WORKSPACE_SECRET_NAME": "workspace",
-                "KUBECONFIG": "${env:HOME}/.kube/config-eoepca-demo"
+                "KUBECONFIG": "${env:HOME}/.kube/config-kalpha",
+                "PREFIX_FOR_NAME": "s",
+                "AWS_REGION": "region-kalpha",
+                "AWS_ENDPOINT_URL": "https://endpoint-kalpha",
+                "UI_MODE": "ui"
             },
             "args": [
                 "workspace_api:app",
@@ -21,7 +22,7 @@
                 "--host",
                 "0.0.0.0",
                 "--port",
-                "5000",
+                "8080",
                 "--log-level",
                 "info"
             ]

@@ -1,71 +1,524 @@
+# Copyright 2025, EOX (https://eox.at) and Versioneer (https://versioneer.at)
+# SPDX-License-Identifier: Apache-2.0
+
 import base64
-import enum
+import binascii
+import json
 import logging
+import re
 import uuid
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from http import HTTPStatus
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any
 
 import kubernetes.client
 import kubernetes.client.rest
-from fastapi import BackgroundTasks, Header, HTTPException, Path, Request, Response
+from fastapi import HTTPException, Path, Request, Response
+from fastapi.responses import JSONResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.dynamic import DynamicClient
-from pydantic import BaseModel
 from slugify import slugify
 
 from workspace_api import app, config, templates
 
+from .models import (
+    BucketAccessRequest,
+    BucketPermission,
+    ContainerRegistryCredentials,
+    Credentials,
+    Datalab,
+    DatalabStatus,
+    Membership,
+    MembershipRole,
+    Storage,
+    Workspace,
+    WorkspaceCreate,
+    WorkspaceEdit,
+    WorkspaceStatus,
+)
+
 logger = logging.getLogger(__name__)
 
-CONTAINER_REGISTRY_SECRET_NAME = "container-registry"
+
+def _with_prefix(name: str) -> str:
+    p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip()
+    p = p.rstrip("-")
+    return f"{p}-{name}" if p else name
+
+
+def _workspace_name_pattern() -> str:
+    p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
+    if p:
+        return rf"^{re.escape(p)}-"
+    return r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+
+
+def _iso(ts: datetime | None) -> str | None:
+    if ts is None:
+        return None
+    return ts.isoformat() if isinstance(ts, datetime) else str(ts)
+
+
+WORKSPACE_NAME_PATTERN = _workspace_name_pattern()
+workspace_path_type = Path(..., pattern=WORKSPACE_NAME_PATTERN)
+
+API_PKG_INTERNAL = "pkg.internal/v1beta1"
+KIND_STORAGE = "Storage"
+KIND_DATALAB = "Datalab"
+CRD_STORAGE = "storages.pkg.internal"
+CRD_DATALAB = "datalabs.pkg.internal"
 
 
 @app.on_event("startup")
-async def load_k8s_config():
+async def load_k8s_config() -> None:
     try:
         k8s_config.load_kube_config()
-    except Exception:
+    except k8s_config.ConfigException:
         try:
             k8s_config.load_incluster_config()
-        except Exception:
-            logger.error("Failed to load Kubernetes configuration", exc_info=True)
+        except k8s_config.ConfigException:
+            logger.exception("Failed to load Kubernetes configuration")
             raise
 
 
-def fetch_secret(secret_name: str, namespace: str) -> Optional[k8s_client.V1Secret]:
+def current_namespace() -> str:
     try:
-        return cast(
-            k8s_client.V1Secret,
-            k8s_client.CoreV1Api().read_namespaced_secret(
-                name=secret_name,
-                namespace=namespace,
-            ),
+        return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
+    except FileNotFoundError:
+        return "workspace"
+
+
+def _dyn() -> DynamicClient:
+    return DynamicClient(kubernetes.client.ApiClient())
+
+
+def _res_required(api: str, kind: str) -> Any:
+    try:
+        return _dyn().resources.get(api_version=api, kind=kind)
+    except Exception as e:
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail={"error": f"Required CRD for kind {kind} ({api}) not available", "exception": str(e)},
+        ) from e
+
+
+def _res_optional(api: str, kind: str) -> Any:
+    try:
+        return _dyn().resources.get(api_version=api, kind=kind)
+    except Exception:
+        return None
+
+
+def fetch_secret(secret_name: str, namespace: str) -> k8s_client.V1Secret | None:
+    try:
+        return k8s_client.CoreV1Api().read_namespaced_secret(
+            name=secret_name,
+            namespace=namespace,
         )
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             return None
-        else:
-            raise
+        raise
 
 
-class WorkspaceCreate(BaseModel):
-    preferred_name: str = ""
-    default_owner: str = ""
+def _to_b64_json(obj: Any) -> str:
+    return base64.b64encode(json.dumps(obj).encode("utf-8")).decode("utf-8")
+
+
+def _crd_exists(name: str) -> bool:
+    api = k8s_client.ApiextensionsV1Api()
+    try:
+        api.read_custom_resource_definition(name)
+        return True  # noqa: TRY300
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return False
+        raise
+
+
+def _render_principal_placeholder(template: str | None, principal: str) -> str | None:
+    """Replace principal placeholders in a secret name template, if present.
+
+    Supports both '<principal>' and '{principal}' forms. If template is None or
+    empty, returns it unchanged.
+    """
+    if not template:
+        return template
+    s = str(template)
+    return s.replace("<principal>", principal).replace("{principal}", principal)
+
+
+def _storage_secret_name_for(principal: str) -> str | None:
+    """Resolve storage secret name from config with principal substitution."""
+    tmpl = getattr(config, "STORAGE_SECRET_NAME", None)
+    return _render_principal_placeholder(tmpl, principal)
+
+
+def _registry_secret_name_for(principal: str) -> str | None:
+    """Resolve container registry secret name from config with principal substitution."""
+    tmpl = getattr(config, "CONTAINER_REGISTRY_SECRET_NAME", None)
+    return _render_principal_placeholder(tmpl, principal)
+
+
+@app.get("/status", status_code=HTTPStatus.OK)
+async def status() -> Response:
+    storage_present = _crd_exists(CRD_STORAGE)
+    datalab_present = _crd_exists(CRD_DATALAB)
+
+    if not storage_present:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": f"Required CRD {CRD_STORAGE} not found in cluster",
+                "datalab_crd_present": datalab_present,
+            },
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "storage_crd_present": True,
+        "datalab_crd_present": datalab_present,
+    }
+    if not datalab_present:
+        payload["warnings"] = [f"Optional CRD {CRD_DATALAB} not found; memberships will be empty."]
+    return JSONResponse(payload, status_code=HTTPStatus.OK)
+
+
+def _get_cr(kind: str, name: str, required: bool) -> Any | None:
+    api = _res_required(API_PKG_INTERNAL, kind) if required else _res_optional(API_PKG_INTERNAL, kind)
+    if api is None:
+        return None
+    try:
+        return api.get(name=name, namespace=current_namespace())
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return None
+        raise
+
+
+def _to_spec_dict(obj: Any) -> dict[str, Any] | None:
+    if obj is None:
+        return None
+    spec = getattr(obj, "spec", None)
+    if spec is None:
+        return None
+    return spec.to_dict() if hasattr(spec, "to_dict") else spec
+
+
+def _get_container_registry_credentials(principal: str) -> ContainerRegistryCredentials | None:
+    secret_name = _registry_secret_name_for(principal)
+    if not secret_name:
+        return None
+    secret = fetch_secret(secret_name, current_namespace())
+    if not secret or not secret.data:
+        return None
+    try:
+        username = base64.b64decode(secret.data["username"]).decode()
+        password = base64.b64decode(secret.data["password"]).decode()
+        return ContainerRegistryCredentials(username=username, password=password)
+    except (KeyError, binascii.Error) as e:
+        logger.warning("Failed to decode container registry secret '%s': %s", secret_name, e)
+        return None
+
+
+def _as_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, int | float):
+        return v != 0
+    s = str(v).strip().lower()
+    return s in {"true", "1", "yes", "y", "on"}
+
+
+def _get_first(*vals: Any) -> str | None:
+    for v in vals:
+        if v is not None:
+            s = str(v).strip()
+            if s:
+                return s
+    return None
+
+
+def _bucketname_from(d: dict) -> str | None:
+    return _get_first(
+        d.get("bucketName"),
+        d.get("bucket"),
+    )
+
+
+def _dedup_preserve(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in items:
+        if it and it not in seen:
+            seen.add(it)
+            out.append(it)
+    return out
+
+
+def _perm_from_str(s: str | None) -> BucketPermission:
+    raw = (s or "none").strip().lower().replace("_", "").replace("-", "")
+
+    match raw:
+        case "none":
+            return BucketPermission.NONE
+        case "readwrite":
+            return BucketPermission.READ_WRITE
+        case "writeonly":
+            return BucketPermission.WRITE_ONLY
+        case "readonly":
+            return BucketPermission.READ_ONLY
+        case _:
+            logger.warning("Unknown permission %r; defaulting to 'none'", s)
+            return BucketPermission.NONE
+
+
+def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
+    wanted_bucket_names: Sequence[str],
+    wanted_principal: str,
+) -> list[BucketAccessRequest]:
+    try:
+        storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+        storages = storage_api.get(namespace=current_namespace())
+        storage_items = getattr(storages, "items", []) or []
+    except Exception as e:
+        logger.warning("Failed listing storages: %s", e)
+        storage_items = []
+
+    wanted_workspace = _with_prefix(wanted_principal)
+    wanted_buckets = {b.strip() for b in (wanted_bucket_names or []) if isinstance(b, str) and b.strip()}
+
+    def _spec_dict(obj: Any) -> dict:
+        if hasattr(obj, "spec") and hasattr(obj.spec, "to_dict"):
+            return obj.spec.to_dict() or {}
+        return (getattr(obj, "spec", {}) or {}) if isinstance(getattr(obj, "spec", {}), dict) else {}
+
+    out: list[BucketAccessRequest] = []
+
+    # first pass: bucketAccessRequests
+    for obj in storage_items:
+        workspace_name = (getattr(obj.metadata, "name", None) or "").strip()
+        spec = _spec_dict(obj)
+        if not isinstance(spec, dict):
+            continue
+
+        principal = (spec.get("principal") or "").strip()
+        if not principal:
+            continue
+
+        requests = spec.get("bucketAccessRequests") or []
+        if isinstance(requests, list):
+            for r in requests:
+                if not isinstance(r, dict):
+                    logger.warning("Skipping non-dict bucket access request: %r", r)
+                    continue
+
+                bucket_name = (r.get("bucketName") or "").strip()
+                if not bucket_name:
+                    continue
+                if not (principal == wanted_principal or (bucket_name in wanted_buckets)):
+                    continue
+
+                req_at = r.get("requestedAt")
+                if not req_at:
+                    logger.warning("Missing requestedAt for bucket %s; skipping.", bucket_name)
+                    continue
+
+                reason = (r.get("reason") or "").strip().lower()
+
+                if "readonly" in reason or "read-only" in reason:
+                    perm = BucketPermission.READ_ONLY
+                elif "writeonly" in reason or "write-only" in reason:
+                    perm = BucketPermission.WRITE_ONLY
+                else:
+                    perm = BucketPermission.READ_WRITE
+
+                out.append(
+                    BucketAccessRequest(
+                        workspace=workspace_name,
+                        bucket=bucket_name,
+                        permission=perm,
+                        request_timestamp=req_at,
+                        grant_timestamp=None,
+                        denied_timestamp=None,
+                    )
+                )
+
+    # second pass: (other) discoverable buckets
+    existing_buckets = {bar.bucket for bar in out}
+    for obj in storage_items:
+        spec = _spec_dict(obj)
+        if not isinstance(spec, dict):
+            continue
+
+        buckets = spec.get("buckets") or []
+        if isinstance(buckets, list):
+            for b in buckets:
+                if not isinstance(b, dict) or not _as_bool(b.get("discoverable")):
+                    continue
+
+                bucket_name = (b.get("bucketName") or "").strip()
+                if not bucket_name or bucket_name in existing_buckets:
+                    continue
+
+                out.append(
+                    BucketAccessRequest(
+                        workspace=wanted_workspace,
+                        bucket=bucket_name,
+                        permission=BucketPermission.READ_WRITE,
+                        request_timestamp=None,
+                        grant_timestamp=None,
+                        denied_timestamp=None,
+                    )
+                )
+                existing_buckets.add(bucket_name)
+
+    # third pass: bucketAccessGrants
+    for obj in storage_items:
+        spec = _spec_dict(obj)
+        if not isinstance(spec, dict):
+            continue
+
+        grants = spec.get("bucketAccessGrants") or []
+        if isinstance(grants, list):
+            for g in grants:
+                if not isinstance(g, dict):
+                    continue
+
+                grantee = (g.get("grantee") or "").strip()
+                bucket_name = (g.get("bucketName") or "").strip()
+                if not grantee or not bucket_name:
+                    continue
+
+                grantee_workspace = _with_prefix(grantee)
+                granted_at = g.get("grantedAt") or g.get("granted_at")
+                if not granted_at:
+                    logger.warning("Skipping grant for grantee %s on bucket %s: missing grantedAt", grantee_workspace, bucket_name)
+                    continue
+
+                for existing in out:
+                    if existing.bucket == bucket_name and existing.workspace == grantee_workspace:
+                        # don't change existing permission
+                        existing.request_timestamp = g.get("requestedAt") or granted_at
+                        perm = _perm_from_str(g.get("permission"))
+                        existing.grant_timestamp = granted_at if perm != BucketPermission.NONE else None
+                        existing.denied_timestamp = granted_at if perm == BucketPermission.NONE else None
+                        break
+
+    return out
+
+
+def _combine_workspace(workspace_name: str) -> Workspace:
+    storage_cr = _get_cr(KIND_STORAGE, workspace_name, required=True)
+    if not storage_cr:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"error": f"Storage '{workspace_name}' not found", "crd": CRD_STORAGE},
+        )
+
+    datalab_cr = _get_cr(KIND_DATALAB, workspace_name, required=False)
+
+    storage_spec = _to_spec_dict(storage_cr) or {}
+    datalab_spec = _to_spec_dict(datalab_cr) or {}
+
+    principal = storage_spec.get("principal") or workspace_name
+
+    buckets = storage_spec.get("buckets") or []
+    all_buckets: list[str] = []
+    discoverable_buckets: list[str] = []
+
+    for it in buckets:
+        bname = _bucketname_from(it or {}) or ""
+        if not bname:
+            continue
+        all_buckets.append(bname)
+        if _as_bool((it or {}).get("discoverable")):
+            discoverable_buckets.append(bname)
+
+    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(_dedup_preserve(discoverable_buckets), principal)
+
+    users = (datalab_spec or {}).get("users") or []
+    now = datetime.now(UTC)
+    memberships = [
+        Membership(
+            member=u.strip(),
+            role=MembershipRole.OWNER if u == principal else MembershipRole.CONTRIBUTOR,
+            creation_timestamp=now,
+        )
+        for u in users
+        if isinstance(u, str) and u.strip()
+    ]
+
+    credentials = None
+    secret = None
+    storage_secret_name = _storage_secret_name_for(principal)
+    if storage_secret_name:
+        secret = fetch_secret(storage_secret_name, current_namespace())
+
+    if secret and secret.data:
+        try:
+            envs = {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
+            credentials = Credentials(
+                bucketname=all_buckets[0] if buckets else (envs.get("BUCKET") or ""),
+                access=envs.get("AWS_ACCESS_KEY_ID", envs.get("access", envs.get("attribute.access", ""))),
+                secret=envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", envs.get("attribute.secret", ""))),
+                endpoint=envs.get(
+                    "AWS_ENDPOINT_URL", envs.get("endpoint", envs.get("attribute.endpoint", getattr(config, "ENDPOINT", None)))
+                ),
+                region=envs.get("AWS_REGION", envs.get("region", envs.get("attribute.region", getattr(config, "REGION", None)))),
+            )
+        except (KeyError, TypeError, binascii.Error) as e:
+            logger.warning("Error decoding credentials secret '%s': %s", getattr(secret.metadata, "name", "<unknown>"), e)
+
+    container_registry = _get_container_registry_credentials(principal)
+
+    creation_timestamp = getattr(storage_cr.metadata, "creationTimestamp", None)
+    version = storage_cr.metadata.resourceVersion
+    workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
+
+    sessions = (datalab_spec or {}).get("sessions") or []
+    mode = str(getattr(config, "SESSION_AUTO_MODE", "no")).strip().lower()
+    datalab_status = (
+        DatalabStatus.ALWAYS_ON
+        if (isinstance(sessions, list) and sessions)
+        else DatalabStatus.ON_DEMAND
+        if mode in {"yes", "auto", "on-demand", "on_demand"}
+        else DatalabStatus.DISABLED
+    )
+
+    storage = Storage(
+        buckets=all_buckets,
+        credentials=credentials,
+        bucket_access_requests=relevant_bucket_access_requests,
+    )
+    datalab = Datalab(memberships=memberships, status=datalab_status)
+
+    return Workspace(
+        name=workspace_name,
+        creation_timestamp=creation_timestamp,
+        version=version,
+        status=workspace_status,
+        storage=storage,
+        datalab=datalab,
+        container_registry=container_registry,
+    )
 
 
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
-async def create_workspace(
-    data: WorkspaceCreate,
-    background_tasks: BackgroundTasks,
-    authorization: Union[str, None] = Header(default=None),
-):
-    workspace_name = workspace_name_from_preferred_name(data.preferred_name)
+async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
+    safe_name = slugify(data.preferred_name, max_length=32) or str(uuid.uuid4())
+    workspace_name = _with_prefix(safe_name)
 
-    dynamic_client = DynamicClient(kubernetes.client.ApiClient())
-    workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
+    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+
     try:
-        workspace_api.get(name=workspace_name, namespace=current_namespace())
+        storage_api.get(name=workspace_name, namespace=current_namespace())
         raise HTTPException(
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             detail={"error": "Workspace with this name already exists"},
@@ -74,285 +527,231 @@ async def create_workspace(
         if e.status != HTTPStatus.NOT_FOUND:
             raise
 
-    logger.info(f"Creating {workspace_name} in {current_namespace()}")
-
-    workspace_api.create(
+    storage_api.create(
         {
-            "apiVersion": "epca.eo/v1beta1",
-            "kind": "Workspace",
+            "apiVersion": API_PKG_INTERNAL,
+            "kind": KIND_STORAGE,
             "metadata": {"name": workspace_name},
-            "spec": {"owner": data.default_owner, "defaultBucket": workspace_name},
+            "spec": {
+                "principal": safe_name,
+                "buckets": [{"bucketName": workspace_name, "discoverable": False}],
+                "sessions": [] if _as_bool(getattr(config, "SESSION_AUTO_MODE", "no")) else ["default"],
+                "vcluster": _as_bool(getattr(config, "USE_VCLUSTER", "no") or "no"),
+            },
         },
         namespace=current_namespace(),
     )
 
+    if datalab_api is not None:
+        datalab_api.create(
+            {
+                "apiVersion": API_PKG_INTERNAL,
+                "kind": KIND_DATALAB,
+                "metadata": {"name": workspace_name},
+                "spec": {"users": [data.default_owner]},
+            },
+            namespace=current_namespace(),
+        )
+
     return {"name": workspace_name}
 
 
-class WorkspaceEdit(BaseModel):
-    cluster_status: str
-    members: List[str]
-    buckets: List[str]
-
-
-@app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
-async def update_workspace(workspace_name: str, update: WorkspaceEdit):
-    dynamic_client = DynamicClient(kubernetes.client.ApiClient())
-    workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
-    try:
-        workspace_api.get(name=workspace_name, namespace=current_namespace())
-        patch_body = {
-            "spec": {
-                "vcluster": update.cluster_status,
-                "members": update.members,
-                "extraBuckets": update.buckets,
-            }
-        }
-        workspace_api.patch(name=workspace_name, namespace=current_namespace(), body=patch_body)
-        return {"name": workspace_name}
-    except kubernetes.client.rest.ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
-        else:
-            raise
-
-
-def workspace_name_from_preferred_name(preferred_name: str):
-    safe_name = slugify(preferred_name, max_length=32)
-    if not safe_name:
-        safe_name = str(uuid.uuid4())
-    return config.PREFIX_FOR_NAME + "-" + safe_name
-
-
-class WorkspaceStatus(enum.Enum):
-    provisioning = "provisioning"
-    ready = "ready"
-    unknown = "unknown"
-
-
-class Storage(BaseModel):
-    credentials: Dict[str, str]
-
-
-class Cluster(BaseModel):
-    config: str
-    status: str
-
-
-class Endpoint(BaseModel):
-    id: str
-    url: str
-
-
-class ContainerRegistryCredentials(BaseModel):
-    username: str
-    password: str
-
-    def base64_encode_as_single_string(self) -> str:
-        return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
-
-
-class Member(BaseModel):
-    name: str
-
-
-class Bucket(BaseModel):
-    name: str
-    policy: str
-
-
-class Workspace(BaseModel):
-    name: str
-    status: WorkspaceStatus
-    spec: Optional[Any] = None
-    storage: Optional[Storage] = None
-    container_registry: Optional[ContainerRegistryCredentials] = None
-    cluster: Optional[Cluster] = None
-    endpoints: List[Endpoint] = []
-    members: List[Member] = []
-    buckets: List[Bucket] = []
-
-
-def get_workspace_internal(workspace_name: str):
-    try:
-        dynamic_client = DynamicClient(k8s_client.ApiClient())
-        workspace_resource = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
-        workspace = workspace_resource.get(name=workspace_name, namespace=current_namespace())
-        ignored_keys = {
-            "compositeDeletePolicy",
-            "compositionRef",
-            "compositionRevisionRef",
-            "compositionUpdatePolicy",
-            "resourceRef",
-        }
-        spec = {
-            k: v for k, v in (workspace.spec.to_dict() if hasattr(workspace.spec, "to_dict") else workspace.spec).items() if k not in ignored_keys
-        }
-
-        if not spec:
-            return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
-    except Exception:
-        return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
-
-    try:
-        workspace_secret = cast(
-            k8s_client.V1Secret,
-            k8s_client.CoreV1Api().read_namespaced_secret(
-                name=config.WORKSPACE_SECRET_NAME,
-                namespace=workspace_name,
-            ),
-        )
-    except Exception as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return Workspace(name=workspace_name, status=WorkspaceStatus.provisioning, spec=spec)
-        else:
-            logger.warning(f"Failed to load workspace secret: {e}")
-            return Workspace(name=workspace_name, status=WorkspaceStatus.unknown, spec=None)
-
-    envs = {k: base64.b64decode(v).decode() for k, v in workspace_secret.data.items()}
-    credentials = {
-        "bucketname": workspace_name,
-        "access": envs.get("AWS_ACCESS_KEY_ID", envs.get("access", "")),
-        "secret": envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", "")),
-        "endpoint": envs.get("AWS_ENDPOINT_URL", envs.get("endpoint", "")),
-        "region": envs.get("AWS_REGION", envs.get("region", "")),
-    }
-
-    container_registry = None
-    try:
-        container_registry_secret = cast(
-            k8s_client.V1Secret,
-            k8s_client.CoreV1Api().read_namespaced_secret(
-                name=CONTAINER_REGISTRY_SECRET_NAME,
-                namespace=workspace_name,
-            ),
-        )
-        container_registry = ContainerRegistryCredentials(
-            username=base64.b64decode(container_registry_secret.data["username"]).decode(),
-            password=base64.b64decode(container_registry_secret.data["password"]).decode(),
-        )
-    except Exception as e:
-        logger.warning(f"Failed to load container registry secret: {e}")
-
-    endpoints = []
-    try:
-        ingress_endpoints = [
-            Endpoint(
-                id=ingress.metadata.name,
-                url=ingress.spec.rules[0].host if ingress.spec.rules else "",
-            )
-            for ingress in cast(
-                List[k8s_client.V1Ingress],
-                k8s_client.NetworkingV1Api().list_namespaced_ingress(namespace=workspace_name).items,
-            )
-        ]
-        endpoints.extend(ingress_endpoints)
-    except Exception as e:
-        logger.warning(f"Failed to load ingresses: {e}")
-
-    try:
-        apisix_routes = k8s_client.CustomObjectsApi().list_namespaced_custom_object(
-            group="apisix.apache.org",
-            version="v2",
-            namespace=workspace_name,
-            plural="apisixroutes",
-        )
-        apisix_endpoints = [
-            Endpoint(
-                id=route["metadata"]["name"],
-                url=",".join(list(set(match for http in route.get("spec", {}).get("http", []) for match in http.get("match", {}).get("hosts", [])))),
-            )
-            for route in cast(List[dict], apisix_routes["items"])
-        ]
-        endpoints.extend(apisix_endpoints)
-    except Exception as e:
-        logger.warning(f"Failed to load APISIX routes: {e}")
-
-    try:
-        memberships = k8s_client.CustomObjectsApi().list_cluster_custom_object(
-            group="group.keycloak.crossplane.io",
-            version="v1alpha1",
-            plural="memberships",
-        )["items"]
-
-        members = [
-            Member(name=username)
-            for m in memberships
-            if m.get("spec", {}).get("forProvider", {}).get("groupIdRef", {}).get("name") == workspace_name
-            for username in m.get("spec", {}).get("forProvider", {}).get("members", [])
-        ]
-    except Exception as e:
-        logger.warning(f"Failed to load Keycloak memberships: {e}")
-        members = []
-
-    try:
-        policies = cast(
-            List[dict],
-            k8s_client.CustomObjectsApi().list_cluster_custom_object(group="minio.crossplane.io", version="v1", plural="policies")["items"],
-        )
-        buckets = []
-        for policy in policies:
-            parts = policy.get("metadata", {}).get("name", "").split(".")
-            if len(parts) == 3 and parts[0] == workspace_name:
-                buckets.append(Bucket(name=parts[2], policy=parts[1]))
-    except Exception as e:
-        logger.warning(f"Failed to load MinIO policies: {e}")
-        buckets = []
-
-    return Workspace(
-        name=workspace_name,
-        status=WorkspaceStatus.ready,
-        spec=spec,
-        storage=Storage(credentials=credentials),
-        container_registry=container_registry,
-        cluster=Cluster(
-            config=envs.get("KUBECONFIG"),
-            status="active" if any(e.id == "vcluster" for e in endpoints) else "suspended",
-        ),
-        endpoints=endpoints,
-        members=members,
-        buckets=buckets,
-    )
-
-
-@app.get("/workspaces/{workspace_name}", status_code=HTTPStatus.OK)
-async def get_workspace(request: Request, workspace_name: str = Path(...)):
-    workspace = get_workspace_internal(workspace_name)
+@app.get(
+    "/workspaces/{workspace_name}",
+    status_code=HTTPStatus.OK,
+    response_model=Workspace,
+    response_model_exclude_none=True,
+)
+async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
+    ws = _combine_workspace(workspace_name)
 
     accept_header = request.headers.get("accept", "")
-    if request.query_params.get("devmode") == "true" and "text/html" in accept_header:
-        workspace_data = base64.b64encode(workspace.model_dump_json().encode("utf-8")).decode("utf-8")
+    if (
+        "text/html" in accept_header
+        and templates is not None
+        and (getattr(config, "UI_MODE", "no") == "ui" or request.query_params.get("devmode") == "true")
+    ):
+        workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
         return templates.TemplateResponse(
-            "index.html",
+            "ui.html",
             {
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "frontend_url": getattr(config, "FRONTEND_URL", "/ui/management"),
             },
         )
-    else:
-        return workspace
+    return JSONResponse(ws.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)
 
 
-workspace_path_type = Path(..., pattern=f"^{config.PREFIX_FOR_NAME}")
+@app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
+async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:  # noqa: C901, PLR0912, PLR0915
+    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+
+    try:
+        storage_obj = storage_api.get(name=workspace_name, namespace=current_namespace())
+    except kubernetes.client.rest.ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
+        raise
+
+    storage_spec = _to_spec_dict(storage_obj) or {}
+
+    buckets = storage_spec.get("buckets") or []
+    existing_names = {(_bucketname_from(b) or ""): b for b in buckets}
+    for bname in update.add_buckets or []:
+        if bname not in existing_names:
+            buckets.append({"bucketName": bname, "discoverable": True})
+
+    requests: list[dict] = storage_spec.get("bucketAccessRequests") or []
+    grants: list[dict] = storage_spec.get("bucketAccessGrants") or []
+
+    req_by_bucket: dict[str, dict] = {(r.get("bucketName") or "").strip(): r for r in requests if isinstance(r, dict)}
+    gr_by_key: dict[tuple[str, str], dict] = {
+        ((g.get("bucketName") or "").strip(), (g.get("grantee") or "").strip()): g for g in grants if isinstance(g, dict)
+    }
+
+    for p in update.patch_bucket_access_requests or []:
+        bucket = (p.bucket or "").strip()
+        if not bucket:
+            continue
+
+        if p.workspace == workspace_name:
+            if bucket not in req_by_bucket:
+                requests.append(
+                    {
+                        "bucketName": bucket,
+                        "reason": "requesting access",
+                        "requestedAt": _iso(p.request_timestamp),
+                    }
+                )
+                req_by_bucket[bucket] = requests[-1]
+            else:
+                r = req_by_bucket[bucket]
+                r.setdefault("requestedAt", _iso(p.request_timestamp))
+        else:
+            grantee_principal = p.workspace
+            prefix = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
+            if p and p.workspace.startswith(prefix + "-"):
+                grantee_principal = p.workspace[len(prefix) + 1 :]
+
+            key = (bucket, grantee_principal)
+            g = gr_by_key.get(key)
+
+            if p.denied_timestamp:
+                perm = BucketPermission.NONE
+                granted_at = _iso(p.denied_timestamp)
+            elif p.grant_timestamp:
+                perm = _perm_from_str(p.permission)
+                granted_at = _iso(p.grant_timestamp)
+            else:
+                continue
+
+            if g is None:
+                g = {
+                    "bucketName": bucket,
+                    "grantee": grantee_principal,
+                    "permission": perm,
+                    "grantedAt": granted_at,
+                }
+                grants.append(g)
+                gr_by_key[key] = g
+            else:
+                g["permission"] = perm
+                g["grantedAt"] = granted_at
+
+    storage_patch: dict[str, Any] = {
+        "spec": {
+            "buckets": buckets,
+            "bucketAccessRequests": requests,
+            "bucketAccessGrants": grants,
+        }
+    }
+
+    try:
+        storage_api.patch(
+            name=workspace_name,
+            namespace=current_namespace(),
+            body=storage_patch,
+            content_type="application/merge-patch+json",
+        )
+    except kubernetes.client.rest.ApiException as e:
+        logger.warning("Patching Storage '%s' failed: %s", workspace_name, e)
+        raise
+    except Exception as e:
+        logger.warning("Patching Storage '%s' failed: %s", workspace_name, e)
+        raise
+
+    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    if (update.add_members or []) and datalab_api is None:
+        logger.warning("Datalab CRD not present; cannot add members for workspace '%s'.", workspace_name)
+    elif update.add_members:
+        try:
+            datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
+        except kubernetes.client.rest.ApiException as e:
+            if e.status == HTTPStatus.NOT_FOUND:
+                logger.warning(
+                    "Datalab resource '%s' not found; skipping member additions.",
+                    workspace_name,
+                )
+            else:
+                logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
+            return {"name": workspace_name}
+        except Exception as e:
+            logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
+            return {"name": workspace_name}
+
+        datalab_spec = _to_spec_dict(datalab_obj) or {}
+
+        seen: set[str] = set()
+        users: list[str] = []
+        for m in datalab_spec.get("users") or []:
+            if isinstance(m, str):
+                ms = m.strip()
+                if ms and ms not in seen:
+                    seen.add(ms)
+                    users.append(ms)
+
+        for m in update.add_members or []:
+            ms = (m or "").strip()
+            if ms and ms not in seen:
+                seen.add(ms)
+                users.append(ms)
+
+        try:
+            datalab_api.patch(
+                name=workspace_name,
+                namespace=current_namespace(),
+                body={"spec": {"users": users}},
+                content_type="application/merge-patch+json",
+            )
+        except kubernetes.client.rest.ApiException as e:
+            logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
+            raise
+        except Exception as e:
+            logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
+            raise
+
+    return {"name": workspace_name}
 
 
 @app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
-async def delete_workspace(workspace_name: str = workspace_path_type):
+async def delete_workspace(workspace_name: str = workspace_path_type) -> Response:
+    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+
     try:
-        dynamic_client = DynamicClient(kubernetes.client.ApiClient())
-        workspace_api = dynamic_client.resources.get(api_version="epca.eo/v1beta1", kind="Workspace")
-        workspace_api.delete(name=workspace_name, namespace=current_namespace())
+        storage_api.delete(name=workspace_name, namespace=current_namespace())
     except kubernetes.client.rest.ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND)
-        else:
-            raise
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
+        raise
+
+    if datalab_api is not None:
+        try:
+            datalab_api.delete(name=workspace_name, namespace=current_namespace())
+        except kubernetes.client.rest.ApiException as e:
+            if e.status != HTTPStatus.NOT_FOUND:
+                raise
+
     return Response(status_code=HTTPStatus.NO_CONTENT)
-
-
-def current_namespace() -> str:
-    try:
-        return open("/var/run/secrets/kubernetes.io/serviceaccount/namespace").read().strip()
-    except FileNotFoundError:
-        return "workspace"

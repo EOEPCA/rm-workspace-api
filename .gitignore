@@ -1,5 +1,39 @@
-__pycache__
-.pytest_cache
+# Python
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.venv/
 
-.pytest_cache
-.venv
+# Node / Quasar
+node_modules/
+.quasar/
+dist/
+!dist/.gitkeep
+quasar.config.*.temporary.compiled*
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / IDE
+.idea/
+.vscode/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment files
+.env.local*
+.env.*.local
+
+# OS junk files
+.DS_Store
+.thumbs.db
+
+# Local run artifacts
+run*

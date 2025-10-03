@@ -1,0 +1,75 @@
+default_stages: [pre-commit]
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+default_language_version:
+  python: python3.12
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-ast
+      - id: check-case-conflict
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-xml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v3.16.0
+    hooks:
+      - id: commitizen
+      - id: commitizen-branch
+        stages: [pre-push]
+
+  - repo: https://github.com/igorshubovych/markdownlint-cli
+    rev: v0.39.0
+    hooks:
+      - id: markdownlint-fix
+        args: [--disable, MD013, MD024, --]
+      - id: markdownlint
+        args: [--disable, MD013, MD024, --]
+
+  - repo: https://github.com/hadolint/hadolint
+    rev: v2.12.0
+    hooks:
+      - id: hadolint-docker
+        args:
+          ["--failure-threshold=warning", "--ignore=DL3008", "--ignore=DL3013"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.11
+    hooks:
+      - id: ruff
+        args: [--fix, "workspace_api"]
+      - id: ruff-format
+        args: ["workspace_api"]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        args: ["--config", "pyproject.toml"]
+        files: ^workspace_api/
+        additional_dependencies:
+          - types-python-slugify>=8.0.0.1,<9
+          - types-Markdown>=3.8.0.20250,<3.9
+          - types-PyYAML>=6.0.12.20250822,<7
+          - types-requests>=2.32.4.20250809,<3
+
+  - repo: local
+    hooks:
+      - id: copyright-header
+        name: Copyright header
+        entry: ./scripts/copyright.py
+        types_or: [python]
+        language: system
