@@ -11,17 +11,17 @@
     </q-banner>
 
     <!-- Workspace Content -->
-    <div v-if="!loading && !errorMessage && workspace">
+    <div v-if="!loading && !errorMessage && ws">
       <!-- Workspace Header -->
       <q-card class="q-mb-md">
         <q-card-section>
           <q-chip
-            :color="workspace.status === 'ready' ? 'green' : 'orange'"
+            :color="ws.status === 'ready' ? 'green' : 'orange'"
             text-color="white"
             square
           >
             <q-icon name="info" class="q-mr-sm"/>
-            Status: {{ workspace.status }}
+            Status: {{ ws.status }}
           </q-chip>
         </q-card-section>
       </q-card>
@@ -41,7 +41,7 @@
       </q-card>
 
       <!-- Members Table -->
-      <q-card v-if="workspace.memberships?.length" class="q-mb-md">
+      <q-card v-if="ws.datalab?.memberships?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Members</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -52,7 +52,7 @@
             </tr>
             </thead>
             <tbody>
-            <tr v-for="membership in workspace.memberships" :key="membership.member">
+            <tr v-for="membership in ws.datalab?.memberships" :key="membership.member">
               <td>{{ membership.member }}</td>
             </tr>
             </tbody>
@@ -61,7 +61,7 @@
       </q-card>
 
       <!-- Buckets Table -->
-      <q-card v-if="workspace?.buckets?.length" class="q-mb-md">
+      <q-card v-if="ws.storage?.buckets?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Buckets</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -72,7 +72,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="bucket in workspace?.buckets || []" :key="bucket">
+              <tr v-for="bucket in ws.storage?.buckets || []" :key="bucket">
                 <td>{{ bucket }}</td>
               </tr>
             </tbody>
@@ -82,7 +82,7 @@
     </div>
 
     <!-- Fallback if no workspace data -->
-    <div v-if="!loading && !errorMessage && !workspace" class="q-pa-md text-center text-grey-7">
+    <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center text-grey-7">
       <p>No workspace data loaded.</p>
     </div>
   </div>
@@ -96,27 +96,27 @@ import type {Workspace} from 'src/models/models'
 /** ---- State ---- */
 // const loading = ref<boolean>(true)
 const errorMessage = ref<string>('')
-const workspace = ref<Workspace | null>(null)
+const ws = ref<Workspace | null>(null)
 
 /** ---- Computed helpers ---- */
 const hasCredentials = computed<boolean>(() => {
-  const creds = workspace.value?.credentials
+  const creds = ws.value?.storage?.credentials
   return !!creds && Object.keys(creds).length > 0
 })
 
 const prettyCredentials = computed<string>(() =>
-  JSON.stringify(workspace.value?.credentials ?? {}, null, 2)
+  JSON.stringify(ws.value?.storage?.credentials ?? {}, null, 2)
 )
 
 const {
   loading,
 } = useLuigiWorkspace({
     onReady: (ctx) => {
-//      console.log('Workspace initialized:', ws?.name)
+//      console.log('Workspace initialized:', ws.name)
       if (!ctx || !ctx.workspace) {
         errorMessage.value = 'Workspace Data not provided.'
       } else {
-        workspace.value = ctx.workspace
+        ws.value = ctx.workspace
       }
     }
   }

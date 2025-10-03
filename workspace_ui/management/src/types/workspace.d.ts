@@ -1,1 +1,1 @@
-export type WorkspaceStatus = 'ready' | 'pending' | 'error'
+export type WorkspaceStatus = 'ready' | 'provisioning' | 'error'

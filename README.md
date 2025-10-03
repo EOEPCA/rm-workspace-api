@@ -1,6 +1,19 @@
-# Workspace v2
+# Workspace API & UI Layer
 
-A FastAPI backend (workspace_api) and Quasar/Vue frontend (workspace_ui) for managing Workspace custom resources on Kubernetes clusters, such as the EOEPCA demo cluster.
+This layer provides a **Kubernetes-native control plane** for collaborative, data-driven workspaces.
+It combines a **FastAPI backend (`workspace_api`)** with a **Quasar/Vue frontend (`workspace_ui`)** to deliver a seamless management layer on top of Kubernetes Custom Resources.
+
+At its core, the Workspace API & UI Layer orchestrates three pillars:
+
+- **Memberships** — define who belongs to a workspace and what role they hold.
+- **Storage** — provision buckets, attach credentials, and manage access grants between workspaces.
+- **Interactive Sessions** — track and control whether interactive workspace sessions are running (always-on) or can be started (on-demand), respectively.
+
+By building on Kubernetes CRDs (`Storage`, `Datalab`), the API exposes a clean **HTTP/JSON interface** and an optional **single-page UI** to manage these resources without needing to interact directly with `kubectl`.  This makes it equally suited for **operators** (who want Kubernetes-level control) and **end users** (who just need to join a workspace, get storage, and start analyzing data).
+
+**Kubernetes-native:** The Workspace API sits on top of two CRDs — **Storage** and **Datalab** — and reads and patches them to present a unified “Workspace” view (including storage, memberships, and session state).  It applies changes through standard REST calls, simplifying access and abstracting away the low-level details of the CRDs and Kubernetes.
+
+See: [Storage CRD](https://provider-storage.versioneer.at/latest/reference-guides/api/) · [Datalab CRD](https://provider-datalab.versioneer.at/latest/reference-guides/api/)
 
 ## Table of Contents
 
@@ -146,7 +159,7 @@ Watch mode:
 uv run pytest-watcher tests --now
 ```
 
-## Developer tools
+### Developer tools
 
 Installed via the backend `dev` extra:
 
@@ -160,15 +173,19 @@ Run via `uv run <tool>` from `workspace_api/`.
 
 ## Configuration
 
-Environment variables used by the backend (besides `KUBECONFIG` required for Kubernetes cluster access):
+Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes access):
 
-| Variable | Default                | Description |
-| --- |------------------------| --- |
-| `PREFIX_FOR_NAME` | `"ws"`                 | Prefix used when generating Kubernetes workspace names from user input. |
-| `WORKSPACE_SECRET_NAME` | `"workspace"`          | Name of the Kubernetes `Secret` that holds per-workspace storage credentials. |
-| `CONTAINER_REGISTRY_SECRET_NAME` | `"container-registry"` | Name of the Kubernetes `Secret` that holds per-workspace container registry credentials. |
-| `UI_MODE` | `"no"`                 | Set to `"ui"` to enable serving the frontend (templated HTML + SPA). |
-| `FRONTEND_URL` | `"/ui/management"`     | Base path (production) or absolute URL (dev server) for the frontend. Use `http://localhost:9000` with the dev server. |
+| Variable | Default | What it does |
+|---|---|---|
+| `PREFIX_FOR_NAME` | `ws` | Prefix applied to user-facing names to build K8s object names (e.g., `ws-alice`). |
+| `USE_VCLUSTER` | `no` |  Whether to provision an isolated vcluster for each datalab session or run in separate namespace on host cluster. |
+| `SESSION_AUTO_MODE` | `no` | Whether sessions can be started on-demand with automatic shutdown (`yes`) or are always-on (`no`). |
+| `STORAGE_SECRET_NAME` | `<principal>-datalab` | Name template for the secret that contains S3 credentials for the workspace. |
+| `CONTAINER_REGISTRY_SECRET_NAME` | `<principal>-container-registry` | Name template for the secret holding per-workspace container registry (OCI) credentials. |
+| `ENDPOINT` | from `AWS_ENDPOINT_URL` | S3 endpoint URL used when falling back to environment-based config. |
+| `REGION` | from `AWS_REGION` or `AWS_DEFAULT_REGION` | S3 region used when falling back to environment-based config. |
+| `UI_MODE` | `no` | Set to `ui` to enable templated HTML shell and SPA embedding. |
+| `FRONTEND_URL` | `/ui/management` | Base path (prod) or absolute URL (dev server like `http://localhost:9000`) for the SPA. |
 
 ## Docker
 
@@ -181,12 +198,7 @@ docker build . -t workspace-api:latest --build-arg VERSION=$(git rev-parse --sho
 Run it:
 
 ```bash
-docker run --rm -p 8080:8080 \
-  -e GUNICORN_WORKERS=2 \
-  -e UI_MODE=ui \
-  -e KUBECONFIG=/kube/config \
-  --mount type=bind,src=$HOME/.kube/config-eoepca-demo,dst=/kube/config,readonly \
-  workspace-api:latest
+docker run --rm -p 8080:8080   -e GUNICORN_WORKERS=2   -e UI_MODE=ui   -e KUBECONFIG=/kube/config   --mount type=bind,src=$HOME/.kube/config-eoepca-demo,dst=/kube/config,readonly   workspace-api:latest
 ```
 
 ## License

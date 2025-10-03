@@ -25,14 +25,24 @@ export interface Bucket {
   isPending?: boolean
 }
 
+
+
+export interface Storage {
+  buckets?: string[]
+  credentials?: Record<string, unknown>
+  bucket_access_requests?: Bucket[]
+}
+
+export interface Datalab {
+  memberships?: Membership[]
+}
+
 export interface Workspace {
   name: string
   version: string
   status: WorkspaceStatus
-  buckets?: string[]
-  credentials?: Record<string, unknown>
-  memberships?: Membership[]
-  bucket_access_requests?: Bucket[]
+  storage?: Storage
+  datalab?: Datalab
 }
 
 export interface BucketUI {

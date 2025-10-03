@@ -28,6 +28,12 @@ class WorkspaceStatus(str, enum.Enum):
     UNKNOWN = "unknown"
 
 
+class DatalabStatus(str, enum.Enum):
+    ALWAYS_ON = "AlwaysOn"
+    DISABLED = "Disabled"
+    ON_DEMAND = "OnDemand"
+
+
 def _coerce_utc(dt: datetime | str | None) -> datetime | None:
     if dt is None:
         return None
@@ -217,8 +223,36 @@ class ContainerRegistryCredentials(BaseModel):
         return base64.b64encode(f"{self.username}:{pw}".encode()).decode()
 
 
+class Storage(BaseModel):
+    """Storage for a workspace."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace storage."})
+
+    buckets: list[str] = Field(default_factory=list, description="Owned Buckets.")
+    credentials: Credentials | None = Field(None, description="S3 credentials (bucket, keys, endpoint, region).")
+    bucket_access_requests: list[BucketAccessRequest] = Field(
+        default_factory=list,
+        description="Bucket access requests/grants associated with the workspace.",
+    )
+
+    @field_validator("buckets")
+    @classmethod
+    def _bucket_lists(cls, v: list[str]) -> list[str]:
+        return _validate_bucket_list(v)
+
+
+class Datalab(BaseModel):
+    """Datalab for a workspace."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace datalab."})
+
+    memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
+
+    status: DatalabStatus = Field(default=DatalabStatus.DISABLED, description="Session lifecycle state.")
+
+
 class Workspace(BaseModel):
-    """Workspace view model with metadata, buckets, credentials, and access state."""
+    """Workspace view model with metadata, storage, datalab, session, and registry credentials."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace resource representation."})
 
@@ -226,24 +260,14 @@ class Workspace(BaseModel):
     creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the S3 credentials secret.")
     version: str | None = Field(None, description="Resource version for optimistic locking.")
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
-    buckets: list[str] = Field(default_factory=list, description="Owned Buckets.")
-    credentials: Credentials | None = Field(None, description="S3 credentials (bucket, keys, endpoint, region).")
+    storage: Storage = Field(default_factory=Storage, description="Storage for buckets, credentials, access.")
+    datalab: Datalab = Field(default_factory=Datalab, description="Datalab for memberships and sessions.")
     container_registry: ContainerRegistryCredentials | None = Field(None, description="Credentials for the workspace's container registry.")
-    memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
-    bucket_access_requests: list[BucketAccessRequest] = Field(
-        default_factory=list,
-        description="Bucket access requests/grants associated with the workspace.",
-    )
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod
     def _ts_utc_opt(cls, v: datetime | None) -> datetime | None:
         return _coerce_utc(v)
-
-    @field_validator("buckets")
-    @classmethod
-    def _bucket_lists(cls, v: list[str]) -> list[str]:
-        return _validate_bucket_list(v)
 
 
 class Endpoint(BaseModel):

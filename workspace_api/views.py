@@ -28,8 +28,11 @@ from .models import (
     BucketPermission,
     ContainerRegistryCredentials,
     Credentials,
+    Datalab,
+    DatalabStatus,
     Membership,
     MembershipRole,
+    Storage,
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
@@ -135,6 +138,30 @@ def _crd_exists(name: str) -> bool:
         raise
 
 
+def _render_principal_placeholder(template: str | None, principal: str) -> str | None:
+    """Replace principal placeholders in a secret name template, if present.
+
+    Supports both '<principal>' and '{principal}' forms. If template is None or
+    empty, returns it unchanged.
+    """
+    if not template:
+        return template
+    s = str(template)
+    return s.replace("<principal>", principal).replace("{principal}", principal)
+
+
+def _storage_secret_name_for(principal: str) -> str | None:
+    """Resolve storage secret name from config with principal substitution."""
+    tmpl = getattr(config, "STORAGE_SECRET_NAME", None)
+    return _render_principal_placeholder(tmpl, principal)
+
+
+def _registry_secret_name_for(principal: str) -> str | None:
+    """Resolve container registry secret name from config with principal substitution."""
+    tmpl = getattr(config, "CONTAINER_REGISTRY_SECRET_NAME", None)
+    return _render_principal_placeholder(tmpl, principal)
+
+
 @app.get("/status", status_code=HTTPStatus.OK)
 async def status() -> Response:
     storage_present = _crd_exists(CRD_STORAGE)
@@ -181,8 +208,11 @@ def _to_spec_dict(obj: Any) -> dict[str, Any] | None:
     return spec.to_dict() if hasattr(spec, "to_dict") else spec
 
 
-def _get_container_registry_credentials(ns: str) -> ContainerRegistryCredentials | None:
-    secret = fetch_secret(config.CONTAINER_REGISTRY_SECRET_NAME, ns)
+def _get_container_registry_credentials(principal: str) -> ContainerRegistryCredentials | None:
+    secret_name = _registry_secret_name_for(principal)
+    if not secret_name:
+        return None
+    secret = fetch_secret(secret_name, current_namespace())
     if not secret or not secret.data:
         return None
     try:
@@ -190,7 +220,7 @@ def _get_container_registry_credentials(ns: str) -> ContainerRegistryCredentials
         password = base64.b64decode(secret.data["password"]).decode()
         return ContainerRegistryCredentials(username=username, password=password)
     except (KeyError, binascii.Error) as e:
-        logger.warning("Failed to decode container registry secret for '%s': %s", ns, e)
+        logger.warning("Failed to decode container registry secret '%s': %s", secret_name, e)
         return None
 
 
@@ -396,7 +426,7 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     storage_spec = _to_spec_dict(storage_cr) or {}
     datalab_spec = _to_spec_dict(datalab_cr) or {}
 
-    principal = storage_spec.get("principal") or config.WORKSPACE_SECRET_NAME
+    principal = storage_spec.get("principal") or workspace_name
 
     buckets = storage_spec.get("buckets") or []
     all_buckets: list[str] = []
@@ -425,11 +455,10 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     ]
 
     credentials = None
-    secret = fetch_secret(principal, current_namespace())
-    if not secret:
-        secret = fetch_secret(workspace_name, current_namespace())
-    if not secret:
-        secret = fetch_secret(config.WORKSPACE_SECRET_NAME, current_namespace())
+    secret = None
+    storage_secret_name = _storage_secret_name_for(principal)
+    if storage_secret_name:
+        secret = fetch_secret(storage_secret_name, current_namespace())
 
     if secret and secret.data:
         try:
@@ -438,28 +467,45 @@ def _combine_workspace(workspace_name: str) -> Workspace:
                 bucketname=all_buckets[0] if buckets else (envs.get("BUCKET") or ""),
                 access=envs.get("AWS_ACCESS_KEY_ID", envs.get("access", envs.get("attribute.access", ""))),
                 secret=envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", envs.get("attribute.secret", ""))),
-                endpoint=envs.get("AWS_ENDPOINT_URL", envs.get("endpoint", envs.get("attribute.endpoint", config.ENDPOINT))),
-                region=envs.get("AWS_REGION", envs.get("region", envs.get("attribute.region", config.REGION))),
+                endpoint=envs.get(
+                    "AWS_ENDPOINT_URL", envs.get("endpoint", envs.get("attribute.endpoint", getattr(config, "ENDPOINT", None)))
+                ),
+                region=envs.get("AWS_REGION", envs.get("region", envs.get("attribute.region", getattr(config, "REGION", None)))),
             )
         except (KeyError, TypeError, binascii.Error) as e:
-            logger.warning("Error decoding credentials secret for '%s': %s", secret.metadata.name, e)
+            logger.warning("Error decoding credentials secret '%s': %s", getattr(secret.metadata, "name", "<unknown>"), e)
 
-    container_registry = _get_container_registry_credentials(workspace_name)
+    container_registry = _get_container_registry_credentials(principal)
 
     creation_timestamp = getattr(storage_cr.metadata, "creationTimestamp", None)
     version = storage_cr.metadata.resourceVersion
-    status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
+    workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
+
+    sessions = (datalab_spec or {}).get("sessions") or []
+    mode = str(getattr(config, "SESSION_AUTO_MODE", "no")).strip().lower()
+    datalab_status = (
+        DatalabStatus.ALWAYS_ON
+        if (isinstance(sessions, list) and sessions)
+        else DatalabStatus.ON_DEMAND
+        if mode in {"yes", "auto", "on-demand", "on_demand"}
+        else DatalabStatus.DISABLED
+    )
+
+    storage = Storage(
+        buckets=all_buckets,
+        credentials=credentials,
+        bucket_access_requests=relevant_bucket_access_requests,
+    )
+    datalab = Datalab(memberships=memberships, status=datalab_status)
 
     return Workspace(
         name=workspace_name,
         creation_timestamp=creation_timestamp,
         version=version,
-        status=status,
-        buckets=all_buckets,
-        credentials=credentials,
+        status=workspace_status,
+        storage=storage,
+        datalab=datalab,
         container_registry=container_registry,
-        memberships=memberships,
-        bucket_access_requests=relevant_bucket_access_requests,
     )
 
 
@@ -489,6 +535,8 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
             "spec": {
                 "principal": safe_name,
                 "buckets": [{"bucketName": workspace_name, "discoverable": False}],
+                "sessions": [] if _as_bool(getattr(config, "SESSION_AUTO_MODE", "no")) else ["default"],
+                "vcluster": _as_bool(getattr(config, "USE_VCLUSTER", "no") or "no"),
             },
         },
         namespace=current_namespace(),
@@ -518,7 +566,11 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     ws = _combine_workspace(workspace_name)
 
     accept_header = request.headers.get("accept", "")
-    if "text/html" in accept_header and templates is not None and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true"):
+    if (
+        "text/html" in accept_header
+        and templates is not None
+        and (getattr(config, "UI_MODE", "no") == "ui" or request.query_params.get("devmode") == "true")
+    ):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
         return templates.TemplateResponse(
             "ui.html",
@@ -526,7 +578,7 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
-                "frontend_url": config.FRONTEND_URL,
+                "frontend_url": getattr(config, "FRONTEND_URL", "/ui/management"),
             },
         )
     return JSONResponse(ws.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)

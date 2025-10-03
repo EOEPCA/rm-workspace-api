@@ -111,13 +111,13 @@ const {loading} = useLuigiWorkspace({
         message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
         form.value = {
           name: ws.name,
-          memberships: (ws.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
-          buckets: (ws.buckets ?? []).map(b => ({
+          memberships: (ws.datalab?.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+          buckets: (ws.storage?.buckets ?? []).map(b => ({
               bucket: b,
               requests: 0,
               grants: 0
             } as BucketUI)) ?? [],
-          linked_buckets: ws.bucket_access_requests ?? []
+          linked_buckets: ws.storage?.bucket_access_requests ?? []
         }
 
         // prepare number of requests and grants for buckets
