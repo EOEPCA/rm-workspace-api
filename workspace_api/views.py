@@ -473,11 +473,11 @@ def _combine_workspace(workspace_name: str) -> Workspace:
 
     sessions = (datalab_spec or {}).get("sessions") or []
 
-    mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
+    session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
 
     if sessions:
         datalab_status = DatalabStatus.ALWAYS_ON
-    elif mode == "auto":
+    elif session_mode == "auto":
         datalab_status = DatalabStatus.ON_DEMAND
     else:
         datalab_status = DatalabStatus.DISABLED
@@ -539,8 +539,8 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
         ) from e
 
     if datalab_api is not None:
-        auto_mode = _as_bool(getattr(config, "SESSION_AUTO_MODE", "no"))
-        use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "no"))
+        auto_mode = _as_bool(getattr(config, "SESSION_MODE", "on"))
+        use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
         try:
             datalab_api.create(
                 {
