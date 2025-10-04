@@ -18,6 +18,7 @@ from fastapi import HTTPException, Path, Request, Response
 from fastapi.responses import JSONResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
+from kubernetes.client.rest import ApiException
 from kubernetes.dynamic import DynamicClient
 from slugify import slugify
 
@@ -117,7 +118,7 @@ def fetch_secret(secret_name: str, namespace: str) -> k8s_client.V1Secret | None
             name=secret_name,
             namespace=namespace,
         )
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             return None
         raise
@@ -132,18 +133,13 @@ def _crd_exists(name: str) -> bool:
     try:
         api.read_custom_resource_definition(name)
         return True  # noqa: TRY300
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             return False
         raise
 
 
 def _render_principal_placeholder(template: str | None, principal: str) -> str | None:
-    """Replace principal placeholders in a secret name template, if present.
-
-    Supports both '<principal>' and '{principal}' forms. If template is None or
-    empty, returns it unchanged.
-    """
     if not template:
         return template
     s = str(template)
@@ -151,13 +147,11 @@ def _render_principal_placeholder(template: str | None, principal: str) -> str |
 
 
 def _storage_secret_name_for(principal: str) -> str | None:
-    """Resolve storage secret name from config with principal substitution."""
     tmpl = getattr(config, "STORAGE_SECRET_NAME", None)
     return _render_principal_placeholder(tmpl, principal)
 
 
 def _registry_secret_name_for(principal: str) -> str | None:
-    """Resolve container registry secret name from config with principal substitution."""
     tmpl = getattr(config, "CONTAINER_REGISTRY_SECRET_NAME", None)
     return _render_principal_placeholder(tmpl, principal)
 
@@ -193,7 +187,7 @@ def _get_cr(kind: str, name: str, required: bool) -> Any | None:
         return None
     try:
         return api.get(name=name, namespace=current_namespace())
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             return None
         raise
@@ -300,7 +294,6 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
 
     out: list[BucketAccessRequest] = []
 
-    # first pass: bucketAccessRequests
     for obj in storage_items:
         workspace_name = (getattr(obj.metadata, "name", None) or "").strip()
         spec = _spec_dict(obj)
@@ -349,8 +342,7 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                     )
                 )
 
-    # second pass: (other) discoverable buckets
-    existing_buckets = {bar.bucket for bar in out}
+    existing_buckets_names = {bar.bucket for bar in out}
     for obj in storage_items:
         spec = _spec_dict(obj)
         if not isinstance(spec, dict):
@@ -363,7 +355,7 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                     continue
 
                 bucket_name = (b.get("bucketName") or "").strip()
-                if not bucket_name or bucket_name in existing_buckets:
+                if not bucket_name or bucket_name in existing_buckets_names or bucket_name in wanted_bucket_names:
                     continue
 
                 out.append(
@@ -376,9 +368,8 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                         denied_timestamp=None,
                     )
                 )
-                existing_buckets.add(bucket_name)
+                existing_buckets_names.add(bucket_name)
 
-    # third pass: bucketAccessGrants
     for obj in storage_items:
         spec = _spec_dict(obj)
         if not isinstance(spec, dict):
@@ -403,7 +394,6 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
 
                 for existing in out:
                     if existing.bucket == bucket_name and existing.workspace == grantee_workspace:
-                        # don't change existing permission
                         existing.request_timestamp = g.get("requestedAt") or granted_at
                         perm = _perm_from_str(g.get("permission"))
                         existing.grant_timestamp = granted_at if perm != BucketPermission.NONE else None
@@ -482,14 +472,15 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
 
     sessions = (datalab_spec or {}).get("sessions") or []
-    mode = str(getattr(config, "SESSION_AUTO_MODE", "no")).strip().lower()
-    datalab_status = (
-        DatalabStatus.ALWAYS_ON
-        if (isinstance(sessions, list) and sessions)
-        else DatalabStatus.ON_DEMAND
-        if mode in {"yes", "auto", "on-demand", "on_demand"}
-        else DatalabStatus.DISABLED
-    )
+
+    mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
+
+    if sessions:
+        datalab_status = DatalabStatus.ALWAYS_ON
+    elif mode == "auto":
+        datalab_status = DatalabStatus.ON_DEMAND
+    else:
+        datalab_status = DatalabStatus.DISABLED
 
     storage = Storage(
         buckets=all_buckets,
@@ -512,7 +503,8 @@ def _combine_workspace(workspace_name: str) -> Workspace:
 @app.post("/workspaces", status_code=HTTPStatus.CREATED)
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     safe_name = slugify(data.preferred_name, max_length=32) or str(uuid.uuid4())
-    workspace_name = _with_prefix(safe_name)
+    safe_owner = slugify(data.default_owner, max_length=32) or str(uuid.uuid4())
+    workspace_name = _with_prefix(safe_name)[:63]
 
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
@@ -523,35 +515,51 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             detail={"error": "Workspace with this name already exists"},
         )
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status != HTTPStatus.NOT_FOUND:
             raise
 
-    storage_api.create(
-        {
-            "apiVersion": API_PKG_INTERNAL,
-            "kind": KIND_STORAGE,
-            "metadata": {"name": workspace_name},
-            "spec": {
-                "principal": safe_name,
-                "buckets": [{"bucketName": workspace_name, "discoverable": False}],
-                "sessions": [] if _as_bool(getattr(config, "SESSION_AUTO_MODE", "no")) else ["default"],
-                "vcluster": _as_bool(getattr(config, "USE_VCLUSTER", "no") or "no"),
-            },
-        },
-        namespace=current_namespace(),
-    )
-
-    if datalab_api is not None:
-        datalab_api.create(
+    try:
+        storage_api.create(
             {
                 "apiVersion": API_PKG_INTERNAL,
-                "kind": KIND_DATALAB,
+                "kind": KIND_STORAGE,
                 "metadata": {"name": workspace_name},
-                "spec": {"users": [data.default_owner]},
+                "spec": {
+                    "principal": safe_owner,
+                    "buckets": [{"bucketName": workspace_name, "discoverable": True}],
+                },
             },
             namespace=current_namespace(),
         )
+    except ApiException as e:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": f"Failed to create Storage '{workspace_name}'", "exception": str(e)},
+        ) from e
+
+    if datalab_api is not None:
+        auto_mode = _as_bool(getattr(config, "SESSION_AUTO_MODE", "no"))
+        use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "no"))
+        try:
+            datalab_api.create(
+                {
+                    "apiVersion": API_PKG_INTERNAL,
+                    "kind": KIND_DATALAB,
+                    "metadata": {"name": workspace_name},
+                    "spec": {
+                        "users": [safe_owner],
+                        "sessions": [] if auto_mode else ["default"],
+                        "vcluster": use_vcluster,
+                    },
+                },
+                namespace=current_namespace(),
+            )
+        except ApiException as e:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_GATEWAY,
+                detail={"error": f"Failed to create Datalab '{workspace_name}'", "exception": str(e)},
+            ) from e
 
     return {"name": workspace_name}
 
@@ -590,7 +598,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
 
     try:
         storage_obj = storage_api.get(name=workspace_name, namespace=current_namespace())
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
         raise
@@ -675,7 +683,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
             body=storage_patch,
             content_type="application/merge-patch+json",
         )
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         logger.warning("Patching Storage '%s' failed: %s", workspace_name, e)
         raise
     except Exception as e:
@@ -688,12 +696,9 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
     elif update.add_members:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
-        except kubernetes.client.rest.ApiException as e:
+        except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
-                logger.warning(
-                    "Datalab resource '%s' not found; skipping member additions.",
-                    workspace_name,
-                )
+                logger.warning("Datalab resource '%s' not found; skipping member additions.", workspace_name)
             else:
                 logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
             return {"name": workspace_name}
@@ -725,7 +730,7 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
                 body={"spec": {"users": users}},
                 content_type="application/merge-patch+json",
             )
-        except kubernetes.client.rest.ApiException as e:
+        except ApiException as e:
             logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
             raise
         except Exception as e:
@@ -742,7 +747,7 @@ async def delete_workspace(workspace_name: str = workspace_path_type) -> Respons
 
     try:
         storage_api.delete(name=workspace_name, namespace=current_namespace())
-    except kubernetes.client.rest.ApiException as e:
+    except ApiException as e:
         if e.status == HTTPStatus.NOT_FOUND:
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
         raise
@@ -750,7 +755,7 @@ async def delete_workspace(workspace_name: str = workspace_path_type) -> Respons
     if datalab_api is not None:
         try:
             datalab_api.delete(name=workspace_name, namespace=current_namespace())
-        except kubernetes.client.rest.ApiException as e:
+        except ApiException as e:
             if e.status != HTTPStatus.NOT_FOUND:
                 raise
 

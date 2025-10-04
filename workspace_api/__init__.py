@@ -16,7 +16,7 @@ from starlette_exporter import PrometheusMiddleware, handle_metrics  # type: ign
 
 from workspace_api import config
 
-app = FastAPI()
+app = FastAPI(title="Workspace API")
 templates = None
 
 app.add_middleware(PrometheusMiddleware)
@@ -70,6 +70,15 @@ if __name__ != "__main__":
 @app.get("/probe")
 def probe() -> dict[str, Any]:
     return {}
+
+
+@app.get("/debug", include_in_schema=False)
+def debug(request: Request) -> dict[str, Any]:
+    return {
+        "scheme": request.url.scheme,
+        "baseurl": str(request.base_url),
+        "headers": dict(request.headers.items()),
+    }
 
 
 @app.middleware("http")

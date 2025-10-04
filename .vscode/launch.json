@@ -2,7 +2,33 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug",
+            "name": "Debug (EOEPCA)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "uvicorn",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "KUBECONFIG": "${env:HOME}/.kube/config-eoepca-demo",
+                "PREFIX_FOR_NAME": "ws",
+                "AWS_REGION": "eoepca-demo",
+                "AWS_ENDPOINT_URL": "https://minio.develop.eoepca.org",
+                "UI_MODE": "ui"
+            },
+            "args": [
+                "workspace_api:app",
+                "--reload",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8080",
+                "--log-level",
+                "info"
+            ]
+        },
+        {
+            "name": "Debug (Versioneer)",
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
@@ -12,8 +38,8 @@
             "env": {
                 "KUBECONFIG": "${env:HOME}/.kube/config-kalpha",
                 "PREFIX_FOR_NAME": "s",
-                "AWS_REGION": "region-kalpha",
-                "AWS_ENDPOINT_URL": "https://endpoint-kalpha",
+                "AWS_REGION": "kalpha",
+                "AWS_ENDPOINT_URL": "https://minio.console.kalpha.versioneer.at/",
                 "UI_MODE": "ui"
             },
             "args": [
