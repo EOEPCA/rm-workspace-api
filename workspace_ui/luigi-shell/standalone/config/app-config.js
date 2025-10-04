@@ -1,5 +1,5 @@
 // Dummy configuration data for standalone frontend development
-window.workspaceData = {
+export const workspaceData = {
   "name": "ws-bob",
   "creation_timestamp": "2025-06-19T15:00:36Z",
   "version": "919190705",
@@ -28,7 +28,7 @@ window.workspaceData = {
   ]
 };
 
-window.endpointsData = [
+export const endpointsData = [
   {
     "id": "vcluster",
     "url": "ws-bob.ngx.develop.eoepca.org",

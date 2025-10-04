@@ -1,4 +1,4 @@
-window.workspaceData =
+export const workspaceData =
 {
   "name": "s-john",
   "creation_timestamp": "2025-10-03T06:52:01Z",
@@ -60,4 +60,4 @@ window.workspaceData =
   }
 }
 
-window.endpointsData = []
+export const endpointsData = []
