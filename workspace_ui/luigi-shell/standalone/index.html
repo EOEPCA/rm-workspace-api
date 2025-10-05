@@ -19,8 +19,31 @@
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
-    <script src="/config/app-config.js"></script>
-    <script>
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      let configName = params.get("config") || "app-config.js";
+
+      if (/^\d+$/.test(configName)) {
+        configName = `${configName}-app-config.js`;
+      }
+
+      // simple allow-list
+      if (!/^[\w.-]+\.js$/.test(configName)) {
+        console.error("Invalid config filename:", configName);
+        throw new Error("Invalid config filename");
+      }
+
+      // Load Config (ES-Module)
+      let mod;
+      try {
+        mod = await import(`/config/${configName}`);
+        console.log("Loaded config module:", configName);
+      } catch (e) {
+        console.error("Failed to load config:", configName, e);
+        // fallback
+        mod = { workspaceData: { name: "Fallback" }, endpointsData: [] };
+      }
+
       const request = '{{ request | safe }}';
       // const workspaceData = '{{ workspace_data | safe }}';
       // const endpointsData = '{{ endpoints_data | safe }}';
@@ -28,21 +51,10 @@
 
       function decodeData(base64String) {
           return base64String;
-          /*
-        try {
-          if (base64String && base64String.trim() !== '') {
-            return JSON.parse(atob(base64String));
-          }
-        } catch (e) {
-          console.warn('Failed to decode data', e);
-        }
-        return null;
-
-           */
       }
 
-      const workspace = decodeData(workspaceData);
-      const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
+      const workspace = decodeData(mod.workspaceData);
+      const endpoints = Array.isArray(decodeData(mod.endpointsData)) ? decodeData(mod.endpointsData) : [];
       let children = [
         {
           pathSegment: 'management',

@@ -35,7 +35,7 @@
     <template #body-cell-actions="props">
       <q-td :props="props" class="q-gutter-xs">
         <span v-if="!props.row.isPending">
-          <span v-if="!props.row.grant_timestamp">
+          <span v-if="!props.row.grant_timestamp && !props.row.denied_timestamp">
             <q-btn dense flat icon="key" color="positive" @click="grantBucket(props.row)">
               <q-tooltip>Grant bucket access</q-tooltip>
             </q-btn>
@@ -43,7 +43,7 @@
               <q-tooltip>Deny bucket access</q-tooltip>
             </q-btn>
           </span>
-          <q-btn v-else dense flat icon="key_off" color="negative" @click="revokeBucket(props.row)">
+          <q-btn v-if="props.row.grant_timestamp" dense flat icon="key_off" color="negative" @click="revokeBucket(props.row)">
             <q-tooltip>Revoke bucket access</q-tooltip>
           </q-btn>
           </span>

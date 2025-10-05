@@ -92,6 +92,9 @@
         <q-badge v-if="props.row.grant_timestamp" color="positive" outline>
           Granted · {{ formatDate(props.row.grant_timestamp) }}
         </q-badge>
+        <q-badge v-else-if="props.row.denied_timestamp" color="negative" outline>
+          Denied · {{ formatDate(props.row.denied_timestamp) }}
+        </q-badge>
         <q-badge v-else-if="props.row.request_timestamp" color="warning" outline>
           Requested · {{ formatDate(props.row.request_timestamp) }}
         </q-badge>
