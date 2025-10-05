@@ -1,4 +1,4 @@
-FROM python:3.12.6-slim-bookworm AS api-builder
+FROM python:3.12.11-bookworm AS api-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -21,7 +21,7 @@ COPY workspace_ui/luigi-shell ./luigi-shell
 COPY workspace_ui/management ./management
 RUN ./build_dist.sh
 
-FROM python:3.12.6-slim-bookworm
+FROM python:3.12.11-bookworm
 
 ARG VERSION=latest
 LABEL version=${VERSION}

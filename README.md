@@ -61,8 +61,8 @@ See: [Storage CRD](https://provider-storage.versioneer.at/latest/reference-guide
 1. Backend setup (from repo root):
 
    ```bash
-   pyenv local 3.12.6
-   python --version   # should be 3.12.6
+   pyenv local 3.12.11
+   python --version   # should be 3.12.11
    uv lock --python python
    uv sync --python python --extra dev
    uv run pre-commit install
@@ -189,16 +189,25 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 
 ## Docker
 
-Build the combined image (Python **3.12.6** + built UI) from repo root:
+Build the combined image (Python **3.12.11** + built UI) from repo root:
 
 ```bash
 docker build . -t workspace-api:latest --build-arg VERSION=$(git rev-parse --short HEAD)
 ```
 
-Run it:
+Run it, e.g.
 
 ```bash
-docker run --rm -p 8080:8080   -e GUNICORN_WORKERS=2   -e UI_MODE=ui   -e KUBECONFIG=/kube/config   --mount type=bind,src=$HOME/.kube/config-eoepca-demo,dst=/kube/config,readonly   workspace-api:latest
+docker run --rm \
+   -p 8080:8080 \
+   -e GUNICORN_WORKERS=2 \
+   -e UI_MODE=ui \
+   -e PREFIX_FOR_NAME=ws \
+   -e AWS_REGION=eoepca-demo \
+   -e AWS_ENDPOINT_URL=https://minio.develop.eoepca.org \
+   -e KUBECONFIG=/kube/config \
+   --mount type=bind,src=$HOME/.kube/config-eoepca-demo,dst=/kube/config,readonly \
+   workspace-api:latest
 ```
 
 ## License
