@@ -15,6 +15,37 @@ By building on Kubernetes CRDs (`Storage`, `Datalab`), the API exposes a clean *
 
 See: [Storage CRD](https://provider-storage.versioneer.at/latest/reference-guides/api/) · [Datalab CRD](https://provider-datalab.versioneer.at/latest/reference-guides/api/)
 
+## Kubernetes RBAC Requirements
+
+As the Workspace API runs directly on Kubernetes, the **ServiceAccount** executing it requires minimal **RBAC (Role-Based Access Control)** permissions to operate on resources such as `secrets`, `storages`, and `datalabs`.
+These permissions allow the service to list, watch, and modify Custom Resources within its namespace and to read their CRD definitions.
+
+Both a **Role** and **ClusterRole** are automatically provisioned through the [Helm chart](https://github.com/EOEPCA/helm-charts-dev/tree/main/charts/rm-workspace-api).
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["pkg.internal"]
+    resources: ["storages", "datalabs"]
+    verbs: ["*"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+rules:
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+    resourceNames: ["storages.pkg.internal", "datalabs.pkg.internal"]
+```
+
+These permissions enable the API to **synchronize resource state** and **discover CRD schemas** while maintaining namespace isolation and least privilege.
+
 ## Table of Contents
 
 - [Structure](#structure)
