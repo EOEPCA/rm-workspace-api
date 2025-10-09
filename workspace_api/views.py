@@ -539,7 +539,7 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
         ) from e
 
     if datalab_api is not None:
-        auto_mode = _as_bool(getattr(config, "SESSION_MODE", "on"))
+        session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
         try:
             datalab_api.create(
@@ -549,7 +549,8 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
                     "metadata": {"name": workspace_name},
                     "spec": {
                         "users": [safe_owner],
-                        "sessions": [] if auto_mode else ["default"],
+                        "secretName": _storage_secret_name_for(safe_owner),
+                        "sessions": ["default"] if session_mode == "on" else [],
                         "vcluster": use_vcluster,
                     },
                 },
