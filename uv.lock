@@ -1525,6 +1525,7 @@ dependencies = [
     { name = "starlette" },
     { name = "starlette-exporter" },
     { name = "typing-extensions" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.optional-dependencies]
@@ -1540,11 +1541,9 @@ dev = [
     { name = "types-python-slugify" },
     { name = "types-pyyaml" },
     { name = "types-requests" },
-    { name = "uvicorn" },
 ]
 prod = [
     { name = "gunicorn" },
-    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.metadata]
@@ -1581,8 +1580,7 @@ requires-dist = [
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.12.20250822,<7" },
     { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32.4.20250809,<3" },
     { name = "typing-extensions", specifier = ">=4.15.0,<5" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.35.0,<1" },
-    { name = "uvicorn", extras = ["standard"], marker = "extra == 'prod'", specifier = ">=0.35.0,<1" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.35.0,<1" },
 ]
 provides-extras = ["dev", "prod"]
 

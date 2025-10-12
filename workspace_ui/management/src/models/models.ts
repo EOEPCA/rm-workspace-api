@@ -3,7 +3,6 @@ import type {WorkspaceStatus} from 'src/types/workspace'
 export interface Endpoint {
   id: string;
   url: string;
-  creation_timestamp: string;
 }
 
 export interface Membership {
