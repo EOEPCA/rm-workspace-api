@@ -1,6 +1,7 @@
 # Copyright 2025, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import base64
 import binascii
 import json
@@ -14,8 +15,8 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.client.rest
-from fastapi import HTTPException, Path, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import HTTPException, Path, Query, Request, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
@@ -101,7 +102,10 @@ def _res_required(api: str, kind: str) -> Any:
     except Exception as e:
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-            detail={"error": f"Required CRD for kind {kind} ({api}) not available", "exception": str(e)},
+            detail={
+                "error": f"Required CRD for kind {kind} ({api}) not available",
+                "exception": str(e),
+            },
         ) from e
 
 
@@ -156,7 +160,21 @@ def _registry_secret_name_for(principal: str) -> str | None:
     return _render_principal_placeholder(tmpl, principal)
 
 
-@app.get("/status", status_code=HTTPStatus.OK)
+@app.get(
+    "/status",
+    status_code=HTTPStatus.OK,
+    tags=["System"],
+    summary="Health and CRD availability",
+    description=(
+        "Reports service health and whether required/optional CRDs are present in the cluster.\n"
+        "- Requires: `storages.pkg.internal`\n"
+        "- Optional: `datalabs.pkg.internal`"
+    ),
+    responses={
+        200: {"description": "Service healthy; returns CRD presence flags."},
+        503: {"description": "Storage CRD missing; service not operational."},
+    },
+)
 async def status() -> Response:
     storage_present = _crd_exists(CRD_STORAGE)
     datalab_present = _crd_exists(CRD_DATALAB)
@@ -202,7 +220,9 @@ def _to_spec_dict(obj: Any) -> dict[str, Any] | None:
     return spec.to_dict() if hasattr(spec, "to_dict") else spec
 
 
-def _get_container_registry_credentials(principal: str) -> ContainerRegistryCredentials | None:
+def _get_container_registry_credentials(
+    principal: str,
+) -> ContainerRegistryCredentials | None:
     secret_name = _registry_secret_name_for(principal)
     if not secret_name:
         return None
@@ -272,7 +292,7 @@ def _perm_from_str(s: str | None) -> BucketPermission:
             return BucketPermission.NONE
 
 
-def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
+def _extract_relevant_bucket_access_requests(
     wanted_bucket_names: Sequence[str],
     wanted_principal: str,
 ) -> list[BucketAccessRequest]:
@@ -389,7 +409,11 @@ def _extract_relevant_bucket_access_requests(  # noqa: C901, PLR0912, PLR0915
                 grantee_workspace = _with_prefix(grantee)
                 granted_at = g.get("grantedAt") or g.get("granted_at")
                 if not granted_at:
-                    logger.warning("Skipping grant for grantee %s on bucket %s: missing grantedAt", grantee_workspace, bucket_name)
+                    logger.warning(
+                        "Skipping grant for grantee %s on bucket %s: missing grantedAt",
+                        grantee_workspace,
+                        bucket_name,
+                    )
                     continue
 
                 for existing in out:
@@ -408,7 +432,10 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     if not storage_cr:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
-            detail={"error": f"Storage '{workspace_name}' not found", "crd": CRD_STORAGE},
+            detail={
+                "error": f"Storage '{workspace_name}' not found",
+                "crd": CRD_STORAGE,
+            },
         )
 
     datalab_cr = _get_cr(KIND_DATALAB, workspace_name, required=False)
@@ -455,15 +482,35 @@ def _combine_workspace(workspace_name: str) -> Workspace:
             envs = {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
             credentials = Credentials(
                 bucketname=all_buckets[0] if buckets else (envs.get("BUCKET") or ""),
-                access=envs.get("AWS_ACCESS_KEY_ID", envs.get("access", envs.get("attribute.access", ""))),
-                secret=envs.get("AWS_SECRET_ACCESS_KEY", envs.get("secret", envs.get("attribute.secret", ""))),
-                endpoint=envs.get(
-                    "AWS_ENDPOINT_URL", envs.get("endpoint", envs.get("attribute.endpoint", getattr(config, "ENDPOINT", None)))
+                access=envs.get(
+                    "AWS_ACCESS_KEY_ID",
+                    envs.get("access", envs.get("attribute.access", "")),
                 ),
-                region=envs.get("AWS_REGION", envs.get("region", envs.get("attribute.region", getattr(config, "REGION", None)))),
+                secret=envs.get(
+                    "AWS_SECRET_ACCESS_KEY",
+                    envs.get("secret", envs.get("attribute.secret", "")),
+                ),
+                endpoint=envs.get(
+                    "AWS_ENDPOINT_URL",
+                    envs.get(
+                        "endpoint",
+                        envs.get("attribute.endpoint", getattr(config, "ENDPOINT", None)),
+                    ),
+                ),
+                region=envs.get(
+                    "AWS_REGION",
+                    envs.get(
+                        "region",
+                        envs.get("attribute.region", getattr(config, "REGION", None)),
+                    ),
+                ),
             )
         except (KeyError, TypeError, binascii.Error) as e:
-            logger.warning("Error decoding credentials secret '%s': %s", getattr(secret.metadata, "name", "<unknown>"), e)
+            logger.warning(
+                "Error decoding credentials secret '%s': %s",
+                getattr(secret.metadata, "name", "<unknown>"),
+                e,
+            )
 
     container_registry = _get_container_registry_credentials(principal)
 
@@ -500,7 +547,21 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     )
 
 
-@app.post("/workspaces", status_code=HTTPStatus.CREATED)
+@app.post(
+    "/workspaces",
+    status_code=HTTPStatus.CREATED,
+    tags=["Workspaces"],
+    summary="Create a new workspace",
+    description=(
+        "Creates a Storage resource and, if available, a Datalab resource for the given owner. "
+        "Datalab sessions are created based on the configured session mode."
+    ),
+    responses={
+        201: {"description": "Workspace created."},
+        422: {"description": "Workspace with this name already exists or invalid input."},
+        502: {"description": "Backend error while creating cluster resources."},
+    },
+)
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     safe_name = slugify(data.preferred_name, max_length=32) or str(uuid.uuid4())
     safe_owner = slugify(data.default_owner, max_length=32) or str(uuid.uuid4())
@@ -535,7 +596,10 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     except ApiException as e:
         raise HTTPException(
             status_code=HTTPStatus.BAD_GATEWAY,
-            detail={"error": f"Failed to create Storage '{workspace_name}'", "exception": str(e)},
+            detail={
+                "error": f"Failed to create Storage '{workspace_name}'",
+                "exception": str(e),
+            },
         ) from e
 
     if datalab_api is not None:
@@ -559,10 +623,28 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
         except ApiException as e:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_GATEWAY,
-                detail={"error": f"Failed to create Datalab '{workspace_name}'", "exception": str(e)},
+                detail={
+                    "error": f"Failed to create Datalab '{workspace_name}'",
+                    "exception": str(e),
+                },
             ) from e
 
     return {"name": workspace_name}
+
+
+def make_external_url(request: Request, path: str) -> str:
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+
+    prefix = (request.headers.get("x-forwarded-prefix") or "").rstrip("/")
+
+    root_path = (request.scope.get("root_path") or "").rstrip("/")
+
+    base = f"{scheme}://{host}{prefix or root_path}"
+    if not path.startswith("/"):
+        path = "/" + path
+    return base + path
 
 
 @app.get(
@@ -570,6 +652,17 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     status_code=HTTPStatus.OK,
     response_model=Workspace,
     response_model_exclude_none=True,
+    tags=["Workspaces"],
+    summary="Get a workspace",
+    description=(
+        "Returns a consolidated view of a workspace, including storage, memberships, "
+        "status, and optional container registry credentials. If `Accept: text/html` and UI mode is enabled, "
+        "returns an HTML page embedding the workspace data."
+    ),
+    responses={
+        200: {"description": "Workspace details returned."},
+        404: {"description": "Workspace not found."},
+    },
 )
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
     ws = _combine_workspace(workspace_name)
@@ -581,20 +674,41 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
         and (getattr(config, "UI_MODE", "no") == "ui" or request.query_params.get("devmode") == "true")
     ):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
+
+        datalab_path = f"/workspaces/{workspace_name}/sessions/default"
+        datalab_url = make_external_url(request, datalab_path)
+
+        endpoints_data = _to_b64_json([{"id": "Datalab (default)", "url": datalab_url}])
+
         return templates.TemplateResponse(
             "ui.html",
             {
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "endpoints_data": endpoints_data,
                 "frontend_url": getattr(config, "FRONTEND_URL", "/ui/management"),
             },
         )
     return JSONResponse(ws.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)
 
 
-@app.put("/workspaces/{workspace_name}", status_code=HTTPStatus.ACCEPTED)
-async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:  # noqa: C901, PLR0912, PLR0915
+@app.put(
+    "/workspaces/{workspace_name}",
+    status_code=HTTPStatus.ACCEPTED,
+    tags=["Workspaces"],
+    summary="Update a workspace",
+    description=(
+        "Patches workspace Storage (buckets and access requests/grants). "
+        "If the Datalab CRD is present, can also add members to the Datalab."
+    ),
+    responses={
+        202: {"description": "Update accepted and applied."},
+        404: {"description": "Workspace not found."},
+        502: {"description": "Backend error while patching cluster resources."},
+    },
+)
+async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
 
     try:
@@ -693,13 +807,19 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
 
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
     if (update.add_members or []) and datalab_api is None:
-        logger.warning("Datalab CRD not present; cannot add members for workspace '%s'.", workspace_name)
+        logger.warning(
+            "Datalab CRD not present; cannot add members for workspace '%s'.",
+            workspace_name,
+        )
     elif update.add_members:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
-                logger.warning("Datalab resource '%s' not found; skipping member additions.", workspace_name)
+                logger.warning(
+                    "Datalab resource '%s' not found; skipping member additions.",
+                    workspace_name,
+                )
             else:
                 logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
             return {"name": workspace_name}
@@ -741,7 +861,17 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
     return {"name": workspace_name}
 
 
-@app.delete("/workspaces/{workspace_name}", status_code=HTTPStatus.NO_CONTENT)
+@app.delete(
+    "/workspaces/{workspace_name}",
+    status_code=HTTPStatus.NO_CONTENT,
+    tags=["Workspaces"],
+    summary="Delete a workspace",
+    description=("Deletes the Storage resource and, if present, the associated Datalab resource."),
+    responses={
+        204: {"description": "Workspace deleted."},
+        404: {"description": "Workspace not found."},
+    },
+)
 async def delete_workspace(workspace_name: str = workspace_path_type) -> Response:
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
@@ -761,3 +891,117 @@ async def delete_workspace(workspace_name: str = workspace_path_type) -> Respons
                 raise
 
     return Response(status_code=HTTPStatus.NO_CONTENT)
+
+
+@app.get(
+    "/workspaces/{workspace_name}/sessions/{session_id}",
+    status_code=HTTPStatus.OK,
+    tags=["Sessions"],
+    summary="Enable a session and redirect to it",
+    description=(
+        "Enables (if necessary) and waits for a session URL, then redirects.\n\n"
+        "- Loads the Datalab for the workspace.\n"
+        "- If the session is not declared and `SESSION_MODE=auto` and the session is `default`, "
+        "it declares the `default` session.\n"
+        "- Polls `status.sessions[session_id].url` once per second up to `timeout` seconds.\n"
+        "- On success returns **302 Found** redirect to the session URL.\n"
+        '- On failure returns **404 Not Found** with a consistent "enabling session" error message.'
+    ),
+    responses={
+        302: {"description": "Session enabled; redirecting to the session URL."},
+        404: {"description": "Session enabling unavailable/failed or timed out."},
+        502: {"description": "Failed to enable session due to backend error."},
+    },
+)
+async def get_workspace_session(
+    workspace_name: str = workspace_path_type,
+    session_id: str = Path(..., description="Session identifier"),
+    wait_seconds: int = Query(
+        30,
+        alias="timeout",
+        ge=0,
+        description="Max seconds to wait while enabling the session",
+    ),
+) -> Response:
+    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    if datalab_api is None:
+        msg = f"Session enabling unavailable: CRD {CRD_DATALAB} not found"
+        logger.warning(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+
+    dl = _get_cr(KIND_DATALAB, workspace_name, required=False)
+    if dl is None:
+        msg = f"Session enabling failed: workspace '{workspace_name}' not found"
+        logger.warning(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+
+    def _status_url(obj: Any, sid: str) -> str | None:
+        st = getattr(obj, "status", None)
+
+        if st is None:
+            st_dict: dict[str, Any] = {}
+        elif isinstance(st, dict):
+            st_dict = st
+        elif hasattr(st, "to_dict"):
+            st_dict = st.to_dict()  # type: ignore[no-any-return]
+        else:
+            st_dict = {}
+
+        sessions = st_dict.get("sessions") or {}
+        payload = sessions.get(str(sid)) or {}
+        return payload.get("url") if isinstance(payload, dict) else None
+
+    spec = _to_spec_dict(dl) or {}
+    spec_sessions = [str(x) for x in (spec.get("sessions") or [])]
+
+    if str(session_id) not in spec_sessions:
+        session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
+        if session_mode == "auto" and str(session_id) == "default":
+            new_sessions = list(dict.fromkeys([*spec_sessions, "default"]))
+            logger.info(
+                "Enabling session '%s' for workspace '%s' (auto mode).",
+                session_id,
+                workspace_name,
+            )
+            try:
+                datalab_api.patch(
+                    name=workspace_name,
+                    namespace=current_namespace(),
+                    body={"spec": {"sessions": new_sessions}},
+                    content_type="application/merge-patch+json",
+                )
+            except ApiException as e:
+                msg = f"Enabling session '{session_id}' for workspace '{workspace_name}' failed"
+                logger.warning("%s: %s", msg, e)
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_GATEWAY,
+                    detail={"error": msg, "exception": str(e)},
+                ) from e
+        else:
+            msg = f"Session enabling unavailable: session '{session_id}' not declared and auto mode is disabled"
+            logger.info(msg)
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+
+    logger.info(
+        "Waiting up to %ss while enabling session '%s' for workspace '%s'.",
+        wait_seconds,
+        session_id,
+        workspace_name,
+    )
+    try:
+        async with asyncio.timeout(wait_seconds):
+            while True:
+                dl = _get_cr(KIND_DATALAB, workspace_name, required=False)
+                url = _status_url(dl, str(session_id)) if dl else None
+                if url:
+                    logger.info(
+                        "Session enabled: session '%s' for workspace '%s' is ready.",
+                        session_id,
+                        workspace_name,
+                    )
+                    return RedirectResponse(url, status_code=HTTPStatus.FOUND)  # 302
+                await asyncio.sleep(1)
+    except TimeoutError as e:
+        msg = f"Session enabling timed out after {wait_seconds}s for session '{session_id}'"
+        logger.warning(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg}) from e

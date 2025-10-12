@@ -277,9 +277,3 @@ class Endpoint(BaseModel):
 
     id: str = Field(..., description="Unique identifier.")
     url: str = Field(..., description="Public URL of the exposed service.")
-    creation_timestamp: datetime | None = Field(..., description="When the endpoint was created (UTC).")
-
-    @field_validator("creation_timestamp", mode="after")
-    @classmethod
-    def _ts_utc(cls, v: datetime | None) -> datetime | None:
-        return _coerce_utc(v)
