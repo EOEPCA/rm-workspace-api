@@ -46,6 +46,19 @@ rules:
 
 These permissions enable the API to **synchronize resource state** and **discover CRD schemas** while maintaining namespace isolation and least privilege.
 
+## Session Operation Modes
+
+There are three modes that define how the Datalab session for a team is managed:
+
+- **Disabled (`SESSION_MODE=off`)** — The Datalab is generally disabled. Only the operator can manually patch the corresponding `Datalab` Custom Resource in the cluster to start a session for a team. In this mode, the workspace is primarily used to provision storage buckets and manage bucket access.
+
+- **Always On (`SESSION_MODE=on`)** — The Datalab session is automatically started during workspace provisioning and remains continuously active. Only the operator can manually patch the `Datalab` resource in the cluster to stop (and restart) the session if required.
+
+- **On Demand (`SESSION_MODE=auto`)** — The Datalab session can be started by a team directly through the Workspace UI whenever needed. The operator can define policies for automatic shutdowns of sessions (for example, every day at 8 p.m. or every Friday night). When a team needs access again, they can simply relaunch the session via the Datalab link in the Workspace UI. Examples for configuring time-based shutdown policies are provided in the documentation respectivly can be found on the demo cluster.
+
+**Note:**
+At the moment, there is only one (“default”) session per team. Operators can manually start additional sessions via the corresponding `Datalab` Custom Resource in the cluster, but multi-session support per team is not yet officially available and is considered experimental.
+
 ## Table of Contents
 
 - [Structure](#structure)
