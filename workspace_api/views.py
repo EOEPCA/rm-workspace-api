@@ -1,7 +1,6 @@
 # Copyright 2025, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 import base64
 import binascii
 import json
@@ -15,8 +14,8 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.client.rest
-from fastapi import HTTPException, Path, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import HTTPException, Path, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
@@ -31,7 +30,6 @@ from .models import (
     ContainerRegistryCredentials,
     Credentials,
     Datalab,
-    DatalabStatus,
     Membership,
     MembershipRole,
     Storage,
@@ -293,8 +291,9 @@ def _perm_from_str(s: str | None) -> BucketPermission:
 
 
 def _extract_relevant_bucket_access_requests(
-    wanted_bucket_names: Sequence[str],
-    wanted_principal: str,
+    discoverable_bucket_names: Sequence[str],
+    current_principal: str,
+    current_workspace_name: str,
 ) -> list[BucketAccessRequest]:
     try:
         storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
@@ -303,9 +302,6 @@ def _extract_relevant_bucket_access_requests(
     except Exception as e:
         logger.warning("Failed listing storages: %s", e)
         storage_items = []
-
-    wanted_workspace = _with_prefix(wanted_principal)
-    wanted_buckets = {b.strip() for b in (wanted_bucket_names or []) if isinstance(b, str) and b.strip()}
 
     def _spec_dict(obj: Any) -> dict:
         if hasattr(obj, "spec") and hasattr(obj.spec, "to_dict"):
@@ -334,7 +330,7 @@ def _extract_relevant_bucket_access_requests(
                 bucket_name = (r.get("bucketName") or "").strip()
                 if not bucket_name:
                     continue
-                if not (principal == wanted_principal or (bucket_name in wanted_buckets)):
+                if not (principal == current_principal or (bucket_name in discoverable_bucket_names)):
                     continue
 
                 req_at = r.get("requestedAt")
@@ -351,16 +347,16 @@ def _extract_relevant_bucket_access_requests(
                 else:
                     perm = BucketPermission.READ_WRITE
 
-                out.append(
-                    BucketAccessRequest(
-                        workspace=workspace_name,
-                        bucket=bucket_name,
-                        permission=perm,
-                        request_timestamp=req_at,
-                        grant_timestamp=None,
-                        denied_timestamp=None,
-                    )
+                req = BucketAccessRequest(
+                    workspace=workspace_name,
+                    bucket=bucket_name,
+                    permission=perm,
+                    request_timestamp=req_at,
+                    grant_timestamp=None,
+                    denied_timestamp=None,
                 )
+                req._principal = principal  # noqa: SLF001
+                out.append(req)
 
     existing_buckets_names = {bar.bucket for bar in out}
     for obj in storage_items:
@@ -375,22 +371,23 @@ def _extract_relevant_bucket_access_requests(
                     continue
 
                 bucket_name = (b.get("bucketName") or "").strip()
-                if not bucket_name or bucket_name in existing_buckets_names or bucket_name in wanted_bucket_names:
+                if not bucket_name or bucket_name in existing_buckets_names or bucket_name in discoverable_bucket_names:
                     continue
 
-                out.append(
-                    BucketAccessRequest(
-                        workspace=wanted_workspace,
-                        bucket=bucket_name,
-                        permission=BucketPermission.READ_WRITE,
-                        request_timestamp=None,
-                        grant_timestamp=None,
-                        denied_timestamp=None,
-                    )
+                req = BucketAccessRequest(
+                    workspace=current_workspace_name,
+                    bucket=bucket_name,
+                    permission=BucketPermission.READ_WRITE,
+                    request_timestamp=None,
+                    grant_timestamp=None,
+                    denied_timestamp=None,
                 )
+                req._principal = current_principal  # noqa: SLF001
+                out.append(req)
                 existing_buckets_names.add(bucket_name)
 
     for obj in storage_items:
+        workspace_name = (getattr(obj.metadata, "name", None) or "").strip()
         spec = _spec_dict(obj)
         if not isinstance(spec, dict):
             continue
@@ -406,18 +403,17 @@ def _extract_relevant_bucket_access_requests(
                 if not grantee or not bucket_name:
                     continue
 
-                grantee_workspace = _with_prefix(grantee)
                 granted_at = g.get("grantedAt") or g.get("granted_at")
                 if not granted_at:
                     logger.warning(
                         "Skipping grant for grantee %s on bucket %s: missing grantedAt",
-                        grantee_workspace,
+                        grantee,
                         bucket_name,
                     )
                     continue
 
                 for existing in out:
-                    if existing.bucket == bucket_name and existing.workspace == grantee_workspace:
+                    if existing.bucket == bucket_name and existing._principal == grantee:  # noqa: SLF001
                         existing.request_timestamp = g.get("requestedAt") or granted_at
                         perm = _perm_from_str(g.get("permission"))
                         existing.grant_timestamp = granted_at if perm != BucketPermission.NONE else None
@@ -457,7 +453,9 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         if _as_bool((it or {}).get("discoverable")):
             discoverable_buckets.append(bname)
 
-    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(_dedup_preserve(discoverable_buckets), principal)
+    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(
+        _dedup_preserve(discoverable_buckets), principal, workspace_name
+    )
 
     users = (datalab_spec or {}).get("users") or []
     now = datetime.now(UTC)
@@ -518,23 +516,12 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     version = storage_cr.metadata.resourceVersion
     workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
 
-    sessions = (datalab_spec or {}).get("sessions") or []
-
-    session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
-
-    if sessions:
-        datalab_status = DatalabStatus.ALWAYS_ON
-    elif session_mode == "auto":
-        datalab_status = DatalabStatus.ON_DEMAND
-    else:
-        datalab_status = DatalabStatus.DISABLED
-
     storage = Storage(
         buckets=all_buckets,
         credentials=credentials,
         bucket_access_requests=relevant_bucket_access_requests,
     )
-    datalab = Datalab(memberships=memberships, status=datalab_status)
+    datalab = Datalab(memberships=memberships)
 
     return Workspace(
         name=workspace_name,
@@ -667,7 +654,7 @@ def make_external_url(request: Request, path: str) -> str:
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
     ws = _combine_workspace(workspace_name)
 
-    accept_header = request.headers.get("accept", "")
+    accept_header = request.headers.get("accept", "").lower()
     if (
         "text/html" in accept_header
         and templates is not None
@@ -893,35 +880,27 @@ async def delete_workspace(workspace_name: str = workspace_path_type) -> Respons
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
 
+POLL_INTERVAL_SECONDS = 10
+MIN_DISPLAY_SECONDS = 3
+
+
 @app.get(
     "/workspaces/{workspace_name}/sessions/{session_id}",
     status_code=HTTPStatus.OK,
     tags=["Sessions"],
-    summary="Enable a session and redirect to it",
-    description=(
-        "Enables (if necessary) and waits for a session URL, then redirects.\n\n"
-        "- Loads the Datalab for the workspace.\n"
-        "- If the session is not declared and `SESSION_MODE=auto` and the session is `default`, "
-        "it declares the `default` session.\n"
-        "- Polls `status.sessions[session_id].url` once per second up to `timeout` seconds.\n"
-        "- On success returns **302 Found** redirect to the session URL.\n"
-        '- On failure returns **404 Not Found** with a consistent "enabling session" error message.'
-    ),
+    summary="Enable a session; JSON status or simple HTML waiter",
+    description="On-demand session enablement. HTML: probe and wait. Non-HTML: 200 URL or 202 with Retry-After.",
     responses={
-        302: {"description": "Session enabled; redirecting to the session URL."},
-        404: {"description": "Session enabling unavailable/failed or timed out."},
-        502: {"description": "Failed to enable session due to backend error."},
+        200: {"description": "Ready: JSON with URL or minimal HTML waiter showing link and countdown."},
+        202: {"description": 'Starting: JSON {"status":"starting"} with Retry-After: 10.'},
+        404: {"description": "Workspace/session not found or enabling unavailable."},
+        502: {"description": "Backend failure while enabling session."},
     },
 )
 async def get_workspace_session(
+    request: Request,
     workspace_name: str = workspace_path_type,
     session_id: str = Path(..., description="Session identifier"),
-    wait_seconds: int = Query(
-        30,
-        alias="timeout",
-        ge=0,
-        description="Max seconds to wait while enabling the session",
-    ),
 ) -> Response:
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
     if datalab_api is None:
@@ -935,34 +914,13 @@ async def get_workspace_session(
         logger.warning(msg)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 
-    def _status_url(obj: Any, sid: str) -> str | None:
-        st = getattr(obj, "status", None)
-
-        if st is None:
-            st_dict: dict[str, Any] = {}
-        elif isinstance(st, dict):
-            st_dict = st
-        elif hasattr(st, "to_dict"):
-            st_dict = st.to_dict()  # type: ignore[no-any-return]
-        else:
-            st_dict = {}
-
-        sessions = st_dict.get("sessions") or {}
-        payload = sessions.get(str(sid)) or {}
-        return payload.get("url") if isinstance(payload, dict) else None
-
     spec = _to_spec_dict(dl) or {}
     spec_sessions = [str(x) for x in (spec.get("sessions") or [])]
-
     if str(session_id) not in spec_sessions:
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         if session_mode == "auto" and str(session_id) == "default":
             new_sessions = list(dict.fromkeys([*spec_sessions, "default"]))
-            logger.info(
-                "Enabling session '%s' for workspace '%s' (auto mode).",
-                session_id,
-                workspace_name,
-            )
+            logger.info("Enabling session '%s' for workspace '%s' (auto mode).", session_id, workspace_name)
             try:
                 datalab_api.patch(
                     name=workspace_name,
@@ -982,26 +940,65 @@ async def get_workspace_session(
             logger.info(msg)
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 
-    logger.info(
-        "Waiting up to %ss while enabling session '%s' for workspace '%s'.",
-        wait_seconds,
-        session_id,
-        workspace_name,
+    st = getattr(dl, "status", None)
+    if st is None:
+        st_dict: dict[str, Any] = {}
+    elif isinstance(st, dict):
+        st_dict = st
+    elif hasattr(st, "to_dict"):
+        st_dict = st.to_dict()  # type: ignore[no-any-return]
+    else:
+        st_dict = {}
+    payload = (st_dict.get("sessions") or {}).get(str(session_id)) or {}
+    url = payload.get("url") if isinstance(payload, dict) else None
+
+    accept_header = request.headers.get("accept", "").lower()
+    if "text/html" in accept_header:
+        html = (
+            "<!doctype html><meta charset='utf-8'>"
+            "<title>Preparing session…</title>"
+            "<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}"
+            "p{padding:1em 2em;border-radius:4px;background:#eee;}</style>"
+            "<p id='msg'>Preparing session, please wait…</p>"
+            "<script>"
+            f"const waitBefore={MIN_DISPLAY_SECONDS};"
+            "const pollInterval=10000;"
+            "function isHttp(u){try{const x=new URL(u);return x.protocol==='http:'||x.protocol==='https:';}catch{return false;}}"
+            "function api(){const b=location.href.split('#')[0];const s=b.includes('?')?'&':'?';return b+s+'format=json&ts='+Date.now();}"
+            "function checkUrl(url) {"
+            "  document.getElementById('msg').textContent='Session is starting. Verifying...';"
+            "  fetch(url, {method:'HEAD', cache:'no-store'})"
+            "    .then(r => {"
+            "      if (!r.ok) throw new Error('status:' + r.status);"
+            "      document.getElementById('msg').innerHTML = `Session ready. Redirecting to <a href='${url}'>${url}</a>…`;"
+            "      setTimeout(() => location.replace(url), waitBefore * 1000);"
+            "    })"
+            "    .catch(err => {"
+            "      document.getElementById('msg').textContent='Session not ready yet. Will re-check shortly...';"
+            "      setTimeout(check, pollInterval);"
+            "    });"
+            "}"
+            "function check() {"
+            "  fetch(api(),{headers:{'Accept':'application/json','Cache-Control':'no-store'},cache:'no-store'})"
+            "    .then(r => r.status === 200 ? r.json() : Promise.reject(new Error('status:'+r.status)))"
+            "    .then(d => {"
+            "       if(d && d.url && isHttp(d.url)) { checkUrl(d.url); }"
+            "       else { throw new Error('no-url'); }"
+            "    })"
+            "    .catch(e => {"
+            "       document.getElementById('msg').textContent='Session not ready yet. Retrying...';"
+            "       setTimeout(check, pollInterval);"
+            "    });"
+            "}"
+            "check();"
+            "</script>"
+        )
+        return HTMLResponse(html, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
+
+    if url:
+        return JSONResponse({"url": url}, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
+    return JSONResponse(
+        {"status": "starting"},
+        status_code=HTTPStatus.ACCEPTED,
+        headers={"Retry-After": str(POLL_INTERVAL_SECONDS), "Cache-Control": "no-store"},
     )
-    try:
-        async with asyncio.timeout(wait_seconds):
-            while True:
-                dl = _get_cr(KIND_DATALAB, workspace_name, required=False)
-                url = _status_url(dl, str(session_id)) if dl else None
-                if url:
-                    logger.info(
-                        "Session enabled: session '%s' for workspace '%s' is ready.",
-                        session_id,
-                        workspace_name,
-                    )
-                    return RedirectResponse(url, status_code=HTTPStatus.FOUND)  # 302
-                await asyncio.sleep(1)
-    except TimeoutError as e:
-        msg = f"Session enabling timed out after {wait_seconds}s for session '{session_id}'"
-        logger.warning(msg)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg}) from e

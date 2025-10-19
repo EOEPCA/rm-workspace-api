@@ -14,7 +14,8 @@
                 "PREFIX_FOR_NAME": "ws",
                 "AWS_REGION": "eoepca-demo",
                 "AWS_ENDPOINT_URL": "https://minio.develop.eoepca.org",
-                "UI_MODE": "ui"
+                "UI_MODE": "ui",
+                "SESSION_MODE": "auto"
             },
             "args": [
                 "workspace_api:app",

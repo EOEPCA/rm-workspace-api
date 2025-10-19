@@ -7,7 +7,7 @@ import base64
 import enum
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator
 
 
 class MembershipRole(str, enum.Enum):
@@ -26,12 +26,6 @@ class WorkspaceStatus(str, enum.Enum):
     PROVISIONING = "provisioning"
     READY = "ready"
     UNKNOWN = "unknown"
-
-
-class DatalabStatus(str, enum.Enum):
-    ALWAYS_ON = "AlwaysOn"
-    DISABLED = "Disabled"
-    ON_DEMAND = "OnDemand"
 
 
 def _coerce_utc(dt: datetime | str | None) -> datetime | None:
@@ -106,6 +100,8 @@ class BucketAccessRequest(BaseModel):
     request_timestamp: datetime | None = Field(..., description="When the request was issued (UTC, RFC3339).")
     grant_timestamp: datetime | None = Field(None, description="When the request was granted (UTC, RFC3339).")
     denied_timestamp: datetime | None = Field(None, description="When the request was denied (UTC, RFC3339).")
+
+    _principal: str | None = PrivateAttr(default=None)
 
     @field_validator("workspace", "bucket", mode="before")
     @classmethod
@@ -247,8 +243,6 @@ class Datalab(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace datalab."})
 
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
-
-    status: DatalabStatus = Field(default=DatalabStatus.DISABLED, description="Session lifecycle state.")
 
 
 class Workspace(BaseModel):
