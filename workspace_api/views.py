@@ -413,7 +413,9 @@ def _extract_relevant_bucket_access_requests(
                     continue
 
                 for existing in out:
-                    if existing.bucket == bucket_name and existing._principal == grantee:  # noqa: SLF001
+                    if (
+                        existing.bucket == bucket_name and existing._principal == grantee  # noqa: SLF001
+                    ):
                         existing.request_timestamp = g.get("requestedAt") or granted_at
                         perm = _perm_from_str(g.get("permission"))
                         existing.grant_timestamp = granted_at if perm != BucketPermission.NONE else None
@@ -740,10 +742,36 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
                 r = req_by_bucket[bucket]
                 r.setdefault("requestedAt", _iso(p.request_timestamp))
         else:
-            grantee_principal = p.workspace
-            prefix = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
-            if p and p.workspace.startswith(prefix + "-"):
-                grantee_principal = p.workspace[len(prefix) + 1 :]
+            try:
+                grantee_storage_obj = storage_api.get(name=p.workspace, namespace=current_namespace())
+            except ApiException as e:
+                logger.warning(
+                    "patch_bucket_access_requests %s with invalid workspace (status=%s)",
+                    p,
+                    getattr(e, "status", None),
+                )
+                if e.status == HTTPStatus.NOT_FOUND:
+                    raise HTTPException(
+                        status_code=HTTPStatus.BAD_REQUEST,
+                        detail={"error": "invalid_workspace", "workspace": p.workspace},
+                    ) from e
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_GATEWAY,
+                    detail={
+                        "error": "backend_error",
+                        "status": e.status,
+                        "reason": getattr(e, "reason", None),
+                    },
+                ) from e
+
+            grantee_storage_spec = _to_spec_dict(grantee_storage_obj) or {}
+            grantee_principal = (grantee_storage_spec.get("principal") or "").strip()
+            if not grantee_principal:
+                logger.warning("patch_bucket_access_requests %s with no principal", p)
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_REQUEST,
+                    detail={"error": "missing_principal", "workspace": p.workspace},
+                )
 
             key = (bucket, grantee_principal)
             g = gr_by_key.get(key)
@@ -920,7 +948,11 @@ async def get_workspace_session(
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         if session_mode == "auto" and str(session_id) == "default":
             new_sessions = list(dict.fromkeys([*spec_sessions, "default"]))
-            logger.info("Enabling session '%s' for workspace '%s' (auto mode).", session_id, workspace_name)
+            logger.info(
+                "Enabling session '%s' for workspace '%s' (auto mode).",
+                session_id,
+                workspace_name,
+            )
             try:
                 datalab_api.patch(
                     name=workspace_name,
@@ -996,9 +1028,16 @@ async def get_workspace_session(
         return HTMLResponse(html, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
 
     if url:
-        return JSONResponse({"url": url}, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
+        return JSONResponse(
+            {"url": url},
+            status_code=HTTPStatus.OK,
+            headers={"Cache-Control": "no-store"},
+        )
     return JSONResponse(
         {"status": "starting"},
         status_code=HTTPStatus.ACCEPTED,
-        headers={"Retry-After": str(POLL_INTERVAL_SECONDS), "Cache-Control": "no-store"},
+        headers={
+            "Retry-After": str(POLL_INTERVAL_SECONDS),
+            "Cache-Control": "no-store",
+        },
     )
