@@ -15,7 +15,9 @@
                 "AWS_REGION": "eoepca-demo",
                 "AWS_ENDPOINT_URL": "https://minio.develop.eoepca.org",
                 "UI_MODE": "ui",
-                "SESSION_MODE": "auto"
+                "SESSION_MODE": "auto",
+                "AUTH_MODE": "gateway",
+                "AUTH_DEBUG": "true"
             },
             "args": [
                 "workspace_api:app",
@@ -41,7 +43,10 @@
                 "PREFIX_FOR_NAME": "s",
                 "AWS_REGION": "kalpha",
                 "AWS_ENDPOINT_URL": "https://minio.console.kalpha.versioneer.at/",
-                "UI_MODE": "ui"
+                "UI_MODE": "ui",
+                "SESSION_MODE": "auto",
+                "AUTH_MODE": "gateway",
+                "AUTH_DEBUG": "true"
             },
             "args": [
                 "workspace_api:app",

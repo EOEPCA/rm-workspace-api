@@ -215,6 +215,44 @@ Installed via the backend `dev` extra:
 
 Run via `uv run <tool>` from `workspace_api/`.
 
+## Authentication and Authorization Model
+
+The Workspace API follows a **gateway-centric authentication strategy**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway is responsible for validating the access token cryptographically, including signature verification, issuer (`iss`), audience (`aud`), and expiration (`exp`). Only requests with a valid access token are forwarded to the Workspace API.
+
+Inside the backend, the access token is **not re-validated cryptographically**. Instead, it is treated as a trusted source of identity and authorization context. For each request, the API extracts a minimal set of claims from the token and attaches them to the request context via `request.state.user`. This context is then available to all handlers and dependencies.
+
+The backend retains only:
+
+- the user identity, taken from `preferred_username`
+- a workspace-to-role mapping derived from the `resource_access` claim
+
+Workspace permissions are normalized into a simple map of workspace identifiers to roles. Two roles are currently recognized:
+
+- `admin` – administrative access to a workspace
+- `access` – regular (non-administrative) access to a workspace
+
+Authorization decisions within the API are made exclusively based on this normalized mapping. Endpoints check whether the current user has access to a given workspace and whether administrative privileges are required.
+
+Authentication can be disabled by setting `AUTH_MODE=no`. In this mode, the backend injects a synthetic user context with a fixed username (`public`) and a wildcard workspace permission granting admin access to all workspaces.
+
+### Example Access Token Claims for Development
+
+The following JSON document is an example of claims that matches the expectations of the Workspace API. For development or testing purposes, this payload can be encoded as a JWT and passed via the `Authorization` header as a Bearer token.
+
+```json
+{
+  "preferred_username": "alice",
+  "resource_access": {
+    "ws-alice": {
+      "roles": ["ws_admin"]
+    },
+    "ws-bob": {
+      "roles": ["ws_access"]
+    }
+  }
+}
+```
+
 ## Configuration
 
 Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes access):
@@ -230,6 +268,7 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | `REGION` | from `AWS_REGION` or `AWS_DEFAULT_REGION` | S3 region used when falling back to environment-based config. |
 | `UI_MODE` | `no` | Set to `ui` to enable templated HTML shell and SPA embedding. |
 | `FRONTEND_URL` | `/ui/management` | Base path (prod) or absolute URL (dev server like `http://localhost:9000`) for the SPA. |
+| `AUTH_MODE` | `gateway` | Authentication mode `gateway` expects a validated `Authorization: Bearer <access_token>` header to be forwarded by an upstream gateway, `no` disables authentication entirely (for local development only). |
 
 ## Docker
 
