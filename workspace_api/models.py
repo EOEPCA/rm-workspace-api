@@ -22,6 +22,40 @@ class BucketPermission(str, enum.Enum):
     NONE = "None"
 
 
+class UserPermission(str, enum.Enum):
+    VIEW_BUCKET_CREDENTIALS = "VIEW_BUCKET_CREDENTIALS"
+    VIEW_MEMBERS = "VIEW_MEMBERS"
+    VIEW_BUCKETS = "VIEW_BUCKETS"
+    MANAGE_MEMBERS = "MANAGE_MEMBERS"
+    MANAGE_BUCKETS = "MANAGE_BUCKETS"
+
+
+ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
+    "ws_access": {
+        UserPermission.VIEW_BUCKET_CREDENTIALS,
+        UserPermission.VIEW_MEMBERS,
+        UserPermission.VIEW_BUCKETS,
+    },
+    "ws_admin": {
+        UserPermission.VIEW_BUCKET_CREDENTIALS,
+        UserPermission.VIEW_MEMBERS,
+        UserPermission.VIEW_BUCKETS,
+        UserPermission.MANAGE_MEMBERS,
+        UserPermission.MANAGE_BUCKETS,
+    },
+}
+
+
+class UserContext(BaseModel):
+    """User-specific context for a workspace."""
+
+    name: str = Field(..., description="Username of the current user.")
+    permissions: list[UserPermission] = Field(
+        ...,
+        description="Permissions of the current user within this workspace.",
+    )
+
+
 class WorkspaceStatus(str, enum.Enum):
     PROVISIONING = "provisioning"
     READY = "ready"
@@ -257,6 +291,10 @@ class Workspace(BaseModel):
     storage: Storage = Field(default_factory=Storage, description="Storage for buckets, credentials, access.")
     datalab: Datalab = Field(default_factory=Datalab, description="Datalab for memberships and sessions.")
     container_registry: ContainerRegistryCredentials | None = Field(None, description="Credentials for the workspace's container registry.")
+    user: UserContext = Field(
+        ...,
+        description="User context with effective permissions for this workspace.",
+    )
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod

@@ -33,6 +33,7 @@ from .models import (
     Membership,
     MembershipRole,
     Storage,
+    UserContext,
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
@@ -425,7 +426,7 @@ def _extract_relevant_bucket_access_requests(
     return out
 
 
-def _combine_workspace(workspace_name: str) -> Workspace:
+def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     storage_cr = _get_cr(KIND_STORAGE, workspace_name, required=True)
     if not storage_cr:
         raise HTTPException(
@@ -525,6 +526,15 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     )
     datalab = Datalab(memberships=memberships)
 
+    user_ctx = request.state.user
+
+    username: str = user_ctx["username"]
+    workspace_perms = set()
+    if "*" in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"]["*"]
+    if workspace_name in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"][workspace_name]
+
     return Workspace(
         name=workspace_name,
         creation_timestamp=creation_timestamp,
@@ -533,6 +543,10 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         storage=storage,
         datalab=datalab,
         container_registry=container_registry,
+        user=UserContext(
+            name=username,
+            permissions=sorted(workspace_perms),
+        ),
     )
 
 
@@ -654,7 +668,7 @@ def make_external_url(request: Request, path: str) -> str:
     },
 )
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
-    ws = _combine_workspace(workspace_name)
+    ws = _combine_workspace(request, workspace_name)
 
     accept_header = request.headers.get("accept", "").lower()
     if (

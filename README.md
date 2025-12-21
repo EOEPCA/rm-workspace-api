@@ -215,25 +215,32 @@ Installed via the backend `dev` extra:
 
 Run via `uv run <tool>` from `workspace_api/`.
 
-## Authentication and Authorization Model
+## Authentication and Authorization
 
-The Workspace API follows a **gateway-centric authentication strategy**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway is responsible for validating the access token cryptographically, including signature verification, issuer (`iss`), audience (`aud`), and expiration (`exp`). Only requests with a valid access token are forwarded to the Workspace API.
+The Workspace API uses a **gateway-centric authentication model**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway validates the access token (signature, issuer, audience, expiration). Only authenticated requests are forwarded to the backend.
 
-Inside the backend, the access token is **not re-validated cryptographically**. Instead, it is treated as a trusted source of identity and authorization context. For each request, the API extracts a minimal set of claims from the token and attaches them to the request context via `request.state.user`. This context is then available to all handlers and dependencies.
+The backend **does not re-validate tokens cryptographically**. Instead, it treats the token as trusted input and extracts a minimal identity and authorization context, which is attached to each request via `request.state.user`.
 
-The backend retains only:
+Internally, the API retains only:
 
-- the user identity, taken from `preferred_username`
-- a workspace-to-role mapping derived from the `resource_access` claim
+- the username (`preferred_username`)
+- a workspace-to-permissions mapping derived from the token’s `resource_access` claim
 
-Workspace permissions are normalized into a simple map of workspace identifiers to roles. Two roles are currently recognized:
+External roles are normalized into explicit permissions:
 
-- `admin` – administrative access to a workspace
-- `access` – regular (non-administrative) access to a workspace
+- **`ws_access`**
+  - `VIEW_BUCKET_CREDENTIALS`
+  - `VIEW_MEMBERS`
+  - `VIEW_BUCKETS`
 
-Authorization decisions within the API are made exclusively based on this normalized mapping. Endpoints check whether the current user has access to a given workspace and whether administrative privileges are required.
+- **`ws_admin`**
+  - all of the above, plus:
+  - `MANAGE_MEMBERS`
+  - `MANAGE_BUCKETS`
 
-Authentication can be disabled by setting `AUTH_MODE=no`. In this mode, the backend injects a synthetic user context with a fixed username (`public`) and a wildcard workspace permission granting admin access to all workspaces.
+Authorization decisions are based exclusively on these permissions, not on raw roles.
+
+When `AUTH_MODE=no`, authentication is disabled. The backend injects a synthetic user context with username `Default` and wildcard workspace permissions granting full access.
 
 ### Example Access Token Claims for Development
 

@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette_exporter import PrometheusMiddleware, handle_metrics  # type: ignore[import-not-found]
 
 from workspace_api import config
+from workspace_api.models import ROLE_TO_PERMISSIONS, UserPermission
 
 app = FastAPI(title="Workspace API")
 templates = None
@@ -95,10 +96,15 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
     ignored_paths = ["/probe", "/metrics", "/docs", "/openapi.json"]
 
     if config.AUTH_MODE == "no":
-        request.state.user = {"username": "public", "workspaces": {"*": "admin"}}
+        request.state.user = {
+            "username": "Default",
+            "workspaces": {
+                "*": set(ROLE_TO_PERMISSIONS["ws_admin"]),
+            },
+        }
         return await call_next(request)
 
-    # AUTH_MODE = "gateway" means that authentication is enforced upstream and the token got validated already
+    # AUTH_MODE = "gateway" means that authentication is enforced upstream
     if config.AUTH_MODE == "gateway" and not any(request.url.path.startswith(p) for p in ignored_paths):
         auth_header = request.headers.get("Authorization")
         if not auth_header:
@@ -122,7 +128,7 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
 
         username = payload.get("preferred_username")
 
-        workspaces: dict[str, str] = {}
+        workspaces: dict[str, set[UserPermission]] = {}
         resource_access = payload.get("resource_access", {})
 
         for resource, data in resource_access.items():
@@ -130,13 +136,13 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
 
             if resource == "workspace-api":
                 if "admin" in roles:
-                    workspaces["*"] = "admin"
+                    workspaces["*"] = set(ROLE_TO_PERMISSIONS["ws_admin"])
                 continue
 
             if "ws_admin" in roles:
-                workspaces[resource] = "admin"
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_admin"])
             elif "ws_access" in roles:
-                workspaces[resource] = "access"
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_access"])
 
         request.state.user = {
             "username": username,
@@ -144,7 +150,11 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
         }
 
         if config.AUTH_DEBUG:
-            logger.debug("Authenticated user=%s workspaces=%s", username, workspaces)
+            logger.debug(
+                "Authenticated user=%s workspaces=%s",
+                username,
+                {k: sorted(p.value for p in v) for k, v in workspaces.items()},
+            )
 
     return await call_next(request)
 
