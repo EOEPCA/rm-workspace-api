@@ -34,9 +34,9 @@
       }
 
       const workspace = decodeData(workspaceData);
-      console.log('workspace')
       console.log(workspace)
       const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
+      const user = workspace?.user || { name: 'unknown'};
       let children = [
         {
           pathSegment: 'management',
@@ -65,6 +65,12 @@
 
       const luigiConfig = {
         navigation: {
+          profile: {
+            staticUserInfoFn: () => ({
+              name: user.name,
+              // email: 'email'
+            })
+          },
           nodes: () => [
             {
               pathSegment: 'home',
@@ -83,9 +89,8 @@
         },
         settings: {
           header: {
-            title: `Workspace: ${workspace.name}`,
-            logo: '/ui/logo.svg',
-            profile: false
+            title: `Workspace: ${workspace.name} /  User: ${user.name}`,
+            logo: '/ui/logo.svg'
           },
           responsiveNavigation: 'semiCollapsible'
         }

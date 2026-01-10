@@ -20,11 +20,22 @@
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
     <script type="module">
-      const params = new URLSearchParams(location.search);
-      let configName = params.get("config") || "app-config.js";
+      const STORAGE_KEY = "app.config";
 
-      if (/^\d+$/.test(configName)) {
-        configName = `${configName}-app-config.js`;
+      const params = new URLSearchParams(location.search);
+      let configName = params.get("config");
+
+      if (configName) {
+        // Normalize numeric config values
+        if (/^\d+$/.test(configName)) {
+          configName = `${configName}-app-config.js`;
+        }
+
+        // Persist explicitly provided config
+        sessionStorage.setItem(STORAGE_KEY, configName);
+      } else {
+        // Fallback to previously stored config
+        configName = sessionStorage.getItem(STORAGE_KEY) || "app-config.js";
       }
 
       // simple allow-list
@@ -53,8 +64,10 @@
           return base64String;
       }
 
+      console.log(mod.workspaceData)
       const workspace = decodeData(mod.workspaceData);
       const endpoints = Array.isArray(decodeData(mod.endpointsData)) ? decodeData(mod.endpointsData) : [];
+      const user = workspace?.user || { name: 'unknown'};
       let children = [
         {
           pathSegment: 'management',
@@ -83,6 +96,12 @@
 
       const luigiConfig = {
         navigation: {
+          profile: {
+            staticUserInfoFn: () => ({
+              name: user.name,
+              // email: 'email'
+            })
+          },
           nodes: () => [
             {
               pathSegment: 'home',
@@ -101,10 +120,14 @@
         },
         settings: {
           header: {
-            title: `Workspace: ${workspace.name}`,
+            title: `Workspace: ${workspace.name} /  User: ${user.name}`,
             logo: '/logo.svg',
-            profile: false
+            profile: {
+              name: user.name,
+              items: []
+            }
           },
+          // profileType: 'Fiori3',
           responsiveNavigation: 'semiCollapsible'
         }
       };
