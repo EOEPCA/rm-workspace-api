@@ -47,7 +47,7 @@
       const user = workspace?.user || { name: 'unknown'};
       const isAdmin = hasAnyManagePermission(user?.permissions)
       let children = []
-      if (!isAdmin) {
+      if (isAdmin) {
         children.push(
                 {
                   pathSegment: 'management',
