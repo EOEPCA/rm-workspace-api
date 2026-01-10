@@ -5,6 +5,18 @@ export interface Endpoint {
   url: string;
 }
 
+export type UserPermission =
+  | 'VIEW_BUCKETS'
+  | 'VIEW_BUCKET_CREDENTIALS'
+  | 'VIEW_MEMBERS'
+  | 'MANAGE_BUCKETS'
+  | 'MANAGE_MEMBERS'
+
+export interface WorkspaceUser {
+  name: string
+  permissions: UserPermission[]
+}
+
 export interface Membership {
   id?: string;  // client-side Id
   member: string;
@@ -24,8 +36,6 @@ export interface Bucket {
   isPending?: boolean
 }
 
-
-
 export interface Storage {
   buckets?: string[]
   credentials?: Record<string, unknown>
@@ -42,6 +52,7 @@ export interface Workspace {
   status: WorkspaceStatus
   storage?: Storage
   datalab?: Datalab
+  user?: WorkspaceUser
 }
 
 export interface BucketUI {

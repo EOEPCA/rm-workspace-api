@@ -36,14 +36,14 @@
       <q-td :props="props" class="q-gutter-xs">
         <span v-if="!props.row.isPending">
           <span v-if="!props.row.grant_timestamp && !props.row.denied_timestamp">
-            <q-btn dense flat icon="key" color="positive" @click="grantBucket(props.row)">
+            <q-btn dense flat icon="key" color="positive" @click="grantBucket(props.row)" :disable="!canManageBuckets">
               <q-tooltip>Grant bucket access</q-tooltip>
             </q-btn>
-            <q-btn dense flat icon="key_off" color="negative" @click="denyBucket(props.row)">
+            <q-btn dense flat icon="key_off" color="negative" @click="denyBucket(props.row)" :disable="!canManageBuckets">
               <q-tooltip>Deny bucket access</q-tooltip>
             </q-btn>
           </span>
-          <q-btn v-if="props.row.grant_timestamp" dense flat icon="key_off" color="negative" @click="revokeBucket(props.row)">
+          <q-btn v-if="props.row.grant_timestamp" dense flat icon="key_off" color="negative" @click="revokeBucket(props.row)" :disable="!canManageBuckets">
             <q-tooltip>Revoke bucket access</q-tooltip>
           </q-btn>
           </span>
@@ -61,6 +61,7 @@ import type { Bucket } from 'src/models/models'
 import {formatDate} from 'src/services/common'
 import {sortByRequestThenGrantDesc} from 'src/services/sorting'
 import {saveBucketGrants} from 'src/services/api'
+import {useUserStore} from 'stores/userStore'
 
 const props = defineProps<{
   workspaceName: string
@@ -68,6 +69,7 @@ const props = defineProps<{
 }>()
 
 const $q = useQuasar()
+const userStore = useUserStore()
 
 /*
 const emit = defineEmits<{
@@ -133,7 +135,13 @@ const requestedBucketsColumns: QTableColumn<Bucket>[] = [
   {name: 'actions', label: 'Actions', field: 'bucket', align: 'right'}
 ]
 
+const canManageBuckets = computed(() => userStore.canManageBuckets)
+
 function grantBucket(row: Bucket) {
+  if (!canManageBuckets.value) {
+    return
+  }
+
   const now = new Date().toISOString()
   if (!row.request_timestamp) row.request_timestamp = now
   row.grant_timestamp = now
@@ -160,6 +168,10 @@ function grantBucket(row: Bucket) {
 }
 
 function revokeBucket(row: Bucket) {
+  if (!canManageBuckets.value) {
+    return
+  }
+
   const now = new Date().toISOString()
   if (!row.request_timestamp) row.request_timestamp = now
   // keep row.grant_timestamp unchanged
@@ -186,6 +198,10 @@ function revokeBucket(row: Bucket) {
 }
 
 function denyBucket(row: Bucket) {
+  if (!canManageBuckets.value) {
+    return
+  }
+
   const now = new Date().toISOString()
   if (!row.request_timestamp) row.request_timestamp = now
   row.denied_timestamp = now

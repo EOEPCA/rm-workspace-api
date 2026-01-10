@@ -33,9 +33,9 @@
             outside-arrows
             mobile-arrows
           >
-            <q-tab name="members" label="Members" :alert="form.memberships.length === 0"/>
-            <q-tab name="buckets" label="Buckets"/>
-            <q-tab name="bucketRequests" label="Requested Buckets"/>
+            <q-tab v-if="canSeeMembers" name="members" label="Members" :alert="form.memberships.length === 0"/>
+            <q-tab v-if="canSeeBuckets" name="buckets" label="Buckets"/>
+            <q-tab v-if="canSeeBuckets" name="bucketRequests" label="Requested Buckets"/>
           </q-tabs>
 
           <q-separator/>
@@ -82,9 +82,11 @@ import {useLuigiWorkspace} from 'src/composables/useLuigi'
 import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
 import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
+import {useUserStore} from 'stores/userStore'
 
 /** ---- State ---- */
 const message = ref<string>('')
+const userStore = useUserStore()
 
 const form = ref<WorkspaceEditUI>({
   name: '',
@@ -92,6 +94,11 @@ const form = ref<WorkspaceEditUI>({
   buckets: [],
   linked_buckets: []
 })
+
+/** ---- Permission-driven computed flags ---- */
+const canSeeMembers = computed(() => userStore.canViewMembers)
+const canSeeBuckets = computed(() => userStore.canViewBuckets)
+// const canSeeBucketCredentials = computed(() => userStore.canViewBucketCredentials)
 
 /** Tabs */
 const activeTab = ref<'members' | 'buckets' | 'bucketRequests'>('members')
@@ -102,13 +109,17 @@ const displayMessage = computed(() =>
   isError.value ? message.value.substring(7) : message.value
 )
 
-
 const {loading} = useLuigiWorkspace({
   onReady: (ctx) => {
     if (ctx && ctx.workspace) {
       const ws = ctx.workspace
       if (ws.name) {
         message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
+        userStore.setUser(ctx.workspace.user ?? null)
+        if (!canSeeMembers.value) {
+          activeTab.value = 'buckets'
+        }
+
         form.value = {
           name: ws.name,
           memberships: (ws.datalab?.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
@@ -136,6 +147,7 @@ const {loading} = useLuigiWorkspace({
         })
       } else {
         message.value = 'Workspace Data not provided.'
+        userStore.setUser(null)
       }
     }
   }
