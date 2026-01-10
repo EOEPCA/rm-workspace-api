@@ -95,7 +95,7 @@
 
   </q-table>
 
-  <q-btn color="primary" no-caps label="Save Members" @click="createMembers" style="margin-top: 5px" :disable="!canManageMembers || !hasChanged" />
+  <q-btn color="primary" no-caps label="Save" @click="createMembers" style="margin-top: 5px" :disable="!canManageMembers || !hasChanged" />
 
 </template>
 
@@ -223,8 +223,18 @@ function createMembers() {
     return
   }
 
-  const members = myMemberships.value.filter(m => !!m.member).map(m => m.member)
-  saveMembers(props.workspaceName, members)
+  const nowIso = new Date().toISOString()
+
+  const memberships = myMemberships.value
+    .filter(m => !!m.member)
+    .filter(m => (String(m.role || '').toLowerCase() !== 'owner'))
+    .map(m => ({
+      member: m.member.trim(),
+      role: (String(m.role || 'user').toLowerCase() as 'user' | 'admin'),
+      creation_timestamp: m.creation_timestamp ?? nowIso,
+    }))
+
+  saveMembers(props.workspaceName, memberships)
     .then(() => {
         myMemberships.value.forEach((member: Membership) => {
           if (member.isNew) {

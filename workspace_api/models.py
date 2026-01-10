@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field
 
 class MembershipRole(str, enum.Enum):
     OWNER = "owner"
-    CONTRIBUTOR = "contributor"
+    ADMIN = "admin"
+    USER = "user"
 
 
 class BucketPermission(str, enum.Enum):
@@ -26,8 +27,10 @@ class UserPermission(str, enum.Enum):
     VIEW_BUCKET_CREDENTIALS = "VIEW_BUCKET_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
+    VIEW_DATABASES = "VIEW_DATABASES"
     MANAGE_MEMBERS = "MANAGE_MEMBERS"
     MANAGE_BUCKETS = "MANAGE_BUCKETS"
+    MANAGE_DATABASES = "MANAGE_DATABASES"
 
 
 ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
@@ -35,13 +38,16 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
+        UserPermission.VIEW_DATABASES,
     },
     "ws_admin": {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
+        UserPermission.VIEW_DATABASES,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
+        UserPermission.MANAGE_DATABASES,
     },
 }
 
@@ -108,6 +114,32 @@ class Membership(BaseModel):
     @field_validator("member", mode="before")
     @classmethod
     def _strip_member(cls, v: str) -> str:
+        v2 = (v or "").strip()
+        if not v2:
+            msg = "must not be empty"
+            raise ValueError(msg)
+        return v2
+
+    @field_validator("creation_timestamp", mode="after")
+    @classmethod
+    def _ts_utc(cls, v: datetime | None) -> datetime | None:
+        return _coerce_utc(v)
+
+
+class Database(BaseModel):
+    """A database belonging to a workspace with creation time."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace database entry."})
+
+    name: str = Field(..., description="The name of the database.")
+    creation_timestamp: datetime | None = Field(
+        ...,
+        description="When the database was created (UTC, RFC3339).",
+    )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: str) -> str:
         v2 = (v or "").strip()
         if not v2:
             msg = "must not be empty"
@@ -191,23 +223,30 @@ class WorkspaceEdit(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace edit (patch) request."})
 
-    add_members: list[str] = Field(default_factory=list, description="Members to add.")
+    add_memberships: list[Membership] = Field(
+        default_factory=list,
+        description="Memberships to add.",
+    )
+    add_databases: list[Database] = Field(
+        default_factory=list,
+        description="Databases to add.",
+    )
     add_buckets: list[str] = Field(default_factory=list, description="Buckets to add.")
     patch_bucket_access_requests: list[BucketAccessRequest] = Field(
         default_factory=list,
         description="Bucket access requests/grants to upsert. Each entry MUST have workspace, bucket, and request_timestamp.",
     )
 
-    @field_validator("add_members")
+    @field_validator("add_memberships")
     @classmethod
-    def _dedup_members(cls, v: list[str]) -> list[str]:
+    def _dedup_memberships(cls, v: list[Membership]) -> list[Membership]:
         seen: set[str] = set()
-        out: list[str] = []
-        for m in v:
-            m2 = (m or "").strip()
-            if m2 and m2 not in seen:
-                seen.add(m2)
-                out.append(m2)
+        out: list[Membership] = []
+        for m in v or []:
+            if m.member in seen:
+                continue
+            seen.add(m.member)
+            out.append(m)
         return out
 
     @field_validator("add_buckets")
@@ -277,6 +316,7 @@ class Datalab(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace datalab."})
 
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
+    databases: list[Database] = Field(default_factory=list, description="Detailed database entries.")
 
 
 class Workspace(BaseModel):

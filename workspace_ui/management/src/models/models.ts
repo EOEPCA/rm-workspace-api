@@ -23,7 +23,15 @@ export interface Membership {
   id?: string  // client-side Id
   member: string
   role: string
-  creation_timestamp: string
+  creation_timestamp?: string | undefined
+  isNew?: boolean
+  isPending?: boolean
+}
+
+export interface Database {
+  id: string  // client-side Id
+  name: string
+  storage: string
   isNew?: boolean
   isPending?: boolean
 }
@@ -44,16 +52,11 @@ export interface Storage {
   bucket_access_requests?: Bucket[]
 }
 
+
+
 export interface Datalab {
   memberships?: Membership[]
-}
-
-export interface Database {
-  id: string  // client-side Id
-  name: string
-  storage: string
-  isNew?: boolean
-  isPending?: boolean
+  databases?: Database[]
 }
 
 export interface Workspace {
@@ -63,7 +66,6 @@ export interface Workspace {
   storage?: Storage
   datalab?: Datalab
   user?: WorkspaceUser
-  databases: Database[]
 }
 
 export interface BucketUI {
@@ -84,7 +86,8 @@ export interface WorkspaceEditUI {
 
 // Corresponding to Backend
 export interface WorkspaceEdit {
-  add_members: string[]
+  add_memberships: Membership[]
+  add_databases: Database[]
   add_buckets: string[]
   patch_bucket_access_requests?: Bucket[]
 }

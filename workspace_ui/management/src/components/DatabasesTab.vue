@@ -108,7 +108,7 @@
 
   </q-table>
 
-  <q-btn color="primary" no-caps label="Save Members" @click="createDatabases" style="margin-top: 5px" :disable="!canManageDatabases || !hasChanged" />
+  <q-btn color="primary" no-caps label="Save" @click="createDatabases" style="margin-top: 5px" :disable="!canManageDatabases || !hasChanged" />
 
 </template>
 

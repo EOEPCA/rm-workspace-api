@@ -79,6 +79,26 @@
           </q-markup-table>
         </q-card-section>
       </q-card>
+
+      <!-- Databases Table -->
+      <q-card v-if="canSeeDatabases && ws.datalab?.databases?.length" class="q-mb-md">
+        <q-card-section class="text-subtitle1">Databases</q-card-section>
+        <q-separator/>
+        <q-card-section class="q-pa-none">
+          <q-markup-table flat>
+            <thead>
+            <tr>
+              <th class="text-left">Name</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="database in ws.datalab?.databases" :key="database.name">
+              <td>{{ database.name }}</td>
+            </tr>
+            </tbody>
+          </q-markup-table>
+        </q-card-section>
+      </q-card>
     </div>
 
     <!-- Fallback if no workspace data -->
@@ -104,6 +124,7 @@ const userStore = useUserStore()
 const canSeeMembers = computed(() => userStore.canViewMembers)
 const canSeeBuckets = computed(() => userStore.canViewBuckets)
 const canSeeBucketCredentials = computed(() => userStore.canViewBucketCredentials)
+const canSeeDatabases = computed(() => userStore.canViewDatabases)
 
 const hasCredentials = computed<boolean>(() => {
   if (!canSeeBucketCredentials.value) return false

@@ -140,7 +140,7 @@ const {loading} = useLuigiWorkspace({
               grants: 0
             } as BucketUI)) ?? [],
           linked_buckets: ws.storage?.bucket_access_requests ?? [],
-          databases: (ws.databases ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false}))
+          databases: (ws.datalab?.databases ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false}))
         }
 
         // prepare number of requests and grants for buckets

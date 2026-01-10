@@ -8,7 +8,7 @@ import logging
 import re
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from http import HTTPStatus
 from typing import Any
 
@@ -29,6 +29,7 @@ from .models import (
     BucketPermission,
     ContainerRegistryCredentials,
     Credentials,
+    Database,
     Datalab,
     Membership,
     MembershipRole,
@@ -461,16 +462,65 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     )
 
     users = (datalab_spec or {}).get("users") or []
-    now = datetime.now(UTC)
-    memberships = [
-        Membership(
-            member=u.strip(),
-            role=MembershipRole.OWNER if u == principal else MembershipRole.CONTRIBUTOR,
-            creation_timestamp=now,
+    user_overrides = (datalab_spec or {}).get("userOverrides") or {}
+
+    dl_created_at = getattr(getattr(datalab_cr, "metadata", None), "creationTimestamp", None)
+    if not dl_created_at:
+        dl_created_at = getattr(getattr(storage_cr, "metadata", None), "creationTimestamp", None)
+
+    memberships = []
+    first_owner_assigned = False
+
+    for u in users:
+        if not isinstance(u, str):
+            continue
+        member = u.strip()
+        if not member:
+            continue
+
+        if not first_owner_assigned:
+            role = MembershipRole.OWNER
+            first_owner_assigned = True
+        else:
+            role_str = str((user_overrides.get(member) or {}).get("role") or "").strip().lower()
+            role = MembershipRole.ADMIN if role_str == "admin" else MembershipRole.USER
+
+        ts = (user_overrides.get(member) or {}).get("grantedAt") or dl_created_at
+
+        memberships.append(
+            Membership(
+                member=member,
+                role=role,
+                creation_timestamp=_iso(ts),
+            )
         )
-        for u in users
-        if isinstance(u, str) and u.strip()
-    ]
+
+    databases = []
+
+    db_hosts = (datalab_spec or {}).get("databases") or {}
+
+    if not isinstance(db_hosts, dict):
+        db_hosts = {}
+
+    seen_db: set[str] = set()
+
+    for host_cfg in db_hosts.values():
+        if not isinstance(host_cfg, dict):
+            continue
+        names = host_cfg.get("names") or []
+        if not isinstance(names, list):
+            continue
+        for n in names:
+            name = str(n or "").strip()
+            if not name or name in seen_db:
+                continue
+            seen_db.add(name)
+            databases.append(
+                Database(
+                    name=name,
+                    creation_timestamp=_iso(dl_created_at),
+                )
+            )
 
     credentials = None
     secret = None
@@ -524,7 +574,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         credentials=credentials,
         bucket_access_requests=relevant_bucket_access_requests,
     )
-    datalab = Datalab(memberships=memberships)
+    datalab = Datalab(memberships=memberships, databases=databases)
 
     user_ctx = request.state.user
 
@@ -835,18 +885,20 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         raise
 
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
-    if (update.add_members or []) and datalab_api is None:
+
+    add_memberships = update.add_memberships or []
+    if add_memberships and datalab_api is None:
         logger.warning(
-            "Datalab CRD not present; cannot add members for workspace '%s'.",
+            "Datalab CRD not present; cannot add memberships for workspace '%s'.",
             workspace_name,
         )
-    elif update.add_members:
+    elif add_memberships:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
                 logger.warning(
-                    "Datalab resource '%s' not found; skipping member additions.",
+                    "Datalab resource '%s' not found; skipping membership additions.",
                     workspace_name,
                 )
             else:
@@ -867,17 +919,42 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
                     seen.add(ms)
                     users.append(ms)
 
-        for m in update.add_members or []:
-            ms = (m or "").strip()
-            if ms and ms not in seen:
-                seen.add(ms)
-                users.append(ms)
+        user_overrides = datalab_spec.get("userOverrides") or {}
+        if not isinstance(user_overrides, dict):
+            user_overrides = {}
+
+        for mem in add_memberships:
+            member = (mem.member or "").strip()
+            if not member:
+                continue
+
+            if member not in seen:
+                seen.add(member)
+                users.append(member)
+
+            if users and member == users[0]:
+                continue
+
+            role = getattr(mem.role, "value", mem.role)
+            role = (role or "").strip().lower()
+
+            if role in ("admin", "user"):
+                ov = user_overrides.get(member) or {}
+                if not isinstance(ov, dict):
+                    ov = {}
+
+                ov["role"] = role
+
+                if mem.creation_timestamp is not None:
+                    ov["grantedAt"] = _iso(mem.creation_timestamp)
+
+                user_overrides[member] = ov
 
         try:
             datalab_api.patch(
                 name=workspace_name,
                 namespace=current_namespace(),
-                body={"spec": {"users": users}},
+                body={"spec": {"users": users, "userOverrides": user_overrides}},
                 content_type="application/merge-patch+json",
             )
         except ApiException as e:

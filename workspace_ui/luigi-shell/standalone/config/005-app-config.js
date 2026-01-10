@@ -72,7 +72,17 @@ export const workspaceData = {
                 'role': 'user',
                 'creation_timestamp': '2025-12-21T19:04:26.764528Z'
             }
-        ]
+        ],
+        'databases': [
+            {
+                name: 'prod',
+                storage: '10Gi'
+            },
+            {
+                name: 'dev',
+                storage: '1Gi'
+            }
+        ],
     },
     'user': {
         'name': 'alice',
@@ -80,21 +90,11 @@ export const workspaceData = {
             'VIEW_BUCKETS',
             'VIEW_BUCKET_CREDENTIALS',
             'VIEW_MEMBERS',
-            'xMANAGE_MEMBERS',
+            'MANAGE_MEMBERS',
             'VIEW_DATABASES',
             'MANAGE_DATABASES',
         ]
     },
-    'databases': [
-        {
-            name: 'prod',
-            storage: '10Gi'
-        },
-        {
-            name: 'dev',
-            storage: '1Gi'
-        }
-    ],
 
 }
 
