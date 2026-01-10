@@ -56,6 +56,12 @@ export const useUserStore = defineStore('user', {
     canManageBuckets(): boolean {
       return this.permissions.includes('MANAGE_BUCKETS')
     },
+    canViewDatabases(): boolean {
+      return this.permissions.includes('VIEW_DATABASES')
+    },
+    canManageDatabases(): boolean {
+      return this.permissions.includes('MANAGE_DATABASES')
+    },
   },
 
   actions: {

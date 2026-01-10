@@ -80,9 +80,22 @@ export const workspaceData = {
             'VIEW_BUCKETS',
             'VIEW_BUCKET_CREDENTIALS',
             'VIEW_MEMBERS',
-            'xMANAGE_MEMBERS'
+            'xMANAGE_MEMBERS',
+            'VIEW_DATABASES',
+            'MANAGE_DATABASES',
         ]
-    }
+    },
+    'databases': [
+        {
+            name: 'prod',
+            storage: '10Gi'
+        },
+        {
+            name: 'dev',
+            storage: '1Gi'
+        }
+    ],
+
 }
 
 export const endpointsData = []
