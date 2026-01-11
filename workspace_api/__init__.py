@@ -101,7 +101,7 @@ def debug(request: Request) -> dict[str, Any]:
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    ignored_paths = ["/probe", "/metrics", "/docs", "/openapi.json"]
+    ignored_paths = ["/probe", "/metrics", "/docs", "/ui", "/openapi.json"]
 
     if config.AUTH_MODE == "no":
         request.state.user = {
