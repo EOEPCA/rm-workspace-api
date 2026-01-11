@@ -47,7 +47,7 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_DATABASES,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
-        UserPermission.MANAGE_DATABASES,
+        # UserPermission.MANAGE_DATABASES,
     },
 }
 

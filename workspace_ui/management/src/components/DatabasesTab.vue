@@ -59,32 +59,6 @@
       </q-td>
     </template>
 
-    <template v-slot:body-cell-storage="props">
-      <q-td :props="props">
-        <q-input
-          v-if="canManageDatabases"
-          v-model="props.row.storage"
-          outlined
-          dense
-          hide-bottom-space
-          placeholder="Database size, e.g. 1Gi"
-          style="max-width: 200px"
-        >
-          <!--
-          <template v-slot:append>
-            <q-btn dense flat icon="save" color="green"
-                   @click="addMember">
-              <q-tooltip>Save added member</q-tooltip>
-            </q-btn>
-          </template>
-          -->
-        </q-input>
-        <span v-else>
-          {{ props.row.storage }}
-        </span>
-      </q-td>
-    </template>
-
     <template v-slot:body-cell-actions="props">
       <q-td :props="props">
         <q-btn v-if="props.row.isNew" dense flat icon="delete" color="negative"
@@ -145,7 +119,7 @@ watch(
 function normalizeDatabases(list: Database[]): string[] {
   // Create a stable, order-independent representation
   return list
-    .map(m => `${m.name}::${m.storage}`) // key per Database
+    .map(m => `${m.name}`) // key per Database
     .sort()
 }
 
@@ -171,12 +145,6 @@ const columns: QTableColumn<Database>[] = [
     align: 'left'
   },
   {
-    name: 'storage',
-    label: 'Storage',
-    field: 'storage',
-    align: 'left'
-  },
-  {
     name: 'actions',
     label: '',
     field: 'name',
@@ -197,7 +165,6 @@ function addDatabaseRow() {
   const newRow = {
     id: crypto.randomUUID(),
     name: '',
-    storage: '',
     isNew: true
   } as Database & { id: string }
 

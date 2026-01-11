@@ -75,12 +75,12 @@ export const workspaceData = {
         ],
         'databases': [
             {
-                name: 'prod',
-                storage: '10Gi'
+                'name': 'prod',
+                'creation_timestamp': '2025-12-21T19:04:26.764528Z'
             },
             {
-                name: 'dev',
-                storage: '1Gi'
+                'name': 'prod',
+                'creation_timestamp': '2025-12-21T19:05:26.764528Z'
             }
         ],
     },

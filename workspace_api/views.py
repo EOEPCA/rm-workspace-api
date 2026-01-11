@@ -35,6 +35,7 @@ from .models import (
     MembershipRole,
     Storage,
     UserContext,
+    UserPermission,
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
@@ -585,7 +586,21 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     if workspace_name in user_ctx["workspaces"]:
         workspace_perms |= user_ctx["workspaces"][workspace_name]
 
-    return Workspace(
+    permission_guards = {
+        UserPermission.VIEW_BUCKET_CREDENTIALS: lambda: setattr(storage, "credentials", None),
+        UserPermission.VIEW_BUCKETS: lambda: (
+            setattr(storage, "buckets", []),  # type: ignore[func-returns-value]
+            setattr(storage, "bucket_access_requests", []),  # type: ignore[func-returns-value]
+        ),
+        UserPermission.VIEW_MEMBERS: lambda: setattr(datalab, "memberships", []),
+        UserPermission.VIEW_DATABASES: lambda: setattr(datalab, "databases", []),
+    }
+
+    for permission, guard in permission_guards.items():
+        if permission not in workspace_perms:
+            guard()
+
+    workspace = Workspace(
         name=workspace_name,
         creation_timestamp=creation_timestamp,
         version=version,
@@ -598,6 +613,11 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             permissions=sorted(workspace_perms),
         ),
     )
+
+    if config.AUTH_DEBUG:
+        logger.debug(f"workspace={workspace}")
+
+    return workspace
 
 
 @app.post(
@@ -757,11 +777,35 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     ),
     responses={
         202: {"description": "Update accepted and applied."},
+        403: {"description": "Forbidden."},
         404: {"description": "Workspace not found."},
         502: {"description": "Backend error while patching cluster resources."},
     },
 )
-async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
+async def update_workspace(request: Request, workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
+    user_ctx = request.state.user
+
+    workspace_perms = set()
+    if "*" in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"]["*"]
+    if workspace_name in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"][workspace_name]
+
+    required_perms: set[UserPermission] = set()
+
+    if update.add_buckets:
+        required_perms.add(UserPermission.MANAGE_BUCKETS)
+
+    if update.add_memberships:
+        required_perms.add(UserPermission.MANAGE_MEMBERS)
+
+    if update.add_databases:
+        required_perms.add(UserPermission.MANAGE_DATABASES)
+
+    missing = required_perms - workspace_perms
+    if missing:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
 
     try:

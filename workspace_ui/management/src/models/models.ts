@@ -31,7 +31,6 @@ export interface Membership {
 export interface Database {
   id: string  // client-side Id
   name: string
-  storage: string
   isNew?: boolean
   isPending?: boolean
 }
