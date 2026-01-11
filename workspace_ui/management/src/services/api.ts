@@ -1,20 +1,41 @@
-import type {AxiosError, AxiosResponse} from 'axios';
+import type {AxiosError, AxiosResponse} from 'axios'
 import axios from 'axios'
-import type {Bucket, WorkspaceEdit} from 'src/models/models'
+import type {Bucket, Database, Membership, WorkspaceEdit} from 'src/models/models'
 
-export function saveMembers(workspaceName: string, members: string[]) {
+export function saveMembers(workspaceName: string, memberships: Membership[], simulate = false) {
   const workspaceEdit = {
-    add_members: members,
+    add_memberships: memberships,
+    add_databases: [],
     add_buckets: [],
     patch_bucket_access_requests: []
   } as WorkspaceEdit
 
+  if (simulate) {
+    return Promise.resolve({})
+  }
+  return saveWorkspace(workspaceName, workspaceEdit)
+}
+
+export function saveDatabases(workspaceName: string, databases: Database[], simulate = false) {
+  console.log('TODO Save databases ', databases)
+  simulate = true
+  const workspaceEdit = {
+    add_memberships: [],
+    add_databases: [],
+    add_buckets: [],
+    patch_bucket_access_requests: []
+  } as WorkspaceEdit
+
+  if (simulate) {
+    return Promise.resolve({})
+  }
   return saveWorkspace(workspaceName, workspaceEdit)
 }
 
 export function saveBuckets(workspaceName: string, buckets: string[]) {
   const workspaceEdit = {
-    add_members: [],
+    add_memberships: [],
+    add_databases: [],
     add_buckets: buckets,
     patch_bucket_access_requests: []
   } as WorkspaceEdit
@@ -24,7 +45,8 @@ export function saveBuckets(workspaceName: string, buckets: string[]) {
 
 export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bucket[]) {
   const workspaceEdit = {
-    add_members: [],
+    add_memberships: [],
+    add_databases: [],
     add_buckets: [],
     patch_bucket_access_requests: requestedBuckets
   } as WorkspaceEdit
@@ -34,7 +56,8 @@ export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bu
 
 export function saveBucketGrants(workspaceName: string, grantedBuckets: Bucket[]) {
   const workspaceEdit = {
-    add_members: [],
+    add_memberships: [],
+    add_databases: [],
     add_buckets: [],
     patch_bucket_access_requests: grantedBuckets
   } as WorkspaceEdit

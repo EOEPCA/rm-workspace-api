@@ -215,6 +215,52 @@ Installed via the backend `dev` extra:
 
 Run via `uv run <tool>` from `workspace_api/`.
 
+## Authentication and Authorization
+
+The Workspace API uses a **gateway-centric authentication model**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway validates the access token (signature, issuer, audience, expiration). Only authenticated requests are forwarded to the backend.
+
+The backend **does not re-validate tokens cryptographically**. Instead, it treats the token as trusted input and extracts a minimal identity and authorization context, which is attached to each request via `request.state.user`.
+
+Internally, the API retains only:
+
+- the username (`preferred_username`)
+- a workspace-to-permissions mapping derived from the token’s `resource_access` claim
+
+External roles are normalized into explicit permissions:
+
+- **`ws_access`**
+  - `VIEW_BUCKET_CREDENTIALS`
+  - `VIEW_MEMBERS`
+  - `VIEW_BUCKETS`
+  - `VIEW_DATABASES`
+
+- **`ws_admin`**
+  - all of the above, plus:
+  - `MANAGE_MEMBERS`
+  - `MANAGE_BUCKETS`
+
+Authorization decisions are based exclusively on these permissions, not on raw roles.
+
+When `AUTH_MODE=no`, authentication is disabled. The backend injects a synthetic user context with username `Default` and wildcard workspace permissions granting full access.
+
+### Example Access Token Claims for Development
+
+The following JSON document is an example of claims that matches the expectations of the Workspace API. For development or testing purposes, this payload can be encoded as a JWT and passed via the `Authorization` header as a Bearer token.
+
+```json
+{
+  "preferred_username": "alice",
+  "resource_access": {
+    "ws-alice": {
+      "roles": ["ws_admin"]
+    },
+    "ws-bob": {
+      "roles": ["ws_access"]
+    }
+  }
+}
+```
+
 ## Configuration
 
 Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes access):
@@ -230,6 +276,7 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | `REGION` | from `AWS_REGION` or `AWS_DEFAULT_REGION` | S3 region used when falling back to environment-based config. |
 | `UI_MODE` | `no` | Set to `ui` to enable templated HTML shell and SPA embedding. |
 | `FRONTEND_URL` | `/ui/management` | Base path (prod) or absolute URL (dev server like `http://localhost:9000`) for the SPA. |
+| `AUTH_MODE` | `gateway` | Authentication mode `gateway` expects a validated `Authorization: Bearer <access_token>` header to be forwarded by an upstream gateway, `no` disables authentication entirely (for local development only). |
 
 ## Docker
 

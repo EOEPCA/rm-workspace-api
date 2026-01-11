@@ -41,7 +41,7 @@
       </q-card>
 
       <!-- Members Table -->
-      <q-card v-if="ws.datalab?.memberships?.length" class="q-mb-md">
+      <q-card v-if="canSeeMembers && ws.datalab?.memberships?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Members</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -61,7 +61,7 @@
       </q-card>
 
       <!-- Buckets Table -->
-      <q-card v-if="ws.storage?.buckets?.length" class="q-mb-md">
+      <q-card v-if="canSeeBuckets && ws.storage?.buckets?.length" class="q-mb-md">
         <q-card-section class="text-subtitle1">Buckets</q-card-section>
         <q-separator/>
         <q-card-section class="q-pa-none">
@@ -79,6 +79,26 @@
           </q-markup-table>
         </q-card-section>
       </q-card>
+
+      <!-- Databases Table -->
+      <q-card v-if="canSeeDatabases && ws.datalab?.databases?.length" class="q-mb-md">
+        <q-card-section class="text-subtitle1">Databases</q-card-section>
+        <q-separator/>
+        <q-card-section class="q-pa-none">
+          <q-markup-table flat>
+            <thead>
+            <tr>
+              <th class="text-left">Name</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr v-for="database in ws.datalab?.databases" :key="database.name">
+              <td>{{ database.name }}</td>
+            </tr>
+            </tbody>
+          </q-markup-table>
+        </q-card-section>
+      </q-card>
     </div>
 
     <!-- Fallback if no workspace data -->
@@ -89,17 +109,25 @@
 </template>
 
 <script setup lang="ts">
-import {computed, ref} from 'vue'
-import {useLuigiWorkspace} from 'src/composables/useLuigi'
-import type {Workspace} from 'src/models/models'
+import { computed, ref } from 'vue'
+import { useLuigiWorkspace } from 'src/composables/useLuigi'
+import type { Workspace } from 'src/models/models'
+import { useUserStore } from 'src/stores/userStore'
 
 /** ---- State ---- */
-// const loading = ref<boolean>(true)
 const errorMessage = ref<string>('')
 const ws = ref<Workspace | null>(null)
 
-/** ---- Computed helpers ---- */
+const userStore = useUserStore()
+
+/** ---- Permission-driven computed flags ---- */
+const canSeeMembers = computed(() => userStore.canViewMembers)
+const canSeeBuckets = computed(() => userStore.canViewBuckets)
+const canSeeBucketCredentials = computed(() => userStore.canViewBucketCredentials)
+const canSeeDatabases = computed(() => userStore.canViewDatabases)
+
 const hasCredentials = computed<boolean>(() => {
+  if (!canSeeBucketCredentials.value) return false
   const creds = ws.value?.storage?.credentials
   return !!creds && Object.keys(creds).length > 0
 })
@@ -108,20 +136,19 @@ const prettyCredentials = computed<string>(() =>
   JSON.stringify(ws.value?.storage?.credentials ?? {}, null, 2)
 )
 
-const {
-  loading,
-} = useLuigiWorkspace({
-    onReady: (ctx) => {
-//      console.log('Workspace initialized:', ws.name)
-      if (!ctx || !ctx.workspace) {
-        errorMessage.value = 'Workspace Data not provided.'
-      } else {
-        ws.value = ctx.workspace
-      }
+const { loading } = useLuigiWorkspace({
+  onReady: (ctx) => {
+    if (!ctx || !ctx.workspace) {
+      errorMessage.value = 'Workspace Data not provided.'
+      ws.value = null
+      userStore.clearUser()
+      return
     }
-  }
-)
 
+    ws.value = ctx.workspace
+    userStore.setUser(ctx.workspace.user ?? null)
+  },
+})
 </script>
 
 <style scoped>

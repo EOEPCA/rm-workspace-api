@@ -33,18 +33,29 @@
         return null;
       }
 
+      function hasAnyManagePermission(permissions) {
+        if (!Array.isArray(permissions)) {
+          return false;
+        }
+
+        return permissions.some(p => typeof p === 'string' && p.startsWith('MANAGE_'));
+      }
+
       const workspace = decodeData(workspaceData);
-      console.log('workspace')
       console.log(workspace)
       const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
-      let children = [
-        {
-          pathSegment: 'management',
-          label: 'Management',
-          icon: 'action-settings',
-          viewUrl: frontendUrl + '#/management'
-        }
-      ];
+      const user = workspace?.user || { name: 'unknown'};
+      const isAdmin = hasAnyManagePermission(user?.permissions)
+      let children = []
+      if (isAdmin) {
+        children.push(
+                {
+                  pathSegment: 'management',
+                  label: 'Management',
+                  icon: 'action-settings',
+                  viewUrl: frontendUrl + '#/management'
+                })
+      }
 
       endpoints.forEach(endpoint => {
         if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
@@ -65,6 +76,12 @@
 
       const luigiConfig = {
         navigation: {
+          profile: {
+            staticUserInfoFn: () => ({
+              name: user.name,
+              // email: 'email'
+            })
+          },
           nodes: () => [
             {
               pathSegment: 'home',
@@ -83,10 +100,10 @@
         },
         settings: {
           header: {
-            title: `Workspace: ${workspace.name}`,
-            logo: '/ui/logo.svg',
-            profile: false
+            title: `Workspace: ${workspace.name} /  User: ${user.name}`,
+            logo: '/ui/logo.svg'
           },
+          hideNavigation: (children.length === 0),
           responsiveNavigation: 'semiCollapsible'
         }
       };

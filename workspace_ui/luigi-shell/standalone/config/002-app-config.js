@@ -47,7 +47,7 @@ export const workspaceData =
       },
       {
         "member": "jim",
-        "role": "contributor",
+        "role": "user",
         "creation_timestamp": "2025-10-03T12:36:54.879107Z"
       }
     ],

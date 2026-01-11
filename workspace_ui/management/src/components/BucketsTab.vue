@@ -10,6 +10,7 @@
       no-caps
       class="q-mt-sm q-mb-lg"
       @click="addBucket"
+      :disable="!canManageBuckets"
     >
       <q-icon name="add" class="q-mr-sm"/>
       Add Bucket
@@ -128,6 +129,7 @@ import type {Bucket, BucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {sortByBucketNameAsc} from 'src/services/sorting'
 import {saveBuckets, saveRequestedBuckets} from 'src/services/api'
+import {useUserStore} from 'stores/userStore'
 
 const props = defineProps<{
   workspaceName: string
@@ -135,30 +137,12 @@ const props = defineProps<{
   linkedBuckets: Bucket[]
 }>()
 
-/*
-const emit = defineEmits<{
-  (e: 'update:buckets', v: BucketUI[]): void
-  (e: 'update:linked-buckets', v: Bucket[]): void
-  (e: 'update:show', v: boolean): void
-  (e: 'update:show-all', v: boolean): void
-}>()
- */
-
 const $q = useQuasar()
+const userStore = useUserStore()
 
 const allAvailableBuckets = ref<boolean>(false)
 
 /** local proxies for v-model */
-/*
-const buckets = computed({
-  get: () => props.buckets,
-  set: (v) => emit('update:buckets', v)
-})
-const linkedBuckets = computed({
-  get: () => props.linkedBuckets,
-  set: (v) => emit('update:linked-buckets', v)
-})
- */
 
 const myBuckets = ref<BucketUI[]>([])
 watch(
@@ -166,15 +150,6 @@ watch(
   (v) => { myBuckets.value = v.map(x => ({ ...x })) },
   { immediate: true }
 )
-
-/*
-const myLinkedBuckets = ref<Bucket[]>([])
-watch(
-  () => props.linkedBuckets,
-  (v) => { myLinkedBuckets.value = v.map(x => ({ ...x })) },
-  { immediate: true }
-)
- */
 
 const myLinkedBuckets = computed(() =>
   props.linkedBuckets
@@ -272,9 +247,14 @@ const linkedBucketStyle = computed(() => {
   }
 })
 
+const canManageBuckets = computed(() => userStore.canManageBuckets)
 
 function addBucket() {
-  console.log('add bucket')
+  // console.log('add bucket')
+  if (!canManageBuckets.value) {
+    return
+  }
+
   const idxNew = myBuckets.value.findIndex((b) => !b.bucket || b.isNew)
   if (idxNew < 0) {
     myBuckets.value.push({bucket: props.workspaceName + '-', isNew: true} as BucketUI)
@@ -285,6 +265,10 @@ function addBucket() {
 }
 
 function deleteBucket(row: BucketUI) {
+  if (!canManageBuckets.value) {
+    return
+  }
+
   const index = myBuckets.value.findIndex(b => b.bucket === row.bucket)
   if (index !== -1) {
     myBuckets.value.splice(index, 1)
@@ -293,6 +277,9 @@ function deleteBucket(row: BucketUI) {
 }
 
 function createBucket() {
+  if (!canManageBuckets.value) {
+    return
+  }
 
   newBucket.value.validate()
 

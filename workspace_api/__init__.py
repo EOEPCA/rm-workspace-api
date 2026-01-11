@@ -1,6 +1,8 @@
 # Copyright 2025, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
+import base64
+import json
 import logging
 import os
 import time
@@ -10,14 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette_exporter import PrometheusMiddleware, handle_metrics  # type: ignore[import-not-found]
 
 from workspace_api import config
+from workspace_api.models import ROLE_TO_PERMISSIONS, UserPermission
 
 app = FastAPI(title="Workspace API")
 templates = None
+
+logger = logging.getLogger(__name__)
 
 app.add_middleware(PrometheusMiddleware)
 app.add_route("/metrics", handle_metrics)
@@ -74,11 +80,83 @@ def probe() -> dict[str, Any]:
 
 @app.get("/debug", include_in_schema=False)
 def debug(request: Request) -> dict[str, Any]:
+    headers = dict(request.headers.items())
+    if "authorization" in headers and not config.AUTH_DEBUG:
+        headers["authorization"] = "<redacted>"
+
     return {
         "scheme": request.url.scheme,
         "baseurl": str(request.base_url),
-        "headers": dict(request.headers.items()),
+        "headers": headers,
     }
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    ignored_paths = ["/probe", "/metrics", "/docs", "/openapi.json"]
+
+    if config.AUTH_MODE == "no":
+        request.state.user = {
+            "username": "Default",
+            "workspaces": {
+                "*": set(ROLE_TO_PERMISSIONS["ws_admin"]),
+            },
+        }
+        return await call_next(request)
+
+    # AUTH_MODE = "gateway" means that authentication is enforced upstream
+    if config.AUTH_MODE == "gateway" and not any(request.url.path.startswith(p) for p in ignored_paths):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header:
+            return JSONResponse(status_code=401, content={"detail": "Missing Authorization header"})
+
+        parts = auth_header.split()
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid Authorization header"},
+            )
+
+        token = parts[1]
+
+        try:
+            _header_b64, payload_b64, _sig = token.split(".")
+            payload_b64 += "=" * (-len(payload_b64) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+        except Exception:
+            return JSONResponse(status_code=401, content={"detail": "Invalid access token"})
+
+        username = payload.get("preferred_username")
+
+        workspaces: dict[str, set[UserPermission]] = {}
+        resource_access = payload.get("resource_access", {})
+
+        for resource, data in resource_access.items():
+            roles = data.get("roles", [])
+
+            if resource == "workspace-api":
+                if "admin" in roles:
+                    workspaces["*"] = set(ROLE_TO_PERMISSIONS["ws_admin"])
+                continue
+
+            if "ws_admin" in roles:
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_admin"])
+            elif "ws_access" in roles:
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_access"])
+
+        request.state.user = {
+            "username": username,
+            "workspaces": workspaces,
+        }
+
+        if config.AUTH_DEBUG:
+            logger.debug(
+                "Authenticated user=%s workspaces=%s",
+                username,
+                {k: sorted(p.value for p in v) for k, v in workspaces.items()},
+            )
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -89,7 +167,6 @@ async def log_middle(request: Request, call_next: Callable[[Request], Awaitable[
 
     ignored_paths = ["/probe", "/metrics"]
     if request.url.path not in ignored_paths:
-        # NOTE: swagger validation failures prevent log_start_time from running
         duration = time.time() - start_time
         logging.info(
             f"{request.method} {request.url} "

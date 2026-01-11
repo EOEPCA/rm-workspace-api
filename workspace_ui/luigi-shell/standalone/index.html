@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <!--
  Luigi shell file for standalone frontend development without full Python backend with statically provided data
+ call with the param config with the name of the configuration file or just the number if the file is following the convention nnn-app.config.js
+ e.g. http://localhost:8080/?config=005
  -->
 <html>
   <head>
@@ -20,11 +22,22 @@
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
     <script type="module">
-      const params = new URLSearchParams(location.search);
-      let configName = params.get("config") || "app-config.js";
+      const STORAGE_KEY = "app.config";
 
-      if (/^\d+$/.test(configName)) {
-        configName = `${configName}-app-config.js`;
+      const params = new URLSearchParams(location.search);
+      let configName = params.get("config");
+
+      if (configName) {
+        // Normalize numeric config values
+        if (/^\d+$/.test(configName)) {
+          configName = `${configName}-app-config.js`;
+        }
+
+        // Persist explicitly provided config
+        sessionStorage.setItem(STORAGE_KEY, configName);
+      } else {
+        // Fallback to previously stored config
+        configName = sessionStorage.getItem(STORAGE_KEY) || "app-config.js";
       }
 
       // simple allow-list
@@ -53,16 +66,29 @@
           return base64String;
       }
 
-      const workspace = decodeData(mod.workspaceData);
-      const endpoints = Array.isArray(decodeData(mod.endpointsData)) ? decodeData(mod.endpointsData) : [];
-      let children = [
-        {
-          pathSegment: 'management',
-          label: 'Management',
-          icon: 'action-settings',
-          viewUrl: frontendUrl + '#/management'
+      function hasAnyManagePermission(permissions) {
+        if (!Array.isArray(permissions)) {
+          return false;
         }
-      ];
+
+        return permissions.some(p => typeof p === 'string' && p.startsWith('MANAGE_'));
+      }
+
+      const workspace = decodeData(mod.workspaceData);
+      console.log(workspace)
+      const endpoints = Array.isArray(decodeData(mod.endpointsData)) ? decodeData(mod.endpointsData) : [];
+      const user = workspace?.user || { name: 'unknown'};
+      const isAdmin = hasAnyManagePermission(user?.permissions)
+      let children = []
+      if (isAdmin) {
+        children.push(
+                {
+                  pathSegment: 'management',
+                  label: 'Management',
+                  icon: 'action-settings',
+                  viewUrl: frontendUrl + '#/management'
+                })
+      }
 
       endpoints.forEach(endpoint => {
         if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
@@ -83,6 +109,12 @@
 
       const luigiConfig = {
         navigation: {
+          profile: {
+            staticUserInfoFn: () => ({
+              name: user.name,
+              // email: 'email'
+            })
+          },
           nodes: () => [
             {
               pathSegment: 'home',
@@ -101,10 +133,15 @@
         },
         settings: {
           header: {
-            title: `Workspace: ${workspace.name}`,
+            title: `Workspace: ${workspace.name} /  User: ${user.name}`,
             logo: '/logo.svg',
-            profile: false
+            profile: {
+              name: user.name,
+              items: []
+            }
           },
+          // profileType: 'Fiori3',
+          hideNavigation: (children.length === 0),
           responsiveNavigation: 'semiCollapsible'
         }
       };

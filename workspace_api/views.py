@@ -8,7 +8,7 @@ import logging
 import re
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from http import HTTPStatus
 from typing import Any
 
@@ -29,10 +29,13 @@ from .models import (
     BucketPermission,
     ContainerRegistryCredentials,
     Credentials,
+    Database,
     Datalab,
     Membership,
     MembershipRole,
     Storage,
+    UserContext,
+    UserPermission,
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
@@ -425,7 +428,7 @@ def _extract_relevant_bucket_access_requests(
     return out
 
 
-def _combine_workspace(workspace_name: str) -> Workspace:
+def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     storage_cr = _get_cr(KIND_STORAGE, workspace_name, required=True)
     if not storage_cr:
         raise HTTPException(
@@ -460,16 +463,65 @@ def _combine_workspace(workspace_name: str) -> Workspace:
     )
 
     users = (datalab_spec or {}).get("users") or []
-    now = datetime.now(UTC)
-    memberships = [
-        Membership(
-            member=u.strip(),
-            role=MembershipRole.OWNER if u == principal else MembershipRole.CONTRIBUTOR,
-            creation_timestamp=now,
+    user_overrides = (datalab_spec or {}).get("userOverrides") or {}
+
+    dl_created_at = getattr(getattr(datalab_cr, "metadata", None), "creationTimestamp", None)
+    if not dl_created_at:
+        dl_created_at = getattr(getattr(storage_cr, "metadata", None), "creationTimestamp", None)
+
+    memberships = []
+    first_owner_assigned = False
+
+    for u in users:
+        if not isinstance(u, str):
+            continue
+        member = u.strip()
+        if not member:
+            continue
+
+        if not first_owner_assigned:
+            role = MembershipRole.OWNER
+            first_owner_assigned = True
+        else:
+            role_str = str((user_overrides.get(member) or {}).get("role") or "").strip().lower()
+            role = MembershipRole.ADMIN if role_str == "admin" else MembershipRole.USER
+
+        ts = (user_overrides.get(member) or {}).get("grantedAt") or dl_created_at
+
+        memberships.append(
+            Membership(
+                member=member,
+                role=role,
+                creation_timestamp=_iso(ts),
+            )
         )
-        for u in users
-        if isinstance(u, str) and u.strip()
-    ]
+
+    databases = []
+
+    db_hosts = (datalab_spec or {}).get("databases") or {}
+
+    if not isinstance(db_hosts, dict):
+        db_hosts = {}
+
+    seen_db: set[str] = set()
+
+    for host_cfg in db_hosts.values():
+        if not isinstance(host_cfg, dict):
+            continue
+        names = host_cfg.get("names") or []
+        if not isinstance(names, list):
+            continue
+        for n in names:
+            name = str(n or "").strip()
+            if not name or name in seen_db:
+                continue
+            seen_db.add(name)
+            databases.append(
+                Database(
+                    name=name,
+                    creation_timestamp=_iso(dl_created_at),
+                )
+            )
 
     credentials = None
     secret = None
@@ -523,9 +575,32 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         credentials=credentials,
         bucket_access_requests=relevant_bucket_access_requests,
     )
-    datalab = Datalab(memberships=memberships)
+    datalab = Datalab(memberships=memberships, databases=databases)
 
-    return Workspace(
+    user_ctx = request.state.user
+
+    username: str = user_ctx["username"]
+    workspace_perms = set()
+    if "*" in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"]["*"]
+    if workspace_name in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"][workspace_name]
+
+    permission_guards = {
+        UserPermission.VIEW_BUCKET_CREDENTIALS: lambda: setattr(storage, "credentials", None),
+        UserPermission.VIEW_BUCKETS: lambda: (
+            setattr(storage, "buckets", []),  # type: ignore[func-returns-value]
+            setattr(storage, "bucket_access_requests", []),  # type: ignore[func-returns-value]
+        ),
+        UserPermission.VIEW_MEMBERS: lambda: setattr(datalab, "memberships", []),
+        UserPermission.VIEW_DATABASES: lambda: setattr(datalab, "databases", []),
+    }
+
+    for permission, guard in permission_guards.items():
+        if permission not in workspace_perms:
+            guard()
+
+    workspace = Workspace(
         name=workspace_name,
         creation_timestamp=creation_timestamp,
         version=version,
@@ -533,7 +608,16 @@ def _combine_workspace(workspace_name: str) -> Workspace:
         storage=storage,
         datalab=datalab,
         container_registry=container_registry,
+        user=UserContext(
+            name=username,
+            permissions=sorted(workspace_perms),
+        ),
     )
+
+    if config.AUTH_DEBUG:
+        logger.debug(f"workspace={workspace}")
+
+    return workspace
 
 
 @app.post(
@@ -654,7 +738,7 @@ def make_external_url(request: Request, path: str) -> str:
     },
 )
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
-    ws = _combine_workspace(workspace_name)
+    ws = _combine_workspace(request, workspace_name)
 
     accept_header = request.headers.get("accept", "").lower()
     if (
@@ -693,11 +777,35 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     ),
     responses={
         202: {"description": "Update accepted and applied."},
+        403: {"description": "Forbidden."},
         404: {"description": "Workspace not found."},
         502: {"description": "Backend error while patching cluster resources."},
     },
 )
-async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
+async def update_workspace(request: Request, workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
+    user_ctx = request.state.user
+
+    workspace_perms = set()
+    if "*" in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"]["*"]
+    if workspace_name in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"][workspace_name]
+
+    required_perms: set[UserPermission] = set()
+
+    if update.add_buckets:
+        required_perms.add(UserPermission.MANAGE_BUCKETS)
+
+    if update.add_memberships:
+        required_perms.add(UserPermission.MANAGE_MEMBERS)
+
+    if update.add_databases:
+        required_perms.add(UserPermission.MANAGE_DATABASES)
+
+    missing = required_perms - workspace_perms
+    if missing:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
 
     try:
@@ -821,18 +929,20 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
         raise
 
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
-    if (update.add_members or []) and datalab_api is None:
+
+    add_memberships = update.add_memberships or []
+    if add_memberships and datalab_api is None:
         logger.warning(
-            "Datalab CRD not present; cannot add members for workspace '%s'.",
+            "Datalab CRD not present; cannot add memberships for workspace '%s'.",
             workspace_name,
         )
-    elif update.add_members:
+    elif add_memberships:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
                 logger.warning(
-                    "Datalab resource '%s' not found; skipping member additions.",
+                    "Datalab resource '%s' not found; skipping membership additions.",
                     workspace_name,
                 )
             else:
@@ -853,17 +963,42 @@ async def update_workspace(workspace_name: str, update: WorkspaceEdit) -> dict[s
                     seen.add(ms)
                     users.append(ms)
 
-        for m in update.add_members or []:
-            ms = (m or "").strip()
-            if ms and ms not in seen:
-                seen.add(ms)
-                users.append(ms)
+        user_overrides = datalab_spec.get("userOverrides") or {}
+        if not isinstance(user_overrides, dict):
+            user_overrides = {}
+
+        for mem in add_memberships:
+            member = (mem.member or "").strip()
+            if not member:
+                continue
+
+            if member not in seen:
+                seen.add(member)
+                users.append(member)
+
+            if users and member == users[0]:
+                continue
+
+            role = getattr(mem.role, "value", mem.role)
+            role = (role or "").strip().lower()
+
+            if role in ("admin", "user"):
+                ov = user_overrides.get(member) or {}
+                if not isinstance(ov, dict):
+                    ov = {}
+
+                ov["role"] = role
+
+                if mem.creation_timestamp is not None:
+                    ov["grantedAt"] = _iso(mem.creation_timestamp)
+
+                user_overrides[member] = ov
 
         try:
             datalab_api.patch(
                 name=workspace_name,
                 namespace=current_namespace(),
-                body={"spec": {"users": users}},
+                body={"spec": {"users": users, "userOverrides": user_overrides}},
                 content_type="application/merge-patch+json",
             )
         except ApiException as e:
