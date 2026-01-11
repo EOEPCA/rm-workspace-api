@@ -64,11 +64,19 @@ if config.UI_MODE == "ui":
 if __name__ != "__main__":
     gunicorn_logger = logging.getLogger("gunicorn.error")
 
+    env_level = os.environ.get("LOG_LEVEL", "").upper()
+    level_map = logging.getLevelNamesMapping()
+    level = level_map.get(env_level, gunicorn_logger.level)
+
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message).1000s",
-        level=gunicorn_logger.level,
+        level=level,
         handlers=gunicorn_logger.handlers,
+        force=True,
     )
+
+    logger.setLevel(level)
+
     logging.getLogger("kubernetes").setLevel(logging.INFO)
     logging.getLogger("kubernetes.client.rest").setLevel(logging.INFO)
 

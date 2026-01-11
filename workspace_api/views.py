@@ -614,6 +614,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         ),
     )
 
+    logger.info(f"Returning workspace '{workspace_name}' for user '{username}'")
+
     if config.AUTH_DEBUG:
         logger.debug(f"workspace={workspace}")
 

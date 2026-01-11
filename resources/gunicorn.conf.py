@@ -20,3 +20,7 @@ worker_class = os.environ.get("GUNICORN_WORKER_CLASS", "uvicorn.workers.UvicornW
 worker_connections = int(os.environ.get("GUNICORN_WORKER_CONNECTIONS", "1000"))
 timeout = int(os.environ.get("GUNICORN_TIMEOUT", "60"))
 wsgi_app = os.environ.get("GUNICORN_APP", "workspace_api:app")
+loglevel = os.environ.get("GUNICORN_LOGLEVEL", "info")
+accesslog = os.environ.get("GUNICORN_ACCESS_LOG", "-")
+errorlog = os.environ.get("GUNICORN_ERROR_LOG", "-")
+capture_output = True
