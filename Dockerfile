@@ -13,8 +13,8 @@ RUN python -m pip wheel --no-cache-dir --wheel-dir /api/wheels .[prod]
 
 FROM node:22-alpine3.19 AS ui-builder
 RUN apk add --no-cache \
-    bash=5.2.21-r0 \
-    rsync=3.4.0-r0
+    bash=5.2.21-r2 \
+    rsync=3.4.0-r1
 WORKDIR /ui
 COPY workspace_ui/build_dist.sh .
 COPY workspace_ui/luigi-shell ./luigi-shell
