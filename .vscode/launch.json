@@ -46,8 +46,7 @@
                 "UI_MODE": "ui",
                 "SESSION_MODE": "auto",
                 "AUTH_MODE": "gateway",
-                "AUTH_DEBUG": "true",
-                "STORAGE_SECRET_NAME": "s-<principal>"
+                "AUTH_DEBUG": "true"
             },
             "args": [
                 "workspace_api:app",
