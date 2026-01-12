@@ -144,23 +144,6 @@ def _crd_exists(name: str) -> bool:
         raise
 
 
-def _render_principal_placeholder(template: str | None, principal: str) -> str | None:
-    if not template:
-        return template
-    s = str(template)
-    return s.replace("<principal>", principal).replace("{principal}", principal)
-
-
-def _storage_secret_name_for(principal: str) -> str | None:
-    tmpl = getattr(config, "STORAGE_SECRET_NAME", None)
-    return _render_principal_placeholder(tmpl, principal)
-
-
-def _registry_secret_name_for(principal: str) -> str | None:
-    tmpl = getattr(config, "CONTAINER_REGISTRY_SECRET_NAME", None)
-    return _render_principal_placeholder(tmpl, principal)
-
-
 @app.get(
     "/status",
     status_code=HTTPStatus.OK,
@@ -222,21 +205,22 @@ def _to_spec_dict(obj: Any) -> dict[str, Any] | None:
 
 
 def _get_container_registry_credentials(
-    principal: str,
+    workspace_name: str,
 ) -> ContainerRegistryCredentials | None:
-    secret_name = _registry_secret_name_for(principal)
-    if not secret_name:
-        return None
-    secret = fetch_secret(secret_name, current_namespace())
-    if not secret or not secret.data:
-        return None
-    try:
-        username = base64.b64decode(secret.data["username"]).decode()
-        password = base64.b64decode(secret.data["password"]).decode()
-        return ContainerRegistryCredentials(username=username, password=password)
-    except (KeyError, binascii.Error) as e:
-        logger.warning("Failed to decode container registry secret '%s': %s", secret_name, e)
-        return None
+    secret = fetch_secret(f"{workspace_name}-container-registry", current_namespace())
+    if secret and secret.data:
+        try:
+            username = base64.b64decode(secret.data["username"]).decode()
+            password = base64.b64decode(secret.data["password"]).decode()
+            return ContainerRegistryCredentials(username=username, password=password)
+        except (KeyError, TypeError, binascii.Error) as e:
+            logger.warning(
+                "Error decoding container registry secret '%s': %s",
+                getattr(secret.metadata, "name", "<unknown>"),
+                e,
+            )
+
+    return None
 
 
 def _as_bool(v: Any) -> bool:
@@ -525,10 +509,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
 
     credentials = None
     secret = None
-    storage_secret_name = _storage_secret_name_for(principal)
-    if storage_secret_name:
-        secret = fetch_secret(storage_secret_name, current_namespace())
-
+    secret = fetch_secret(f"{workspace_name}", current_namespace())
     if secret and secret.data:
         try:
             envs = {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
@@ -564,7 +545,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                 e,
             )
 
-    container_registry = _get_container_registry_credentials(principal)
+    container_registry = _get_container_registry_credentials(workspace_name)
 
     creation_timestamp = getattr(storage_cr.metadata, "creationTimestamp", None)
     version = storage_cr.metadata.resourceVersion
@@ -638,9 +619,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     },
 )
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
-    safe_name = slugify(data.preferred_name, max_length=32) or str(uuid.uuid4())
-    safe_owner = slugify(data.default_owner, max_length=32) or str(uuid.uuid4())
-    workspace_name = _with_prefix(safe_name)[:63]
+    workspace_name = _with_prefix(slugify(data.preferred_name, max_length=32) or str(uuid.uuid4()))[:63]
 
     storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
@@ -662,7 +641,7 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
                 "kind": KIND_STORAGE,
                 "metadata": {"name": workspace_name},
                 "spec": {
-                    "principal": safe_owner,
+                    "principal": workspace_name,
                     "buckets": [{"bucketName": workspace_name, "discoverable": True}],
                 },
             },
@@ -687,8 +666,8 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
                     "kind": KIND_DATALAB,
                     "metadata": {"name": workspace_name},
                     "spec": {
-                        "users": [safe_owner],
-                        "secretName": _storage_secret_name_for(safe_owner),
+                        "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
+                        "secretName": workspace_name,
                         "sessions": ["default"] if session_mode == "on" else [],
                         "vcluster": use_vcluster,
                     },
