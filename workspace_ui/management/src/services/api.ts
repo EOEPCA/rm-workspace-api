@@ -17,11 +17,9 @@ export function saveMembers(workspaceName: string, memberships: Membership[], si
 }
 
 export function saveDatabases(workspaceName: string, databases: Database[], simulate = false) {
-  console.log('TODO Save databases ', databases)
-  simulate = true
   const workspaceEdit = {
     add_memberships: [],
-    add_databases: [],
+    add_databases: databases,
     add_buckets: [],
     patch_bucket_access_requests: []
   } as WorkspaceEdit

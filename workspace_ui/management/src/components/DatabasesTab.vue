@@ -272,7 +272,16 @@ function createDatabases() {
     return
   }
 
-  const databases = myDatabases.value.filter(m => !!m.name)
+  const nowIso = new Date().toISOString()
+
+  const databases = myDatabases.value
+    .filter(m => !!m.name)
+    .map(m => ({
+      id: m.id,
+      name: m.name.trim(),
+      creation_timestamp: m.creation_timestamp ?? nowIso,
+    }))
+
   saveDatabases(props.workspaceName, databases)
     .then(() => {
         myDatabases.value.forEach((member: Database) => {
