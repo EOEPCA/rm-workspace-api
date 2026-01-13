@@ -912,18 +912,26 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
 
     add_memberships = update.add_memberships or []
-    if add_memberships and datalab_api is None:
-        logger.warning(
-            "Datalab CRD not present; cannot add memberships for workspace '%s'.",
-            workspace_name,
-        )
-    elif add_memberships:
+    add_databases = update.add_databases or []
+
+    if (add_memberships or add_databases) and datalab_api is None:
+        if add_memberships:
+            logger.warning(
+                "Datalab CRD not present; cannot add memberships for workspace '%s'.",
+                workspace_name,
+            )
+        if add_databases:
+            logger.warning(
+                "Datalab CRD not present; cannot add databases for workspace '%s'.",
+                workspace_name,
+            )
+    elif add_memberships or add_databases:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
                 logger.warning(
-                    "Datalab resource '%s' not found; skipping membership additions.",
+                    "Datalab resource '%s' not found; skipping datalab updates.",
                     workspace_name,
                 )
             else:
@@ -935,59 +943,102 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
 
         datalab_spec = _to_spec_dict(datalab_obj) or {}
 
-        seen: set[str] = set()
-        users: list[str] = []
-        for m in datalab_spec.get("users") or []:
-            if isinstance(m, str):
-                ms = m.strip()
-                if ms and ms not in seen:
-                    seen.add(ms)
-                    users.append(ms)
+        datalab_patch_spec: dict[str, Any] = {}
 
-        user_overrides = datalab_spec.get("userOverrides") or {}
-        if not isinstance(user_overrides, dict):
-            user_overrides = {}
+        if add_memberships:
+            seen: set[str] = set()
+            users: list[str] = []
+            for m in datalab_spec.get("users") or []:
+                if isinstance(m, str):
+                    ms = m.strip()
+                    if ms and ms not in seen:
+                        seen.add(ms)
+                        users.append(ms)
 
-        for mem in add_memberships:
-            member = (mem.member or "").strip()
-            if not member:
-                continue
+            user_overrides = datalab_spec.get("userOverrides") or {}
+            if not isinstance(user_overrides, dict):
+                user_overrides = {}
 
-            if member not in seen:
-                seen.add(member)
-                users.append(member)
+            for mem in add_memberships:
+                member = (mem.member or "").strip()
+                if not member:
+                    continue
 
-            if users and member == users[0]:
-                continue
+                if member not in seen:
+                    seen.add(member)
+                    users.append(member)
 
-            role = getattr(mem.role, "value", mem.role)
-            role = (role or "").strip().lower()
+                if users and member == users[0]:
+                    continue
 
-            if role in ("admin", "user"):
-                ov = user_overrides.get(member) or {}
-                if not isinstance(ov, dict):
-                    ov = {}
+                role = getattr(mem.role, "value", mem.role)
+                role = (role or "").strip().lower()
 
-                ov["role"] = role
+                if role in ("admin", "user"):
+                    ov = user_overrides.get(member) or {}
+                    if not isinstance(ov, dict):
+                        ov = {}
 
-                if mem.creation_timestamp is not None:
-                    ov["grantedAt"] = _iso(mem.creation_timestamp)
+                    ov["role"] = role
 
-                user_overrides[member] = ov
+                    if mem.creation_timestamp is not None:
+                        ov["grantedAt"] = _iso(mem.creation_timestamp)
 
-        try:
-            datalab_api.patch(
-                name=workspace_name,
-                namespace=current_namespace(),
-                body={"spec": {"users": users, "userOverrides": user_overrides}},
-                content_type="application/merge-patch+json",
-            )
-        except ApiException as e:
-            logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
-            raise
-        except Exception as e:
-            logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
-            raise
+                    user_overrides[member] = ov
+
+            datalab_patch_spec["users"] = users
+            datalab_patch_spec["userOverrides"] = user_overrides
+
+        if add_databases:
+            databases_spec = datalab_spec.get("databases")
+            if not isinstance(databases_spec, dict):
+                databases_spec = {}
+
+            host_keys = [k for k in databases_spec if isinstance(k, str) and k.strip()]
+            host = host_keys[0] if host_keys else "pg0"
+
+            host_obj = databases_spec.get(host)
+            if not isinstance(host_obj, dict):
+                host_obj = {}
+
+            names = host_obj.get("names")
+            if not isinstance(names, list):
+                names = []
+
+            existing = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+
+            for db in add_databases:
+                dn = (getattr(db, "name", None) or "").strip()
+                if not dn or dn in existing:
+                    continue
+                names.append(dn)
+                existing.add(dn)
+
+            host_obj["names"] = names
+
+            if "storage" not in host_obj:
+                host_obj["storage"] = "1Gi"
+
+            if "backupStorage" not in host_obj:
+                host_obj["backupStorage"] = "10Gi"
+
+            databases_spec[host] = host_obj
+            datalab_patch_spec["databases"] = databases_spec
+
+        if datalab_patch_spec:
+            try:
+                datalab_api.patch(
+                    name=workspace_name,
+                    namespace=current_namespace(),
+                    body={"spec": datalab_patch_spec},
+                    content_type="application/merge-patch+json",
+                )
+            except ApiException as e:
+                logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
+                raise
+            except Exception as e:
+                logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
+                raise
 
     return {"name": workspace_name}
 
