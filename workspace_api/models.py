@@ -6,6 +6,7 @@ from __future__ import annotations
 import base64
 import enum
 from datetime import UTC, datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator
 
@@ -55,11 +56,22 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
 class UserContext(BaseModel):
     """User-specific context for a workspace."""
 
+    model_config = ConfigDict(json_schema_extra={"description": "User context for a workspace."})
+
     name: str = Field(..., description="Username of the current user.")
     permissions: list[UserPermission] = Field(
         ...,
-        description="Permissions of the current user within this workspace.",
+        description="Effective permissions of the current user within this workspace.",
     )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: Any) -> str:
+        v2 = (v or "").strip()
+        if not v2:
+            msg = "must not be empty"
+            raise ValueError(msg)
+        return v2
 
 
 class WorkspaceStatus(str, enum.Enum):
@@ -73,6 +85,8 @@ def _coerce_utc(dt: datetime | str | None) -> datetime | None:
         return None
     if isinstance(dt, str):
         s = dt.strip()
+        if not s:
+            return None
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
         dt = datetime.fromisoformat(s)
@@ -102,23 +116,30 @@ def _validate_bucket_list(values: list[str]) -> list[str]:
     return [_validate_bucket_name(b) for b in values]
 
 
+def _strip_required_string(v: Any) -> str:
+    v2 = (v or "").strip()
+    if not v2:
+        msg = "must not be empty"
+        raise ValueError(msg)
+    return v2
+
+
 class Membership(BaseModel):
-    """A users membership in a workspace with assigned role and creation time."""
+    """A user's membership in a workspace with assigned role and creation time."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace membership entry."})
 
     member: str = Field(..., description="The username of the member.")
     role: MembershipRole = Field(..., description="The role of the member.")
-    creation_timestamp: datetime | None = Field(..., description="When the membership was created (UTC, RFC3339).")
+    creation_timestamp: datetime | None = Field(
+        None,
+        description="When the membership was created (UTC, RFC3339).",
+    )
 
     @field_validator("member", mode="before")
     @classmethod
-    def _strip_member(cls, v: str) -> str:
-        v2 = (v or "").strip()
-        if not v2:
-            msg = "must not be empty"
-            raise ValueError(msg)
-        return v2
+    def _strip_member(cls, v: Any) -> str:
+        return _strip_required_string(v)
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod
@@ -133,18 +154,48 @@ class Database(BaseModel):
 
     name: str = Field(..., description="The name of the database.")
     creation_timestamp: datetime | None = Field(
-        ...,
+        None,
         description="When the database was created (UTC, RFC3339).",
     )
 
     @field_validator("name", mode="before")
     @classmethod
-    def _strip_name(cls, v: str) -> str:
-        v2 = (v or "").strip()
-        if not v2:
-            msg = "must not be empty"
+    def _strip_name(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+    @field_validator("creation_timestamp", mode="after")
+    @classmethod
+    def _ts_utc(cls, v: datetime | None) -> datetime | None:
+        return _coerce_utc(v)
+
+
+class Bucket(BaseModel):
+    """A bucket belonging to a workspace."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace bucket entry."})
+
+    name: str = Field(..., description="The name of the bucket.")
+    discoverable: bool = Field(
+        False,
+        description="Whether the bucket is discoverable in workspace listings.",
+    )
+    creation_timestamp: datetime | None = Field(
+        None,
+        description="When the bucket was created (UTC, RFC3339).",
+    )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _validate_name(cls, v: Any) -> str:
+        return _validate_bucket_name(v or "")
+
+    @field_validator("discoverable", mode="before")
+    @classmethod
+    def _bool_required(cls, v: Any) -> bool:
+        if v is None:
+            msg = "must not be null"
             raise ValueError(msg)
-        return v2
+        return bool(v)
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod
@@ -163,7 +214,10 @@ class BucketAccessRequest(BaseModel):
     workspace: str = Field(..., description="Workspace receiving or requesting access.")
     bucket: str = Field(..., description="Target bucket.")
     permission: BucketPermission = Field(..., description="Requested or granted permission.")
-    request_timestamp: datetime | None = Field(..., description="When the request was issued (UTC, RFC3339).")
+    request_timestamp: datetime | None = Field(
+        None,
+        description="When the request was issued (UTC, RFC3339).",
+    )
     grant_timestamp: datetime | None = Field(None, description="When the request was granted (UTC, RFC3339).")
     denied_timestamp: datetime | None = Field(None, description="When the request was denied (UTC, RFC3339).")
 
@@ -171,12 +225,8 @@ class BucketAccessRequest(BaseModel):
 
     @field_validator("workspace", "bucket", mode="before")
     @classmethod
-    def _strip_required_strings(cls, v: str) -> str:
-        v2 = (v or "").strip()
-        if not v2:
-            msg = "must not be empty"
-            raise ValueError(msg)
-        return v2
+    def _strip_required_strings(cls, v: Any) -> str:
+        return _strip_required_string(v)
 
     @field_validator("bucket")
     @classmethod
@@ -205,7 +255,7 @@ class BucketAccessRequest(BaseModel):
 
     @field_validator("request_timestamp", "grant_timestamp", "denied_timestamp", mode="after")
     @classmethod
-    def _ts_utc_opt(cls, v: datetime | None) -> datetime | None:
+    def _ts_utc(cls, v: datetime | None) -> datetime | None:
         return _coerce_utc(v)
 
 
@@ -231,7 +281,10 @@ class WorkspaceEdit(BaseModel):
         default_factory=list,
         description="Databases to add.",
     )
-    add_buckets: list[str] = Field(default_factory=list, description="Buckets to add.")
+    add_buckets: list[Bucket] = Field(
+        default_factory=list,
+        description="Buckets to add, including metadata such as discoverability and creation timestamp.",
+    )
     patch_bucket_access_requests: list[BucketAccessRequest] = Field(
         default_factory=list,
         description="Bucket access requests/grants to upsert. Each entry MUST have workspace, bucket, and request_timestamp.",
@@ -251,8 +304,15 @@ class WorkspaceEdit(BaseModel):
 
     @field_validator("add_buckets")
     @classmethod
-    def _check_buckets(cls, v: list[str]) -> list[str]:
-        return _validate_bucket_list(v)
+    def _dedup_buckets(cls, v: list[Bucket]) -> list[Bucket]:
+        seen: set[str] = set()
+        out: list[Bucket] = []
+        for b in v or []:
+            if b.name in seen:
+                continue
+            seen.add(b.name)
+            out.append(b)
+        return out
 
     @field_validator("patch_bucket_access_requests")
     @classmethod
@@ -278,6 +338,16 @@ class Credentials(BaseModel):
     endpoint: str = Field(..., description="The S3 API endpoint URL.")
     region: str = Field(..., description="The S3 region.")
 
+    @field_validator("bucketname", "access", "secret", "endpoint", "region", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+    @field_validator("bucketname")
+    @classmethod
+    def _bucketname_is_valid(cls, v: str) -> str:
+        return _validate_bucket_name(v)
+
 
 class ContainerRegistryCredentials(BaseModel):
     """Credentials for authenticating against a container registry."""
@@ -287,17 +357,20 @@ class ContainerRegistryCredentials(BaseModel):
     username: str = Field(..., description="Registry username.")
     password: SecretStr = Field(..., description="Registry password.", json_schema_extra={"writeOnly": True})
 
+    @field_validator("username", mode="before")
+    @classmethod
+    def _strip_username(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
     def base64_encode_as_single_string(self) -> str:
         pw = self.password.get_secret_value()
         return base64.b64encode(f"{self.username}:{pw}".encode()).decode()
 
 
 class Storage(BaseModel):
-    """Storage for a workspace."""
-
     model_config = ConfigDict(json_schema_extra={"description": "Workspace storage."})
 
-    buckets: list[str] = Field(default_factory=list, description="Owned Buckets.")
+    buckets: list[Bucket] = Field(default_factory=list, description="Owned buckets.")
     credentials: Credentials | None = Field(None, description="S3 credentials (bucket, keys, endpoint, region).")
     bucket_access_requests: list[BucketAccessRequest] = Field(
         default_factory=list,
@@ -306,8 +379,20 @@ class Storage(BaseModel):
 
     @field_validator("buckets")
     @classmethod
-    def _bucket_lists(cls, v: list[str]) -> list[str]:
-        return _validate_bucket_list(v)
+    def _bucket_lists(cls, v: list[Bucket]) -> list[Bucket]:
+        out: list[Bucket] = []
+        seen: set[str] = set()
+        for b in v or []:
+            name = _validate_bucket_name(getattr(b, "name", "") or "")
+            if name in seen:
+                continue
+            seen.add(name)
+            if b.name != name:
+                out.append(b.model_copy(update={"name": name}))
+            else:
+                out.append(b)
+
+        return out
 
 
 class Datalab(BaseModel):
@@ -325,16 +410,24 @@ class Workspace(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace resource representation."})
 
     name: str = Field(..., description="Unique, system-generated name.")
-    creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the S3 credentials secret.")
+    creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the workspace (UTC, RFC3339).")
     version: str | None = Field(None, description="Resource version for optimistic locking.")
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
     storage: Storage = Field(default_factory=Storage, description="Storage for buckets, credentials, access.")
     datalab: Datalab = Field(default_factory=Datalab, description="Datalab for memberships and sessions.")
-    container_registry: ContainerRegistryCredentials | None = Field(None, description="Credentials for the workspace's container registry.")
+    container_registry: ContainerRegistryCredentials | None = Field(
+        None,
+        description="Credentials for the workspace's container registry.",
+    )
     user: UserContext = Field(
         ...,
         description="User context with effective permissions for this workspace.",
     )
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_ws_name(cls, v: Any) -> str:
+        return _strip_required_string(v)
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod
@@ -349,3 +442,8 @@ class Endpoint(BaseModel):
 
     id: str = Field(..., description="Unique identifier.")
     url: str = Field(..., description="Public URL of the exposed service.")
+
+    @field_validator("id", "url", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)

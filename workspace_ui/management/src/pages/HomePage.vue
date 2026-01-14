@@ -72,7 +72,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="bucket in ws.storage?.buckets || []" :key="bucket">
+              <tr v-for="bucket in ws.storage?.buckets || []" :key="bucket.name">
                 <td>{{ bucket }}</td>
               </tr>
             </tbody>

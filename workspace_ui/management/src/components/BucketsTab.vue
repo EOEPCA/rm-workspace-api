@@ -44,16 +44,20 @@
             val => val.startsWith(workspaceName) || 'Name must start with ' + workspaceName,
             val => (val !== workspaceName && val != workspaceName + '-') || 'Name must be different from ' + workspaceName]"
         >
-        <template v-slot:append>
-          <q-btn dense flat icon="save" color="green"
-                 @click="createBucket">
-            <q-tooltip>Save added Bucket</q-tooltip>
-          </q-btn>
-        </template>
         </q-input>
-          <span v-else>
+        <span v-else>
           {{ props.row.bucket }}
         </span>
+      </q-td>
+    </template>
+
+    <template v-slot:body-cell-discoverable="props">
+      <q-td :props="props" class="text-center">
+        <q-toggle
+          v-model="props.row.discoverable"
+          dense
+          :disable="!props.row.isNew || !canManageBuckets"
+        />
       </q-td>
     </template>
 
@@ -64,7 +68,10 @@
         </q-btn>
       </q-td>
     </template>
+
   </q-table>
+
+  <q-btn color="primary" no-caps label="Save" @click="createBuckets" style="margin-top: 5px" :disable="!canManageBuckets || !hasChanged" />
 
   <q-separator class="q-my-md"/>
 
@@ -107,14 +114,6 @@
                @click="requestBucket(props.row)">
           <q-tooltip>Request bucket access</q-tooltip>
         </q-btn>
-        <!--
-        <q-btn dense flat icon="open_in_new" @click="openBucket(props.row.bucket)">
-          <q-tooltip>Open bucket</q-tooltip>
-        </q-btn>
-        <q-btn dense flat icon="link_off" color="negative" @click="unlink(props.row)">
-          <q-tooltip>Unlink</q-tooltip>
-        </q-btn>
-        -->
       </q-td>
     </template>
   </q-table>
@@ -125,7 +124,7 @@
 import {computed, ref, watch} from 'vue'
 import type {QTableColumn} from 'quasar'
 import {QTable, useQuasar} from 'quasar'
-import type {Bucket, BucketUI} from 'src/models/models'
+import type {Bucket, BucketNew, BucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {sortByBucketNameAsc} from 'src/services/sorting'
 import {saveBuckets, saveRequestedBuckets} from 'src/services/api'
@@ -145,11 +144,35 @@ const allAvailableBuckets = ref<boolean>(false)
 /** local proxies for v-model */
 
 const myBuckets = ref<BucketUI[]>([])
+const initialBuckets = ref<BucketUI[]>([])
 watch(
   () => props.buckets,
-  (v) => { myBuckets.value = v.map(x => ({ ...x })) },
+  (v) => {
+    const cloned = v.map(x => ({ ...x }))
+    myBuckets.value = cloned
+    initialBuckets.value = cloned.map(x => ({ ...x }))
+  },
   { immediate: true }
 )
+
+function normalizeBuckets(list: BucketUI[]): string[] {
+  return (list || [])
+    .filter(b => !!b.bucket)
+    .map(b => `${(b.bucket || '').trim()}|${b.discoverable ? '1' : '0'}`)
+    .sort()
+}
+
+const hasChanged = computed(() => {
+  const a = normalizeBuckets(myBuckets.value)
+  const b = normalizeBuckets(initialBuckets.value)
+
+  if (a.length !== b.length) return true
+
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return true
+  }
+  return false
+})
 
 const myLinkedBuckets = computed(() =>
   props.linkedBuckets
@@ -169,6 +192,12 @@ const bucketsColumns: QTableColumn<BucketUI>[] = [
     label: 'Bucket',
     field: 'bucket',
     align: 'left'
+  },
+  {
+    name: 'discoverable',
+    label: 'Discoverable',
+    field: 'discoverable',
+    align: 'center'
   },
   {
     name: 'requests',
@@ -226,38 +255,28 @@ const bucketInitialPagination = {
   rowsPerPage: 0
 }
 
-
 const linkedBucketStyle = computed(() => {
-  /*
-  let top
-  if (btnAddBucket.value) {
-    const el = btnAddBucket.value?.$el
-    top = el.getBoundingClientRect().top
-  } else {
-    top = 300
-  }
-
-   */
   const top = 55* Math.min(newBucketsCount.value, 5)
-//  console.log(top)
   return {
-    // height: `${state.table1Height}px`,
     height: `calc(100vh - ${top}px - 500px)`
-//  overflow: 'auto'
   }
 })
 
 const canManageBuckets = computed(() => userStore.canManageBuckets)
-
 function addBucket() {
-  // console.log('add bucket')
   if (!canManageBuckets.value) {
     return
   }
 
   const idxNew = myBuckets.value.findIndex((b) => !b.bucket || b.isNew)
   if (idxNew < 0) {
-    myBuckets.value.push({bucket: props.workspaceName + '-', isNew: true} as BucketUI)
+    myBuckets.value.push({
+      bucket: props.workspaceName + '-',
+      discoverable: false,
+      requests: 0,
+      grants: 0,
+      isNew: true
+    } as BucketUI)
     newBucketsCount.value++
   }
 
@@ -276,32 +295,46 @@ function deleteBucket(row: BucketUI) {
   }
 }
 
-function createBucket() {
+function createBuckets() {
   if (!canManageBuckets.value) {
     return
   }
 
-  newBucket.value.validate()
-
-  if (newBucket.value.hasError) {
+  newBucket.value?.validate?.()
+  if (newBucket.value?.hasError) {
     return
   }
 
-  const buckets = myBuckets.value.filter(b => !!b.bucket).map(b => b.bucket)
+  const nowIso = new Date().toISOString()
+
+  const buckets: BucketNew[] = myBuckets.value
+    .filter(b => !!b.bucket)
+    .map(b => {
+      const out: BucketNew = {
+        name: (b.bucket || '').trim(),
+        discoverable: !!b.discoverable
+      }
+      if (b.isNew) {
+        out.creation_timestamp = nowIso
+      }
+      return out
+    })
+
   saveBuckets(props.workspaceName, buckets)
     .then(() => {
       myBuckets.value.forEach( (bucket: BucketUI) => {
-          if (bucket.isNew) {
-            bucket.isPending = true
-          }
+        if (bucket.isNew) {
+          bucket.isPending = true
+        }
         bucket.isNew = false
-        })
-        $q.notify({
-          type: 'positive',
-          message: 'Bucket was successfully submitted!'
-        })
-      }
-    )
+      })
+      initialBuckets.value = myBuckets.value.map(b => ({ ...b }))
+
+      $q.notify({
+        type: 'positive',
+        message: 'Buckets were successfully submitted!'
+      })
+    })
     .catch((err) => {
       const msg = err instanceof Error ? err.message : String(err)
       $q.notify({
@@ -311,35 +344,16 @@ function createBucket() {
     })
 }
 
-
-
-/*
-function unlink(row: Bucket) {
-  // DELETE /bucket-access-requests/:id or appropriate endpoint
-  // allAccess.value = allAccess.value.filter(r => r.id !== row.id)
-  console.log('unlink', row)
-}
- */
-
-/*
-function openBucket(bucketName: string) {
-  // navigate to bucket detail view
-  console.log('Open bucket', bucketName)
-}
- */
-
 function requestBucket(row: Bucket) {
-  console.log('request bucket', row.bucket)
   row.request_timestamp = new Date().toISOString()
   const requestedBuckets = [row]
   saveRequestedBuckets(props.workspaceName, requestedBuckets)
     .then(() => {
-        $q.notify({
-          type: 'positive',
-          message: 'Request for Bucket access was successfully submitted!'
-        })
-      }
-    )
+      $q.notify({
+        type: 'positive',
+        message: 'Request for Bucket access was successfully submitted!'
+      })
+    })
     .catch((err) => {
       row.request_timestamp = undefined
       const msg = err instanceof Error ? err.message : String(err)
