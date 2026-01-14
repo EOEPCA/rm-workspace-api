@@ -47,12 +47,10 @@ export interface Bucket {
 }
 
 export interface Storage {
-  buckets?: string[]
+  buckets?: BucketNew[]
   credentials?: Record<string, unknown>
   bucket_access_requests?: Bucket[]
 }
-
-
 
 export interface Datalab {
   memberships?: Membership[]
@@ -70,10 +68,17 @@ export interface Workspace {
 
 export interface BucketUI {
   bucket: string;
+  discoverable: boolean
   requests: number
   grants: number
   isNew?: boolean
   isPending?: boolean
+}
+
+export interface BucketNew {
+  name: string
+  discoverable: boolean
+  creation_timestamp?: string | undefined
 }
 
 export interface WorkspaceEditUI {
@@ -84,10 +89,9 @@ export interface WorkspaceEditUI {
   databases: Database[]
 }
 
-// Corresponding to Backend
 export interface WorkspaceEdit {
   add_memberships: Membership[]
   add_databases: Database[]
-  add_buckets: string[]
+  add_buckets: BucketNew[]
   patch_bucket_access_requests?: Bucket[]
 }

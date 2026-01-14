@@ -25,6 +25,7 @@ from slugify import slugify
 from workspace_api import app, config, templates
 
 from .models import (
+    Bucket,
     BucketAccessRequest,
     BucketPermission,
     ContainerRegistryCredentials,
@@ -552,7 +553,13 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
 
     storage = Storage(
-        buckets=all_buckets,
+        buckets=[
+            Bucket(
+                name=b,
+                discoverable=b in discoverable_buckets,
+            )
+            for b in all_buckets
+        ],
         credentials=credentials,
         bucket_access_requests=relevant_bucket_access_requests,
     )
@@ -800,9 +807,23 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
 
     buckets = storage_spec.get("buckets") or []
     existing_names = {(_bucketname_from(b) or ""): b for b in buckets}
-    for bname in update.add_buckets or []:
+
+    for b in update.add_buckets or []:
+        bname = (getattr(b, "name", None) or "").strip()
+        if not bname:
+            continue
         if bname not in existing_names:
-            buckets.append({"bucketName": bname, "discoverable": True})
+            buckets.append(
+                {
+                    "bucketName": bname,
+                    "discoverable": bool(getattr(b, "discoverable", False)),
+                }
+            )
+            existing_names[bname] = buckets[-1]
+        else:
+            existing = existing_names[bname]
+            if isinstance(existing, dict) and "discoverable" not in existing:
+                existing["discoverable"] = bool(getattr(b, "discoverable", False))
 
     requests: list[dict] = storage_spec.get("bucketAccessRequests") or []
     grants: list[dict] = storage_spec.get("bucketAccessGrants") or []

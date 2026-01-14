@@ -1,6 +1,6 @@
 import type {AxiosError, AxiosResponse} from 'axios'
 import axios from 'axios'
-import type {Bucket, Database, Membership, WorkspaceEdit} from 'src/models/models'
+import type {Bucket, BucketNew, Database, Membership, WorkspaceEdit} from 'src/models/models'
 
 export function saveMembers(workspaceName: string, memberships: Membership[], simulate = false) {
   const workspaceEdit = {
@@ -30,7 +30,7 @@ export function saveDatabases(workspaceName: string, databases: Database[], simu
   return saveWorkspace(workspaceName, workspaceEdit)
 }
 
-export function saveBuckets(workspaceName: string, buckets: string[]) {
+export function saveBuckets(workspaceName: string, buckets: BucketNew[]) {
   const workspaceEdit = {
     add_memberships: [],
     add_databases: [],

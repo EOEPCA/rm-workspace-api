@@ -135,7 +135,8 @@ const {loading} = useLuigiWorkspace({
           name: ws.name,
           memberships: (ws.datalab?.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
           buckets: (ws.storage?.buckets ?? []).map(b => ({
-              bucket: b,
+              bucket: b.name,
+              discoverable: b.discoverable,
               requests: 0,
               grants: 0
             } as BucketUI)) ?? [],
