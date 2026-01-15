@@ -46,14 +46,9 @@
         <q-separator/>
         <q-card-section class="q-pa-none">
           <q-markup-table flat>
-            <thead>
-            <tr>
-              <th class="text-left">Name</th>
-            </tr>
-            </thead>
             <tbody>
             <tr v-for="membership in ws.datalab?.memberships" :key="membership.member">
-              <td>{{ membership.member }}</td>
+              <td>{{ membership.member }} ({{ membership.role }})</td>
             </tr>
             </tbody>
           </q-markup-table>
@@ -66,14 +61,12 @@
         <q-separator/>
         <q-card-section class="q-pa-none">
           <q-markup-table flat>
-            <thead>
-              <tr>
-                <th class="text-left">Bucket Name</th>
-              </tr>
-            </thead>
             <tbody>
               <tr v-for="bucket in ws.storage?.buckets || []" :key="bucket.name">
-                <td>{{ bucket }}</td>
+                <td>
+                  {{ bucket.name }}
+                  <span v-if="bucket.discoverable">(discoverable)</span>
+                </td>
               </tr>
             </tbody>
           </q-markup-table>
@@ -86,20 +79,31 @@
         <q-separator/>
         <q-card-section class="q-pa-none">
           <q-markup-table flat>
-            <thead>
-            <tr>
-              <th class="text-left">Name</th>
-            </tr>
-            </thead>
             <tbody>
             <tr v-for="database in ws.datalab?.databases" :key="database.name">
-              <td>{{ database.name }}</td>
+              <td>
+                {{ database.name }}
+              </td>
             </tr>
             </tbody>
           </q-markup-table>
         </q-card-section>
       </q-card>
     </div>
+
+    <!-- Database Credentials -->
+      <q-card
+        v-if="hasDatabaseCredentials"
+        class="q-mb-md"
+      >
+        <q-card-section class="text-subtitle1">
+          Database Credentials
+        </q-card-section>
+        <q-separator/>
+        <q-card-section>
+          <pre class="q-pa-md bg-grey-2 rounded-borders">{{ prettyDatabaseCredentials }}</pre>
+        </q-card-section>
+      </q-card>
 
     <!-- Fallback if no workspace data -->
     <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center text-grey-7">
@@ -134,6 +138,16 @@ const hasCredentials = computed<boolean>(() => {
 
 const prettyCredentials = computed<string>(() =>
   JSON.stringify(ws.value?.storage?.credentials ?? {}, null, 2)
+)
+
+const hasDatabaseCredentials = computed<boolean>(() => {
+  if (!canSeeDatabases.value) return false
+  const creds = ws.value?.datalab?.database_credentials
+  return !!creds && Object.keys(creds).length > 0
+})
+
+const prettyDatabaseCredentials = computed<string>(() =>
+  JSON.stringify(ws.value?.datalab?.database_credentials ?? {}, null, 2)
 )
 
 const { loading } = useLuigiWorkspace({
