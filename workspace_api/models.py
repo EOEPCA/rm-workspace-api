@@ -349,6 +349,27 @@ class Credentials(BaseModel):
         return _validate_bucket_name(v)
 
 
+class DatabaseCredentials(BaseModel):
+    """Database connection information for a workspace database."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Database credentials for the workspace."})
+
+    url: str = Field(..., description="Database connection URL (e.g. postgres://...).")
+    dbname: str | None = Field(None, description="Database name.")
+    host: str | None = Field(None, description="Database host.")
+    port: str | None = Field(None, description="Database port.")
+    username: str | None = Field(None, description="Database username.")
+    password: str | None = Field(None, description="Database password.")
+    host_external: str | None = Field(None, description="Externally reachable database host.")
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _strip_strings(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        return _strip_required_string(v)
+
+
 class ContainerRegistryCredentials(BaseModel):
     """Credentials for authenticating against a container registry."""
 
@@ -402,6 +423,14 @@ class Datalab(BaseModel):
 
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
     databases: list[Database] = Field(default_factory=list, description="Detailed database entries.")
+    database_credentials: DatabaseCredentials | None = Field(
+        None,
+        description="Credentials for the workspace's database instance.",
+    )
+    container_registry_credentials: ContainerRegistryCredentials | None = Field(
+        None,
+        description="Credentials for the workspace's container registry.",
+    )
 
 
 class Workspace(BaseModel):
@@ -415,10 +444,6 @@ class Workspace(BaseModel):
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
     storage: Storage = Field(default_factory=Storage, description="Storage for buckets, credentials, access.")
     datalab: Datalab = Field(default_factory=Datalab, description="Datalab for memberships and sessions.")
-    container_registry: ContainerRegistryCredentials | None = Field(
-        None,
-        description="Credentials for the workspace's container registry.",
-    )
     user: UserContext = Field(
         ...,
         description="User context with effective permissions for this workspace.",

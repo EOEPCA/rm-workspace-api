@@ -31,6 +31,7 @@ from .models import (
     ContainerRegistryCredentials,
     Credentials,
     Database,
+    DatabaseCredentials,
     Datalab,
     Membership,
     MembershipRole,
@@ -203,25 +204,6 @@ def _to_spec_dict(obj: Any) -> dict[str, Any] | None:
     if spec is None:
         return None
     return spec.to_dict() if hasattr(spec, "to_dict") else spec
-
-
-def _get_container_registry_credentials(
-    workspace_name: str,
-) -> ContainerRegistryCredentials | None:
-    secret = fetch_secret(f"{workspace_name}-container-registry", current_namespace())
-    if secret and secret.data:
-        try:
-            username = base64.b64decode(secret.data["username"]).decode()
-            password = base64.b64decode(secret.data["password"]).decode()
-            return ContainerRegistryCredentials(username=username, password=password)
-        except (KeyError, TypeError, binascii.Error) as e:
-            logger.warning(
-                "Error decoding container registry secret '%s': %s",
-                getattr(secret.metadata, "name", "<unknown>"),
-                e,
-            )
-
-    return None
 
 
 def _as_bool(v: Any) -> bool:
@@ -413,6 +395,24 @@ def _extract_relevant_bucket_access_requests(
     return out
 
 
+def _b64decode_secret_data(data: dict[str, str]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in (data or {}).items():
+        if v is None:
+            continue
+        out[k] = base64.b64decode(v).decode("utf-8")
+    return out
+
+
+def _clean_str(v: object) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        return s or None
+    return None
+
+
 def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     storage_cr = _get_cr(KIND_STORAGE, workspace_name, required=True)
     if not storage_cr:
@@ -508,45 +508,72 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                 )
             )
 
-    credentials = None
+    credentials: Credentials | None = None
+    database_credentials: DatabaseCredentials | None = None
+    container_registry_credentials: ContainerRegistryCredentials | None = None
+
     secret = None
-    secret = fetch_secret(f"{workspace_name}", current_namespace())
-    if secret and secret.data:
+    secret = fetch_secret(f"{workspace_name}-datalab", current_namespace())
+    if not secret:
+        secret = fetch_secret(f"{workspace_name}", current_namespace())
+    if secret and getattr(secret, "data", None):
         try:
-            envs = {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
-            credentials = Credentials(
-                bucketname=all_buckets[0] if buckets else (envs.get("BUCKET") or ""),
-                access=envs.get(
-                    "AWS_ACCESS_KEY_ID",
-                    envs.get("access", envs.get("attribute.access", "")),
-                ),
-                secret=envs.get(
-                    "AWS_SECRET_ACCESS_KEY",
-                    envs.get("secret", envs.get("attribute.secret", "")),
-                ),
-                endpoint=envs.get(
-                    "AWS_ENDPOINT_URL",
-                    envs.get(
-                        "endpoint",
-                        envs.get("attribute.endpoint", getattr(config, "ENDPOINT", None)),
-                    ),
-                ),
-                region=envs.get(
-                    "AWS_REGION",
-                    envs.get(
-                        "region",
-                        envs.get("attribute.region", getattr(config, "REGION", None)),
-                    ),
-                ),
+            envs = _b64decode_secret_data(secret.data)
+
+            bucketname = _clean_str(envs.get("BUCKET"))
+            access = _clean_str(envs.get("AWS_ACCESS_KEY_ID") or envs.get("access") or envs.get("attribute.access"))
+            secret_key = _clean_str(envs.get("AWS_SECRET_ACCESS_KEY") or envs.get("secret") or envs.get("attribute.secret"))
+            endpoint = _clean_str(
+                envs.get("AWS_ENDPOINT_URL") or envs.get("endpoint") or envs.get("attribute.endpoint") or getattr(config, "ENDPOINT", None)
             )
-        except (KeyError, TypeError, binascii.Error) as e:
-            logger.warning(
-                "Error decoding credentials secret '%s': %s",
-                getattr(secret.metadata, "name", "<unknown>"),
-                e,
+            region = _clean_str(
+                envs.get("AWS_REGION") or envs.get("region") or envs.get("attribute.region") or getattr(config, "REGION", None)
             )
 
-    container_registry = _get_container_registry_credentials(workspace_name)
+            resolved_bucketname = all_buckets[0] if buckets else bucketname
+
+            if resolved_bucketname and access and secret_key and endpoint:
+                credentials = Credentials(
+                    bucketname=resolved_bucketname,
+                    access=access,
+                    secret=secret_key,
+                    endpoint=endpoint,
+                    region=region,
+                )
+
+            database_url = _clean_str(envs.get("DATABASE_URL"))
+            host = _clean_str(envs.get("DATABASE_HOST"))
+            username = _clean_str(envs.get("DATABASE_USERNAME"))
+            password = _clean_str(envs.get("DATABASE_PASSWORD"))
+            port = _clean_str(envs.get("DATABASE_PORT"))
+            dbname = _clean_str(envs.get("DATABASE_NAME"))
+            host_external = _clean_str(envs.get("DATABASE_HOST_EXTERNAL"))
+
+            if database_url:
+                database_credentials = DatabaseCredentials(
+                    url=database_url,
+                    host=host,
+                    username=username,
+                    password=password,
+                    port=port,
+                    dbname=dbname,
+                    host_external=host_external,
+                )
+
+            reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))
+            reg_pass = _clean_str(envs.get("CONTAINER_REGISTRY_PASSWORD"))
+            if reg_user and reg_pass:
+                container_registry_credentials = ContainerRegistryCredentials(
+                    username=reg_user,
+                    password=reg_pass,
+                )
+
+        except (KeyError, TypeError, binascii.Error, UnicodeDecodeError) as e:
+            logger.warning(
+                "Error decoding credentials secret '%s': %s",
+                getattr(getattr(secret, "metadata", None), "name", "<unknown>"),
+                e,
+            )
 
     creation_timestamp = getattr(storage_cr.metadata, "creationTimestamp", None)
     version = storage_cr.metadata.resourceVersion
@@ -563,11 +590,15 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         credentials=credentials,
         bucket_access_requests=relevant_bucket_access_requests,
     )
-    datalab = Datalab(memberships=memberships, databases=databases)
+    datalab = Datalab(
+        memberships=memberships,
+        databases=databases,
+        database_credentials=database_credentials,
+        container_registry_credentials=container_registry_credentials,
+    )
 
     user_ctx = request.state.user
 
-    username: str = user_ctx["username"]
     workspace_perms = set()
     if "*" in user_ctx["workspaces"]:
         workspace_perms |= user_ctx["workspaces"]["*"]
@@ -595,9 +626,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         status=workspace_status,
         storage=storage,
         datalab=datalab,
-        container_registry=container_registry,
         user=UserContext(
-            name=username,
+            name=user_ctx["username"],
             permissions=sorted(workspace_perms),
         ),
     )

@@ -55,6 +55,8 @@ export interface Storage {
 export interface Datalab {
   memberships?: Membership[]
   databases?: Database[]
+  database_credentials?: Record<string, unknown>
+  container_registry_credentials?: Record<string, unknown>
 }
 
 export interface Workspace {
