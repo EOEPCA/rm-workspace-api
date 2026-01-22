@@ -548,6 +548,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             port = _clean_str(envs.get("DATABASE_PORT"))
             dbname = _clean_str(envs.get("DATABASE_NAME"))
             host_external = _clean_str(envs.get("DATABASE_HOST_EXTERNAL"))
+            url_external = _clean_str(envs.get("DATABASE_URL_EXTERNAL"))
 
             if database_url:
                 database_credentials = DatabaseCredentials(
@@ -558,6 +559,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                     port=port,
                     dbname=dbname,
                     host_external=host_external,
+                    url_external=url_external,
                 )
 
             reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))

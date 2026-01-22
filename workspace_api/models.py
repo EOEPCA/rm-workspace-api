@@ -361,6 +361,7 @@ class DatabaseCredentials(BaseModel):
     username: str | None = Field(None, description="Database username.")
     password: str | None = Field(None, description="Database password.")
     host_external: str | None = Field(None, description="Externally reachable database host.")
+    url_external: str | None = Field(None, description="Externally reachable database connection URL (e.g. postgres://...).")
 
     @field_validator("url", mode="before")
     @classmethod
