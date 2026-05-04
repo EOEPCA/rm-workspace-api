@@ -232,12 +232,13 @@ External roles are normalized into explicit permissions:
   - `VIEW_BUCKET_CREDENTIALS`
   - `VIEW_MEMBERS`
   - `VIEW_BUCKETS`
-  - `VIEW_DATABASES`
+  - `VIEW_STORES`
 
 - **`ws_admin`**
   - all of the above, plus:
   - `MANAGE_MEMBERS`
   - `MANAGE_BUCKETS`
+  - `MANAGE_STORES`
 
 Authorization decisions are based exclusively on these permissions, not on raw roles.
 

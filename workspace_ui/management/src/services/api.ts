@@ -1,11 +1,11 @@
 import type {AxiosError, AxiosResponse} from 'axios'
 import axios from 'axios'
-import type {Bucket, BucketNew, Database, Membership, WorkspaceEdit} from 'src/models/models'
+import type {Bucket, BucketNew, Membership, Store, WorkspaceEdit} from 'src/models/models'
 
 export function saveMembers(workspaceName: string, memberships: Membership[], simulate = false) {
   const workspaceEdit = {
     add_memberships: memberships,
-    add_databases: [],
+    add_stores: [],
     add_buckets: [],
     patch_bucket_access_requests: []
   } as WorkspaceEdit
@@ -16,10 +16,10 @@ export function saveMembers(workspaceName: string, memberships: Membership[], si
   return saveWorkspace(workspaceName, workspaceEdit)
 }
 
-export function saveDatabases(workspaceName: string, databases: Database[], simulate = false) {
+export function saveStores(workspaceName: string, stores: Store[], simulate = false) {
   const workspaceEdit = {
     add_memberships: [],
-    add_databases: databases,
+    add_stores: stores,
     add_buckets: [],
     patch_bucket_access_requests: []
   } as WorkspaceEdit
@@ -33,7 +33,7 @@ export function saveDatabases(workspaceName: string, databases: Database[], simu
 export function saveBuckets(workspaceName: string, buckets: BucketNew[]) {
   const workspaceEdit = {
     add_memberships: [],
-    add_databases: [],
+    add_stores: [],
     add_buckets: buckets,
     patch_bucket_access_requests: []
   } as WorkspaceEdit
@@ -44,7 +44,7 @@ export function saveBuckets(workspaceName: string, buckets: BucketNew[]) {
 export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bucket[]) {
   const workspaceEdit = {
     add_memberships: [],
-    add_databases: [],
+    add_stores: [],
     add_buckets: [],
     patch_bucket_access_requests: requestedBuckets
   } as WorkspaceEdit
@@ -55,7 +55,7 @@ export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bu
 export function saveBucketGrants(workspaceName: string, grantedBuckets: Bucket[]) {
   const workspaceEdit = {
     add_memberships: [],
-    add_databases: [],
+    add_stores: [],
     add_buckets: [],
     patch_bucket_access_requests: grantedBuckets
   } as WorkspaceEdit

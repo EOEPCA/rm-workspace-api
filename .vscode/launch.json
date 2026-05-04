@@ -39,10 +39,10 @@
             "console": "integratedTerminal",
             "justMyCode": true,
             "env": {
-                "KUBECONFIG": "${env:HOME}/.kube/config-kalpha",
+                "KUBECONFIG": "${env:HOME}/.kube/config-k",
                 "PREFIX_FOR_NAME": "s",
                 "AWS_REGION": "kalpha",
-                "AWS_ENDPOINT_URL": "https://minio.console.kalpha.versioneer.at/",
+                "AWS_ENDPOINT_URL": "https://console-minio.k.versioneer.at/",
                 "UI_MODE": "ui",
                 "SESSION_MODE": "auto",
                 "AUTH_MODE": "gateway",

@@ -28,10 +28,17 @@ class UserPermission(str, enum.Enum):
     VIEW_BUCKET_CREDENTIALS = "VIEW_BUCKET_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
-    VIEW_DATABASES = "VIEW_DATABASES"
+    VIEW_STORES = "VIEW_STORES"
     MANAGE_MEMBERS = "MANAGE_MEMBERS"
     MANAGE_BUCKETS = "MANAGE_BUCKETS"
-    MANAGE_DATABASES = "MANAGE_DATABASES"
+    MANAGE_STORES = "MANAGE_STORES"
+
+
+class StoreType(str, enum.Enum):
+    DATABASE = "database"
+    VECTOR = "vector"
+    CACHE = "cache"
+    DOCUMENT = "document"
 
 
 ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
@@ -39,16 +46,16 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
-        UserPermission.VIEW_DATABASES,
+        UserPermission.VIEW_STORES,
     },
     "ws_admin": {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
-        UserPermission.VIEW_DATABASES,
+        UserPermission.VIEW_STORES,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
-        UserPermission.MANAGE_DATABASES,
+        UserPermission.MANAGE_STORES,
     },
 }
 
@@ -147,21 +154,32 @@ class Membership(BaseModel):
         return _coerce_utc(v)
 
 
-class Database(BaseModel):
-    """A database belonging to a workspace with creation time."""
+class Store(BaseModel):
+    """A provider-datalab store belonging to a workspace."""
 
-    model_config = ConfigDict(json_schema_extra={"description": "Workspace database entry."})
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace store entry."})
 
-    name: str = Field(..., description="The name of the database.")
+    name: str = Field(..., description="The name of the store.")
+    type: StoreType = Field(..., description="The kind of backing store.")
+    storage: str | None = Field(None, description="Persistent storage size as a Kubernetes quantity.")
+    backup_storage: str | None = Field(None, description="Backup storage size for database stores.")
     creation_timestamp: datetime | None = Field(
         None,
-        description="When the database was created (UTC, RFC3339).",
+        description="When the store was created (UTC, RFC3339).",
     )
 
     @field_validator("name", mode="before")
     @classmethod
     def _strip_name(cls, v: Any) -> str:
         return _strip_required_string(v)
+
+    @field_validator("storage", "backup_storage", mode="before")
+    @classmethod
+    def _strip_optional_strings(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        v2 = str(v).strip()
+        return v2 or None
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod
@@ -277,9 +295,9 @@ class WorkspaceEdit(BaseModel):
         default_factory=list,
         description="Memberships to add.",
     )
-    add_databases: list[Database] = Field(
+    add_stores: list[Store] = Field(
         default_factory=list,
-        description="Databases to add.",
+        description="Provider-datalab stores to add.",
     )
     add_buckets: list[Bucket] = Field(
         default_factory=list,
@@ -312,6 +330,19 @@ class WorkspaceEdit(BaseModel):
                 continue
             seen.add(b.name)
             out.append(b)
+        return out
+
+    @field_validator("add_stores")
+    @classmethod
+    def _dedup_stores(cls, v: list[Store]) -> list[Store]:
+        seen: set[tuple[StoreType, str]] = set()
+        out: list[Store] = []
+        for s in v or []:
+            key = (s.type, s.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(s)
         return out
 
     @field_validator("patch_bucket_access_requests")
@@ -347,28 +378,6 @@ class Credentials(BaseModel):
     @classmethod
     def _bucketname_is_valid(cls, v: str) -> str:
         return _validate_bucket_name(v)
-
-
-class DatabaseCredentials(BaseModel):
-    """Database connection information for a workspace database."""
-
-    model_config = ConfigDict(json_schema_extra={"description": "Database credentials for the workspace."})
-
-    url: str = Field(..., description="Database connection URL (e.g. postgres://...).")
-    dbname: str | None = Field(None, description="Database name.")
-    host: str | None = Field(None, description="Database host.")
-    port: str | None = Field(None, description="Database port.")
-    username: str | None = Field(None, description="Database username.")
-    password: str | None = Field(None, description="Database password.")
-    host_external: str | None = Field(None, description="Externally reachable database host.")
-    url_external: str | None = Field(None, description="Externally reachable database connection URL (e.g. postgres://...).")
-
-    @field_validator("url", mode="before")
-    @classmethod
-    def _strip_strings(cls, v: Any) -> Any:
-        if v is None:
-            return None
-        return _strip_required_string(v)
 
 
 class ContainerRegistryCredentials(BaseModel):
@@ -423,10 +432,15 @@ class Datalab(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace datalab."})
 
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
-    databases: list[Database] = Field(default_factory=list, description="Detailed database entries.")
-    database_credentials: DatabaseCredentials | None = Field(
-        None,
-        description="Credentials for the workspace's database instance.",
+    available: bool = Field(False, description="Whether the provider-datalab CRD is installed.")
+    available_store_types: list[StoreType] = Field(
+        default_factory=list,
+        description="Store types enabled by config and supported by the Datalab CRD.",
+    )
+    stores: list[Store] = Field(default_factory=list, description="Detailed store entries.")
+    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = Field(
+        default_factory=dict,
+        description="Credentials grouped by store type and store name.",
     )
     container_registry_credentials: ContainerRegistryCredentials | None = Field(
         None,
@@ -443,8 +457,21 @@ class Workspace(BaseModel):
     creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the workspace (UTC, RFC3339).")
     version: str | None = Field(None, description="Resource version for optimistic locking.")
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
-    storage: Storage = Field(default_factory=Storage, description="Storage for buckets, credentials, access.")
-    datalab: Datalab = Field(default_factory=Datalab, description="Datalab for memberships and sessions.")
+    storage: Storage = Field(
+        default_factory=lambda: Storage(buckets=[], credentials=None, bucket_access_requests=[]),
+        description="Storage for buckets, credentials, access.",
+    )
+    datalab: Datalab = Field(
+        default_factory=lambda: Datalab(
+            memberships=[],
+            available=False,
+            available_store_types=[],
+            stores=[],
+            store_credentials={},
+            container_registry_credentials=None,
+        ),
+        description="Datalab for memberships and sessions.",
+    )
     user: UserContext = Field(
         ...,
         description="User context with effective permissions for this workspace.",
