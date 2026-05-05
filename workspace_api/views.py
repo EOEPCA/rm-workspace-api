@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from http import HTTPStatus
 from typing import Any
@@ -29,6 +29,8 @@ from workspace_api import app, config, templates
 from .models import (
     Bucket,
     BucketAccessRequest,
+    BucketLifecycleRule,
+    BucketLifecycleRuleMode,
     BucketPermission,
     ContainerRegistryCredentials,
     Credentials,
@@ -90,6 +92,9 @@ KIND_STORAGE = "Storage"
 KIND_DATALAB = "Datalab"
 CRD_STORAGE = "storages.pkg.internal"
 CRD_DATALAB = "datalabs.pkg.internal"
+DEFAULT_SESSION_NAME = "default"
+SESSION_STATE_STARTED = "started"
+SESSION_STATE_STOPPED = "stopped"
 
 
 @app.on_event("startup")
@@ -233,6 +238,75 @@ def _as_bool(v: Any) -> bool:
     return s in {"true", "1", "yes", "y", "on"}
 
 
+def _session_name(item: Any) -> str | None:
+    if isinstance(item, str):
+        return item.strip() or None
+    if isinstance(item, dict):
+        return _clean_str(item.get("name"))
+    return None
+
+
+def _session_state(item: Any) -> str:
+    if isinstance(item, dict):
+        return (_clean_str(item.get("state")) or SESSION_STATE_STARTED).lower()
+    return SESSION_STATE_STARTED
+
+
+def _session_item(name: str, state: str) -> dict[str, str]:
+    return {"name": name, "state": state}
+
+
+def _initial_sessions_for_mode(session_mode: str) -> list[dict[str, str]]:
+    match session_mode.strip().lower():
+        case "on":
+            return [_session_item(DEFAULT_SESSION_NAME, SESSION_STATE_STARTED)]
+        case "auto":
+            return [_session_item(DEFAULT_SESSION_NAME, SESSION_STATE_STOPPED)]
+        case _:
+            return []
+
+
+def _session_declarations(spec: dict[str, Any]) -> list[Any]:
+    sessions = spec.get("sessions") or []
+    return sessions if isinstance(sessions, list) else []
+
+
+def _find_session(sessions: Sequence[Any], session_id: str) -> Any | None:
+    for session in sessions:
+        if _session_name(session) == session_id:
+            return session
+    return None
+
+
+def _sessions_with_state(sessions: Sequence[Any], session_id: str, state: str) -> list[dict[str, Any]]:
+    updated: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    replaced = False
+
+    for session in sessions:
+        name = _session_name(session)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        if isinstance(session, dict):
+            next_session: dict[str, Any] = dict(session)
+            next_session["name"] = name
+        else:
+            next_session = _session_item(name, _session_state(session))
+
+        if name == session_id:
+            next_session["state"] = state
+            replaced = True
+
+        updated.append(next_session)
+
+    if not replaced:
+        updated.append(_session_item(session_id, state))
+
+    return updated
+
+
 def _get_first(*vals: Any) -> str | None:
     for v in vals:
         if v is not None:
@@ -247,6 +321,54 @@ def _bucketname_from(d: dict) -> str | None:
         d.get("bucketName"),
         d.get("bucket"),
     )
+
+
+def _bucket_lifecycle_rules_from_provider(d: dict[str, Any]) -> list[BucketLifecycleRule]:
+    raw_rules = d.get("lifecycleRules") or []
+    if not isinstance(raw_rules, list):
+        return []
+
+    rules: list[BucketLifecycleRule] = []
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, dict):
+            logger.warning("Skipping non-dict lifecycle rule: %r", raw_rule)
+            continue
+
+        target = _clean_str(raw_rule.get("target"))
+        if target is None:
+            logger.warning("Skipping invalid lifecycle rule %r: missing target", raw_rule)
+            continue
+
+        try:
+            mode = BucketLifecycleRuleMode(_clean_str(raw_rule.get("mode")) or BucketLifecycleRuleMode.DELETE.value)
+            rules.append(
+                BucketLifecycleRule(
+                    target=target,
+                    mode=mode,
+                    min_age=raw_rule.get("minAge") or raw_rule.get("min_age"),
+                    at=raw_rule.get("at"),
+                )
+            )
+        except ValueError as e:
+            logger.warning("Skipping invalid lifecycle rule %r: %s", raw_rule, e)
+
+    return rules
+
+
+def _bucket_lifecycle_rules_to_provider(rules: Sequence[BucketLifecycleRule]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rule in rules or []:
+        mode = getattr(rule.mode, "value", rule.mode)
+        item: dict[str, Any] = {
+            "target": rule.target,
+            "mode": mode,
+        }
+        if rule.min_age is not None:
+            item["minAge"] = rule.min_age
+        elif rule.at is not None:
+            item["at"] = _iso(rule.at)
+        out.append(item)
+    return out
 
 
 def _dedup_preserve(items: list[str]) -> list[str]:
@@ -590,6 +712,21 @@ def _store_name_from_secret_part(raw: str) -> str:
     return raw.strip().lower().replace("_", "-")
 
 
+def _secret_store_key(prefix: str, store_name: str, suffix: str) -> str:
+    normalized_store = re.sub(r"[^A-Za-z0-9]+", "_", store_name).strip("_").upper()
+    return f"{prefix}_{normalized_store}_{suffix}"
+
+
+def _pg_secret_key(cluster_name: str, suffix: str) -> str:
+    return _secret_store_key("PG", cluster_name, suffix)
+
+
+def _pg_db_secret_key(cluster_name: str, database_name: str, suffix: str) -> str:
+    normalized_cluster = re.sub(r"[^A-Za-z0-9]+", "_", cluster_name).strip("_").upper()
+    normalized_database = re.sub(r"[^A-Za-z0-9]+", "_", database_name).strip("_").upper()
+    return f"PG_{normalized_cluster}_{normalized_database}_{suffix}"
+
+
 def _database_urls_from_template(template_url: str | None, database_names: Sequence[str]) -> dict[str, str]:
     if not template_url:
         return {}
@@ -643,6 +780,7 @@ def _database_urls_from_parts(
 def _store_credentials_from_envs(
     envs: dict[str, str],
     database_names: Sequence[str] = (),
+    database_hosts: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[StoreType, dict[str, dict[str, Any]]]:
     store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
 
@@ -674,9 +812,95 @@ def _store_credentials_from_envs(
             },
         )
 
+    for cluster_name, host_database_names_raw in (database_hosts or {}).items():
+        host_database_names = [name for name in host_database_names_raw if name]
+        if not host_database_names:
+            continue
+
+        host = _clean_str(envs.get(_pg_secret_key(cluster_name, "HOST")))
+        port = _clean_str(envs.get(_pg_secret_key(cluster_name, "PORT")))
+        username = _clean_str(envs.get(_pg_secret_key(cluster_name, "USER")))
+        password = _clean_str(envs.get(_pg_secret_key(cluster_name, "PASSWORD")))
+        host_external = _clean_str(envs.get(_pg_secret_key(cluster_name, "HOST_EXTERNAL")))
+        urls = {name: url for name in host_database_names if (url := _clean_str(envs.get(_pg_db_secret_key(cluster_name, name, "URL"))))}
+        external_urls = {
+            name: url
+            for name in host_database_names
+            if (url := _clean_str(envs.get(_pg_db_secret_key(cluster_name, name, "URL_EXTERNAL"))))
+        }
+
+        if host or username or password or urls or external_urls:
+            _put_store_credentials(
+                store_credentials,
+                StoreType.DATABASE,
+                cluster_name,
+                {
+                    "host": host,
+                    "port": port,
+                    "username": username,
+                    "password": password,
+                    "host_external": host_external,
+                    "databases": ",".join(host_database_names),
+                    "urls": urls,
+                    "external_urls": external_urls,
+                },
+            )
+
     for key, value in envs.items():
         cleaned_value = _clean_str(value)
         if not cleaned_value:
+            continue
+
+        if match := re.fullmatch(r"MONGO_(.+?)_(AUTH_SOURCE|HOST|PORT|DATABASE|USER|PASSWORD|URI)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "DATABASE": "database",
+                "AUTH_SOURCE": "auth_source",
+                "USER": "username",
+                "PASSWORD": "password",
+                "URI": "uri",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.DOCUMENT,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"REDIS_(.+?)_(HOST|PORT|USER|DATABASE|PASSWORD|URL)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "USER": "username",
+                "DATABASE": "database",
+                "PASSWORD": "password",
+                "URL": "url",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.CACHE,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"QDRANT_(.+?)_(READ_API_KEY|GRPC_PORT|API_KEY|HOST|PORT|URL)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "GRPC_PORT": "grpc_port",
+                "URL": "url",
+                "READ_API_KEY": "read_api_key",
+                "API_KEY": "api_key",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.VECTOR,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
             continue
 
         if match := re.fullmatch(r"QDRANT_(.+)_READ_API_KEY", key):
@@ -746,12 +970,15 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     buckets = storage_spec.get("buckets") or []
     all_buckets: list[str] = []
     discoverable_buckets: list[str] = []
+    bucket_lifecycle_rules: dict[str, list[BucketLifecycleRule]] = {}
 
     for it in buckets:
         bname = _bucketname_from(it or {}) or ""
         if not bname:
             continue
         all_buckets.append(bname)
+        if isinstance(it, dict):
+            bucket_lifecycle_rules[bname] = _bucket_lifecycle_rules_from_provider(it)
         if _as_bool((it or {}).get("discoverable")):
             discoverable_buckets.append(bname)
 
@@ -801,19 +1028,23 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         db_hosts = {}
 
     seen_db: set[str] = set()
+    database_hosts: dict[str, list[str]] = {}
 
     if StoreType.DATABASE in available_store_types:
-        for host_cfg in db_hosts.values():
+        for host_name, host_cfg in db_hosts.items():
             if not isinstance(host_cfg, dict):
                 continue
             names = host_cfg.get("names") or []
             if not isinstance(names, list):
                 continue
+            host_key = str(host_name or "").strip() or "pg0"
+            database_hosts.setdefault(host_key, [])
             for n in names:
                 name = str(n or "").strip()
                 if not name or name in seen_db:
                     continue
                 seen_db.add(name)
+                database_hosts[host_key].append(name)
                 stores.append(
                     Store(
                         name=name,
@@ -865,7 +1096,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                 )
 
             database_names = [store.name for store in stores if store.type == StoreType.DATABASE]
-            store_credentials = _store_credentials_from_envs(envs, database_names)
+            store_credentials = _store_credentials_from_envs(envs, database_names, database_hosts)
 
             reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))
             reg_pass = _clean_str(envs.get("CONTAINER_REGISTRY_PASSWORD"))
@@ -891,6 +1122,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             Bucket(
                 name=b,
                 discoverable=b in discoverable_buckets,
+                lifecycle_rules=bucket_lifecycle_rules.get(b, []),
                 creation_timestamp=None,
             )
             for b in all_buckets
@@ -925,6 +1157,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         UserPermission.VIEW_STORES: lambda: (
             setattr(datalab, "stores", []),  # type: ignore[func-returns-value]
             setattr(datalab, "store_credentials", {}),  # type: ignore[func-returns-value]
+            setattr(datalab, "container_registry_credentials", None),  # type: ignore[func-returns-value]
         ),
     }
 
@@ -1009,6 +1242,7 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     if datalab_api is not None:
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
+        sessions = _initial_sessions_for_mode(session_mode)
         try:
             datalab_api.create(
                 {
@@ -1018,7 +1252,7 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
                     "spec": {
                         "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
                         "secretName": workspace_name,
-                        "sessions": ["default"] if session_mode == "on" else [],
+                        "sessions": sessions,
                         "vcluster": use_vcluster,
                     },
                 },
@@ -1149,24 +1383,32 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     storage_spec = _to_spec_dict(storage_obj) or {}
 
     buckets = storage_spec.get("buckets") or []
-    existing_names = {(_bucketname_from(b) or ""): b for b in buckets}
+    if not isinstance(buckets, list):
+        buckets = []
+    existing_names = {(_bucketname_from(b) or ""): b for b in buckets if isinstance(b, dict)}
 
     for b in update.add_buckets or []:
         bname = (getattr(b, "name", None) or "").strip()
         if not bname:
             continue
+        lifecycle_rules_was_set = "lifecycle_rules" in getattr(b, "model_fields_set", set())
+        lifecycle_rules = _bucket_lifecycle_rules_to_provider(b.lifecycle_rules) if lifecycle_rules_was_set else None
         if bname not in existing_names:
-            buckets.append(
-                {
-                    "bucketName": bname,
-                    "discoverable": bool(getattr(b, "discoverable", False)),
-                }
-            )
+            bucket_spec: dict[str, Any] = {
+                "bucketName": bname,
+                "discoverable": bool(getattr(b, "discoverable", False)),
+            }
+            if lifecycle_rules is not None:
+                bucket_spec["lifecycleRules"] = lifecycle_rules
+
+            buckets.append(bucket_spec)
             existing_names[bname] = buckets[-1]
         else:
             existing = existing_names[bname]
             if isinstance(existing, dict) and "discoverable" not in existing:
                 existing["discoverable"] = bool(getattr(b, "discoverable", False))
+            if isinstance(existing, dict) and lifecycle_rules is not None:
+                existing["lifecycleRules"] = lifecycle_rules
 
     requests: list[dict] = storage_spec.get("bucketAccessRequests") or []
     grants: list[dict] = storage_spec.get("bucketAccessGrants") or []
@@ -1379,14 +1621,14 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
             if not isinstance(names, list):
                 names = []
 
-            existing = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+            existing_database_names = {n.strip() for n in names if isinstance(n, str) and n.strip()}
 
             for store in database_stores:
                 dn = (getattr(store, "name", None) or "").strip()
-                if not dn or dn in existing:
+                if not dn or dn in existing_database_names:
                     continue
                 names.append(dn)
-                existing.add(dn)
+                existing_database_names.add(dn)
 
             host_obj["names"] = names
 
@@ -1506,11 +1748,13 @@ async def get_workspace_session(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 
     spec = _to_spec_dict(dl) or {}
-    spec_sessions = [str(x) for x in (spec.get("sessions") or [])]
-    if str(session_id) not in spec_sessions:
-        session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
-        if session_mode == "auto" and str(session_id) == "default":
-            new_sessions = list(dict.fromkeys([*spec_sessions, "default"]))
+    spec_sessions = _session_declarations(spec)
+    spec_session = _find_session(spec_sessions, str(session_id))
+    session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
+
+    if spec_session is None:
+        if session_mode == "auto" and str(session_id) == DEFAULT_SESSION_NAME:
+            new_sessions = _sessions_with_state(spec_sessions, str(session_id), SESSION_STATE_STARTED)
             logger.info(
                 "Enabling session '%s' for workspace '%s' (auto mode).",
                 session_id,
@@ -1532,6 +1776,32 @@ async def get_workspace_session(
                 ) from e
         else:
             msg = f"Session enabling unavailable: session '{session_id}' not declared and auto mode is disabled"
+            logger.info(msg)
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+    elif _session_state(spec_session) != SESSION_STATE_STARTED:
+        if session_mode == "auto" and str(session_id) == DEFAULT_SESSION_NAME:
+            new_sessions = _sessions_with_state(spec_sessions, str(session_id), SESSION_STATE_STARTED)
+            logger.info(
+                "Starting stopped session '%s' for workspace '%s' (auto mode).",
+                session_id,
+                workspace_name,
+            )
+            try:
+                datalab_api.patch(
+                    name=workspace_name,
+                    namespace=current_namespace(),
+                    body={"spec": {"sessions": new_sessions}},
+                    content_type="application/merge-patch+json",
+                )
+            except ApiException as e:
+                msg = f"Starting session '{session_id}' for workspace '{workspace_name}' failed"
+                logger.warning("%s: %s", msg, e)
+                raise HTTPException(
+                    status_code=HTTPStatus.BAD_GATEWAY,
+                    detail={"error": msg, "exception": str(e)},
+                ) from e
+        else:
+            msg = f"Session enabling unavailable: session '{session_id}' is stopped and auto mode is disabled"
             logger.info(msg)
             raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 

@@ -16,6 +16,8 @@ export type UserPermission =
 
 export type StoreType = 'database' | 'vector' | 'cache' | 'document'
 
+export type BucketLifecycleRuleMode = 'Notify' | 'Delete'
+
 export interface WorkspaceUser {
   name: string
   permissions: UserPermission[]
@@ -51,6 +53,14 @@ export interface Bucket {
   isPending?: boolean
 }
 
+export interface BucketLifecycleRule {
+  id?: string
+  target: string
+  mode: BucketLifecycleRuleMode
+  min_age?: string | undefined
+  at?: string | undefined
+}
+
 export interface Storage {
   buckets?: BucketNew[]
   credentials?: Record<string, unknown>
@@ -78,6 +88,7 @@ export interface Workspace {
 export interface BucketUI {
   bucket: string;
   discoverable: boolean
+  lifecycle_rules?: BucketLifecycleRule[]
   requests: number
   grants: number
   isNew?: boolean
@@ -87,6 +98,7 @@ export interface BucketUI {
 export interface BucketNew {
   name: string
   discoverable: boolean
+  lifecycle_rules?: BucketLifecycleRule[]
   creation_timestamp?: string | undefined
 }
 

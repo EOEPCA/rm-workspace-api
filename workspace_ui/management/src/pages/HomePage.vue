@@ -6,7 +6,7 @@
     </div>
 
     <!-- Error -->
-    <q-banner v-if="errorMessage" class="bg-red-1 text-negative q-mb-md" dense>
+    <q-banner v-if="errorMessage" class="q-mb-md" dense>
       {{ errorMessage }}
     </q-banner>
 
@@ -31,7 +31,7 @@
         <q-card-section class="row items-center q-py-sm">
           <div class="text-subtitle1">Members</div>
           <q-space/>
-          <span class="muted">{{ ws.datalab?.memberships?.length }}</span>
+          <span class="attribute attribute-count">{{ ws.datalab?.memberships?.length }}</span>
         </q-card-section>
         <q-separator/>
         <q-list separator dense>
@@ -43,7 +43,7 @@
             <q-item-section>
               <div class="entity-line">
                 <span class="entity-name">{{ membership.member }}</span>
-                <span>{{ membership.role }}</span>
+                <span class="attribute">{{ membership.role }}</span>
               </div>
             </q-item-section>
           </q-item>
@@ -55,7 +55,7 @@
         <q-card-section class="row items-center q-py-sm">
           <div class="text-subtitle1">Buckets</div>
           <q-space/>
-          <span class="muted">{{ ws.storage?.buckets?.length }}</span>
+          <span class="attribute attribute-count">{{ ws.storage?.buckets?.length }}</span>
         </q-card-section>
         <q-separator/>
         <q-list separator dense>
@@ -73,7 +73,15 @@
                 <q-item-section>
                   <div class="entity-line">
                     <span class="entity-name">{{ bucket.name }}</span>
-                    <span v-if="bucket.discoverable">discoverable</span>
+                    <span v-if="bucket.discoverable" class="attribute">discoverable</span>
+                    <span
+                      v-for="rule in bucket.lifecycle_rules || []"
+                      :key="rule.target"
+                      class="attribute lifecycle-rule"
+                    >
+                      {{ formatLifecycleRule(rule) }}
+                      <q-tooltip>{{ lifecycleRuleTooltip(rule) }}</q-tooltip>
+                    </span>
                   </div>
                 </q-item-section>
               </template>
@@ -88,7 +96,15 @@
               <q-item-section>
                 <div class="entity-line">
                   <span class="entity-name">{{ bucket.name }}</span>
-                  <span v-if="bucket.discoverable">discoverable</span>
+                  <span v-if="bucket.discoverable" class="attribute">discoverable</span>
+                  <span
+                    v-for="rule in bucket.lifecycle_rules || []"
+                    :key="rule.target"
+                    class="attribute lifecycle-rule"
+                  >
+                    {{ formatLifecycleRule(rule) }}
+                    <q-tooltip>{{ lifecycleRuleTooltip(rule) }}</q-tooltip>
+                  </span>
                 </div>
               </q-item-section>
               <q-tooltip>Credentials not available yet</q-tooltip>
@@ -102,7 +118,7 @@
         <q-card-section class="row items-center q-py-sm">
           <div class="text-subtitle1">Stores</div>
           <q-space/>
-          <span class="muted">{{ storeSummaries.length }}</span>
+          <span class="attribute attribute-count">{{ storeSummaries.length }}</span>
         </q-card-section>
         <q-separator/>
         <q-list separator dense>
@@ -120,9 +136,9 @@
                 <q-item-section>
                   <div class="entity-line">
                     <span class="entity-name">{{ store.name }}</span>
-                    <span>{{ store.label }}</span>
-                    <span v-if="store.storage">{{ store.storage }}</span>
-                    <span v-if="store.backupStorage">backup {{ store.backupStorage }}</span>
+                    <span class="attribute">{{ store.label }}</span>
+                    <span v-if="store.storage" class="attribute">{{ store.storage }}</span>
+                    <span v-if="store.backupStorage" class="attribute">backup {{ store.backupStorage }}</span>
                   </div>
                 </q-item-section>
               </template>
@@ -137,9 +153,9 @@
               <q-item-section>
                 <div class="entity-line">
                   <span class="entity-name">{{ store.name }}</span>
-                  <span>{{ store.label }}</span>
-                  <span v-if="store.storage">{{ store.storage }}</span>
-                  <span v-if="store.backupStorage">backup {{ store.backupStorage }}</span>
+                  <span class="attribute">{{ store.label }}</span>
+                  <span v-if="store.storage" class="attribute">{{ store.storage }}</span>
+                  <span v-if="store.backupStorage" class="attribute">backup {{ store.backupStorage }}</span>
                 </div>
               </q-item-section>
               <q-tooltip>Credentials not available yet</q-tooltip>
@@ -147,10 +163,11 @@
           </template>
         </q-list>
       </q-card>
+
     </div>
 
     <!-- Fallback if no workspace data -->
-    <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center text-grey-7">
+    <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center">
       <p>No workspace data loaded.</p>
     </div>
   </div>
@@ -159,7 +176,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
-import type { Store, Workspace } from 'src/models/models'
+import type { BucketLifecycleRule, Store, Workspace } from 'src/models/models'
 import { useUserStore } from 'src/stores/userStore'
 
 /** ---- State ---- */
@@ -249,6 +266,18 @@ function prettyJson(value: unknown) {
   return JSON.stringify(value ?? {}, null, 2)
 }
 
+function formatLifecycleRule(rule: BucketLifecycleRule) {
+  const condition = rule.min_age ? rule.min_age : rule.at
+  return `${rule.mode} ${rule.target} ${condition ?? ''}`.trim()
+}
+
+function lifecycleRuleTooltip(rule: BucketLifecycleRule) {
+  if (rule.min_age) {
+    return `${rule.mode} ${rule.target} after ${rule.min_age}`
+  }
+  return `${rule.mode} ${rule.target} at ${rule.at}`
+}
+
 const storeSummaries = computed(() =>
   (ws.value?.datalab?.stores ?? []).map(store => {
     const credentials = credentialsForStore(store)
@@ -284,27 +313,44 @@ const { loading } = useLuigiWorkspace({
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 16px;
+  gap: 6px;
   min-width: 0;
 }
 
 .entity-name {
   min-width: 9rem;
   font-weight: 500;
+}
+
+.attribute {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid #4a4a4a;
+  color: #4a4a4a;
+  line-height: 1.4;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.muted {
-  color: #616161;
+.attribute-count {
+  min-width: 2rem;
+  justify-content: center;
 }
 
 .credential-json {
   margin: 0;
   padding: 12px;
-  background: #f7f7f7;
+  border-top: 1px solid currentColor;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 12px;
+}
+
+.lifecycle-rule {
+  max-width: 18rem;
 }
 </style>

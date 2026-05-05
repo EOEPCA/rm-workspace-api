@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import base64
 import enum
+import re
 from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator, model_validator
 
 
 class MembershipRole(str, enum.Enum):
@@ -22,6 +23,11 @@ class BucketPermission(str, enum.Enum):
     READ_ONLY = "ReadOnly"
     WRITE_ONLY = "WriteOnly"
     NONE = "None"
+
+
+class BucketLifecycleRuleMode(str, enum.Enum):
+    NOTIFY = "Notify"
+    DELETE = "Delete"
 
 
 class UserPermission(str, enum.Enum):
@@ -187,6 +193,73 @@ class Store(BaseModel):
         return _coerce_utc(v)
 
 
+class BucketLifecycleRule(BaseModel):
+    """A provider-storage lifecycle rule for bucket objects."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Bucket lifecycle rule."})
+
+    target: str = Field(..., description="Target path inside the bucket, such as *, tmp/*, or logs/.")
+    mode: BucketLifecycleRuleMode = Field(
+        BucketLifecycleRuleMode.DELETE,
+        description="Whether matching objects are reported or deleted when the time condition is met.",
+    )
+    min_age: str | None = Field(None, description="Per-object minimum age, such as 30s, 15m, 2h, 1d, or 2w.")
+    at: datetime | None = Field(None, description="Fixed UTC timestamp after which the rule applies.")
+
+    @field_validator("target", mode="before")
+    @classmethod
+    def _strip_target(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+    @field_validator("target")
+    @classmethod
+    def _validate_target(cls, v: str) -> str:
+        if not re.fullmatch(r"(\*|[^*]+(\*)?)", v):
+            msg = "target must be * or a path/prefix with an optional trailing *"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("min_age", mode="before")
+    @classmethod
+    def _strip_min_age(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        v2 = str(v).strip()
+        return v2 or None
+
+    @field_validator("min_age")
+    @classmethod
+    def _validate_min_age(cls, v: str | None) -> str | None:
+        if v is not None and not re.fullmatch(r"\+?[0-9]+[smhdw]", v):
+            msg = "min_age must use a supported suffix: s, m, h, d, or w"
+            raise ValueError(msg)
+        return v
+
+    @field_validator("at", mode="before")
+    @classmethod
+    def _parse_at(cls, v: str | datetime | None) -> datetime | None:
+        if v is None or isinstance(v, datetime):
+            return v
+        s = str(v).strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        return datetime.fromisoformat(s)
+
+    @field_validator("at", mode="after")
+    @classmethod
+    def _at_utc(cls, v: datetime | None) -> datetime | None:
+        return _coerce_utc(v)
+
+    @model_validator(mode="after")
+    def _exactly_one_time_condition(self) -> BucketLifecycleRule:
+        if (self.min_age is None) == (self.at is None):
+            msg = "must set exactly one of min_age or at"
+            raise ValueError(msg)
+        return self
+
+
 class Bucket(BaseModel):
     """A bucket belonging to a workspace."""
 
@@ -196,6 +269,10 @@ class Bucket(BaseModel):
     discoverable: bool = Field(
         False,
         description="Whether the bucket is discoverable in workspace listings.",
+    )
+    lifecycle_rules: list[BucketLifecycleRule] = Field(
+        default_factory=list,
+        description="Optional lifecycle rules for objects in this bucket.",
     )
     creation_timestamp: datetime | None = Field(
         None,
@@ -214,6 +291,18 @@ class Bucket(BaseModel):
             msg = "must not be null"
             raise ValueError(msg)
         return bool(v)
+
+    @field_validator("lifecycle_rules")
+    @classmethod
+    def _dedup_lifecycle_rules(cls, v: list[BucketLifecycleRule]) -> list[BucketLifecycleRule]:
+        out: list[BucketLifecycleRule] = []
+        seen: set[str] = set()
+        for rule in v or []:
+            if rule.target in seen:
+                continue
+            seen.add(rule.target)
+            out.append(rule)
+        return out
 
     @field_validator("creation_timestamp", mode="after")
     @classmethod

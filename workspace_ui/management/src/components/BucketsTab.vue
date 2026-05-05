@@ -61,6 +61,34 @@
       </q-td>
     </template>
 
+    <template v-slot:body-cell-lifecycle_rules="props">
+      <q-td :props="props">
+        <div class="lifecycle-cell">
+          <q-chip
+            v-for="rule in props.row.lifecycle_rules || []"
+            :key="rule.target"
+            dense
+            square
+            color="primary"
+            text-color="white"
+          >
+            {{ formatLifecycleRule(rule) }}
+            <q-tooltip>{{ lifecycleRuleTooltip(rule) }}</q-tooltip>
+          </q-chip>
+          <q-btn
+            dense
+            flat
+            round
+            icon="playlist_add"
+            :disable="!canManageBuckets"
+            @click="openLifecycleDialog(props.row)"
+          >
+            <q-tooltip>Lifecycle rules</q-tooltip>
+          </q-btn>
+        </div>
+      </q-td>
+    </template>
+
     <template v-slot:body-cell-actions="props">
       <q-td :props="props">
         <q-btn v-if="props.row.isNew" dense flat icon="delete" color="negative" @click="deleteBucket(props.row)">
@@ -72,6 +100,91 @@
   </q-table>
 
   <q-btn color="primary" no-caps label="Save" @click="createBuckets" style="margin-top: 5px" :disable="!canManageBuckets || !hasChanged" />
+
+  <q-dialog v-model="lifecycleDialogOpen">
+    <q-card class="lifecycle-dialog">
+      <q-card-section class="row items-center q-pb-sm">
+        <div class="text-subtitle1">{{ editingBucket?.bucket }}</div>
+        <q-space/>
+        <q-btn flat round dense icon="close" v-close-popup>
+          <q-tooltip>Close</q-tooltip>
+        </q-btn>
+      </q-card-section>
+      <q-separator/>
+      <q-card-section class="q-gutter-sm">
+        <div
+          v-for="rule in editingLifecycleRules"
+          :key="rule.id"
+          class="lifecycle-rule-row"
+        >
+          <q-input
+            v-model="rule.target"
+            dense
+            outlined
+            hide-bottom-space
+            label="Target"
+            placeholder="tmp/*"
+          />
+          <q-select
+            v-model="rule.mode"
+            dense
+            outlined
+            emit-value
+            map-options
+            :options="lifecycleModeOptions"
+            label="Mode"
+          />
+          <q-btn-toggle
+            v-model="rule.condition"
+            dense
+            flat
+            spread
+            no-caps
+            toggle-color="primary"
+            :options="lifecycleConditionOptions"
+          />
+          <q-input
+            v-if="rule.condition === 'min_age'"
+            v-model="rule.min_age"
+            dense
+            outlined
+            hide-bottom-space
+            label="Min age"
+            placeholder="30d"
+            @update:model-value="rule.at = undefined"
+          />
+          <q-input
+            v-else
+            v-model="rule.at"
+            dense
+            outlined
+            hide-bottom-space
+            label="At"
+            placeholder="2026-05-05T20:00:00Z"
+            @update:model-value="rule.min_age = undefined"
+          />
+          <q-btn dense flat round icon="delete" color="negative" @click="deleteLifecycleRule(rule.id)">
+            <q-tooltip>Delete rule</q-tooltip>
+          </q-btn>
+        </div>
+        <q-btn flat no-caps icon="add" label="Add rule" @click="addLifecycleRule" />
+        <div v-if="lifecycleValidationMessage" class="text-negative text-caption">
+          {{ lifecycleValidationMessage }}
+        </div>
+      </q-card-section>
+      <q-separator/>
+      <q-card-actions align="right">
+        <q-btn flat no-caps label="Cancel" v-close-popup/>
+        <q-btn
+          color="primary"
+          no-caps
+          label="Apply"
+          :disable="!!lifecycleValidationMessage"
+          @click="applyLifecycleRules"
+        />
+      </q-card-actions>
+    </q-card>
+  </q-dialog>
 
   <q-separator class="q-my-md"/>
 
@@ -124,7 +237,7 @@
 import {computed, ref, watch} from 'vue'
 import type {QTableColumn} from 'quasar'
 import {QTable, useQuasar} from 'quasar'
-import type {Bucket, BucketNew, BucketUI} from 'src/models/models'
+import type {Bucket, BucketLifecycleRule, BucketNew, BucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {sortByBucketNameAsc} from 'src/services/sorting'
 import {saveBuckets, saveRequestedBuckets} from 'src/services/api'
@@ -141,6 +254,22 @@ const userStore = useUserStore()
 
 const allAvailableBuckets = ref<boolean>(false)
 
+type LifecycleCondition = 'min_age' | 'at'
+type EditableLifecycleRule = BucketLifecycleRule & {
+  id: string
+  condition: LifecycleCondition
+}
+
+const lifecycleModeOptions = [
+  {label: 'Delete', value: 'Delete'},
+  {label: 'Notify', value: 'Notify'}
+]
+
+const lifecycleConditionOptions = [
+  {label: 'Min age', value: 'min_age'},
+  {label: 'At', value: 'at'}
+]
+
 /** local proxies for v-model */
 
 const myBuckets = ref<BucketUI[]>([])
@@ -148,17 +277,35 @@ const initialBuckets = ref<BucketUI[]>([])
 watch(
   () => props.buckets,
   (v) => {
-    const cloned = v.map(x => ({ ...x }))
+    const cloned = cloneBuckets(v)
     myBuckets.value = cloned
-    initialBuckets.value = cloned.map(x => ({ ...x }))
+    initialBuckets.value = cloneBuckets(cloned)
   },
   { immediate: true }
 )
 
+function cloneLifecycleRules(rules: BucketLifecycleRule[] | undefined): BucketLifecycleRule[] {
+  return (rules ?? []).map(rule => ({ ...rule }))
+}
+
+function cloneBuckets(buckets: BucketUI[]): BucketUI[] {
+  return buckets.map(bucket => ({
+    ...bucket,
+    lifecycle_rules: cloneLifecycleRules(bucket.lifecycle_rules)
+  }))
+}
+
+function normalizeLifecycleRulesForCompare(rules: BucketLifecycleRule[] | undefined): string {
+  return (rules ?? [])
+    .map(rule => `${rule.target.trim()}|${rule.mode}|${rule.min_age ?? ''}|${rule.at ?? ''}`)
+    .sort()
+    .join(',')
+}
+
 function normalizeBuckets(list: BucketUI[]): string[] {
   return (list || [])
     .filter(b => !!b.bucket)
-    .map(b => `${(b.bucket || '').trim()}|${b.discoverable ? '1' : '0'}`)
+    .map(b => `${(b.bucket || '').trim()}|${b.discoverable ? '1' : '0'}|${normalizeLifecycleRulesForCompare(b.lifecycle_rules)}`)
     .sort()
 }
 
@@ -198,6 +345,12 @@ const bucketsColumns: QTableColumn<BucketUI>[] = [
     label: 'Discoverable',
     field: 'discoverable',
     align: 'center'
+  },
+  {
+    name: 'lifecycle_rules',
+    label: 'Lifecycle rules',
+    field: 'lifecycle_rules',
+    align: 'left'
   },
   {
     name: 'requests',
@@ -263,6 +416,106 @@ const linkedBucketStyle = computed(() => {
 })
 
 const canManageBuckets = computed(() => userStore.canManageBuckets)
+
+const lifecycleDialogOpen = ref(false)
+const editingBucket = ref<BucketUI | null>(null)
+const editingLifecycleRules = ref<EditableLifecycleRule[]>([])
+
+function editableLifecycleRule(rule?: BucketLifecycleRule): EditableLifecycleRule {
+  return {
+    id: rule?.id ?? crypto.randomUUID(),
+    target: rule?.target ?? '',
+    mode: rule?.mode ?? 'Delete',
+    min_age: rule?.min_age,
+    at: rule?.at,
+    condition: rule?.at ? 'at' : 'min_age'
+  }
+}
+
+function cleanLifecycleRule(rule: EditableLifecycleRule): BucketLifecycleRule {
+  const target = rule.target.trim()
+  const mode = rule.mode
+
+  if (rule.condition === 'at') {
+    return {
+      target,
+      mode,
+      at: rule.at ? new Date(rule.at).toISOString() : undefined
+    }
+  }
+
+  return {
+    target,
+    mode,
+    min_age: rule.min_age?.trim()
+  }
+}
+
+const lifecycleValidationMessage = computed(() => {
+  const seen = new Set<string>()
+  const targetPattern = /^(\*|[^*]+(\*)?)$/
+  const minAgePattern = /^\+?[0-9]+[smhdw]$/
+
+  for (const [idx, rule] of editingLifecycleRules.value.entries()) {
+    const target = rule.target.trim()
+    if (!target) return `Rule ${idx + 1}: target is required.`
+    if (!targetPattern.test(target)) return `Rule ${idx + 1}: target must be * or end with *.`
+    if (seen.has(target)) return `Rule ${idx + 1}: target must be unique.`
+    seen.add(target)
+
+    if (rule.mode !== 'Delete' && rule.mode !== 'Notify') return `Rule ${idx + 1}: mode is required.`
+
+    if (rule.condition === 'min_age') {
+      const minAge = rule.min_age?.trim() ?? ''
+      if (!minAgePattern.test(minAge)) return `Rule ${idx + 1}: min age must look like 30d.`
+    } else {
+      const at = rule.at?.trim() ?? ''
+      if (!at || Number.isNaN(Date.parse(at))) return `Rule ${idx + 1}: at must be a date-time.`
+    }
+  }
+
+  return ''
+})
+
+function formatLifecycleRule(rule: BucketLifecycleRule) {
+  const condition = rule.min_age ? rule.min_age : rule.at
+  return `${rule.mode} ${rule.target} ${condition ?? ''}`.trim()
+}
+
+function lifecycleRuleTooltip(rule: BucketLifecycleRule) {
+  if (rule.min_age) {
+    return `${rule.mode} ${rule.target} after ${rule.min_age}`
+  }
+  return `${rule.mode} ${rule.target} at ${rule.at}`
+}
+
+function openLifecycleDialog(row: BucketUI) {
+  if (!canManageBuckets.value) {
+    return
+  }
+
+  editingBucket.value = row
+  editingLifecycleRules.value = (row.lifecycle_rules ?? []).map(editableLifecycleRule)
+  lifecycleDialogOpen.value = true
+}
+
+function addLifecycleRule() {
+  editingLifecycleRules.value.push(editableLifecycleRule())
+}
+
+function deleteLifecycleRule(id: string) {
+  editingLifecycleRules.value = editingLifecycleRules.value.filter(rule => rule.id !== id)
+}
+
+function applyLifecycleRules() {
+  if (!editingBucket.value || lifecycleValidationMessage.value) {
+    return
+  }
+
+  editingBucket.value.lifecycle_rules = editingLifecycleRules.value.map(cleanLifecycleRule)
+  lifecycleDialogOpen.value = false
+}
+
 function addBucket() {
   if (!canManageBuckets.value) {
     return
@@ -273,6 +526,7 @@ function addBucket() {
     myBuckets.value.push({
       bucket: props.workspaceName + '-',
       discoverable: false,
+      lifecycle_rules: [],
       requests: 0,
       grants: 0,
       isNew: true
@@ -312,7 +566,8 @@ function createBuckets() {
     .map(b => {
       const out: BucketNew = {
         name: (b.bucket || '').trim(),
-        discoverable: !!b.discoverable
+        discoverable: !!b.discoverable,
+        lifecycle_rules: cloneLifecycleRules(b.lifecycle_rules)
       }
       if (b.isNew) {
         out.creation_timestamp = nowIso
@@ -328,7 +583,7 @@ function createBuckets() {
         }
         bucket.isNew = false
       })
-      initialBuckets.value = myBuckets.value.map(b => ({ ...b }))
+      initialBuckets.value = cloneBuckets(myBuckets.value)
 
       $q.notify({
         type: 'positive',
@@ -365,3 +620,26 @@ function requestBucket(row: Bucket) {
 }
 
 </script>
+
+<style scoped lang="sass">
+.lifecycle-cell
+  display: flex
+  flex-wrap: wrap
+  align-items: center
+  gap: 4px
+  min-width: 14rem
+
+.lifecycle-dialog
+  width: min(920px, 95vw)
+  max-width: 95vw
+
+.lifecycle-rule-row
+  display: grid
+  grid-template-columns: minmax(140px, 1.4fr) minmax(110px, 0.8fr) minmax(150px, 1fr) minmax(180px, 1.2fr) 36px
+  gap: 8px
+  align-items: start
+
+@media (max-width: 760px)
+  .lifecycle-rule-row
+    grid-template-columns: 1fr
+</style>

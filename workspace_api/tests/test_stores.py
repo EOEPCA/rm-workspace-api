@@ -166,6 +166,54 @@ def test_store_credentials_from_provider_datalab_secret_keys() -> None:
     }
 
 
+def test_store_credentials_from_expanded_provider_datalab_secret_keys() -> None:
+    credentials = _store_credentials_from_envs(
+        {
+            "PG_ANALYTICS_HOST": "analytics-primary.s-jeff.svc",
+            "PG_ANALYTICS_PORT": "5432",
+            "PG_ANALYTICS_USER": "postgres",
+            "PG_ANALYTICS_PASSWORD": "db-secret",
+            "PG_ANALYTICS_DATABASES": "prod,dev",
+            "PG_ANALYTICS_PROD_URL": "postgresql://postgres@analytics/prod",
+            "PG_ANALYTICS_DEV_URL_EXTERNAL": "postgresql://postgres@external/dev",
+            "MONGO_DOCS_HOST": "mongodb-docs-svc.s-jeff.svc",
+            "MONGO_DOCS_PORT": "27017",
+            "MONGO_DOCS_DATABASE": "docs",
+            "MONGO_DOCS_AUTH_SOURCE": "admin",
+            "MONGO_DOCS_USER": "docs-app",
+            "MONGO_DOCS_PASSWORD": "mongo-secret",
+            "MONGO_DOCS_URI": "mongodb://docs-app:mongo-secret@mongodb-docs-svc.s-jeff.svc:27017/docs?authSource=admin",
+            "REDIS_CACHE_HOST": "cache.s-jeff.svc",
+            "REDIS_CACHE_PORT": "6379",
+            "REDIS_CACHE_USER": "default",
+            "REDIS_CACHE_DATABASE": "0",
+            "REDIS_CACHE_PASSWORD": "redis-secret",
+            "REDIS_CACHE_URL": "redis://default:redis-secret@cache.s-jeff.svc:6379/0",
+            "QDRANT_EMBEDDINGS_HOST": "qdrant-embeddings.s-jeff.svc",
+            "QDRANT_EMBEDDINGS_PORT": "6333",
+            "QDRANT_EMBEDDINGS_GRPC_PORT": "6334",
+            "QDRANT_EMBEDDINGS_URL": "http://qdrant-embeddings.s-jeff.svc:6333",
+            "QDRANT_EMBEDDINGS_API_KEY": "qdrant-write",
+            "QDRANT_EMBEDDINGS_READ_API_KEY": "qdrant-read",
+        },
+        database_hosts={"analytics": ["prod", "dev"]},
+    )
+
+    assert credentials[StoreType.DATABASE]["analytics"]["host"] == "analytics-primary.s-jeff.svc"
+    assert credentials[StoreType.DATABASE]["analytics"]["urls"] == {"prod": "postgresql://postgres@analytics/prod"}
+    assert credentials[StoreType.DATABASE]["analytics"]["external_urls"] == {"dev": "postgresql://postgres@external/dev"}
+    assert credentials[StoreType.DOCUMENT]["docs"]["uri"].startswith("mongodb://docs-app:")
+    assert credentials[StoreType.CACHE]["cache"]["url"] == "redis://default:redis-secret@cache.s-jeff.svc:6379/0"
+    assert credentials[StoreType.VECTOR]["embeddings"] == {
+        "host": "qdrant-embeddings.s-jeff.svc",
+        "port": "6333",
+        "grpc_port": "6334",
+        "url": "http://qdrant-embeddings.s-jeff.svc:6333",
+        "api_key": "qdrant-write",
+        "read_api_key": "qdrant-read",
+    }
+
+
 def test_workspace_edit_deduplicates_stores_by_type_and_name() -> None:
     edit = WorkspaceEdit(
         add_stores=[

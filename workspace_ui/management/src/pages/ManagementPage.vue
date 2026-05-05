@@ -138,6 +138,7 @@ const {loading} = useLuigiWorkspace({
           buckets: (ws.storage?.buckets ?? []).map(b => ({
               bucket: b.name,
               discoverable: b.discoverable,
+              lifecycle_rules: (b.lifecycle_rules ?? []).map(rule => ({...rule, id: crypto.randomUUID()})),
               requests: 0,
               grants: 0
             } as BucketUI)) ?? [],
