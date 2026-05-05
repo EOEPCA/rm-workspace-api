@@ -277,33 +277,49 @@ def _find_session(sessions: Sequence[Any], session_id: str) -> Any | None:
     return None
 
 
-def _sessions_with_state(sessions: Sequence[Any], session_id: str, state: str) -> list[dict[str, Any]]:
-    updated: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    replaced = False
+def _session_index(sessions: Sequence[Any], session_id: str) -> int | None:
+    for index, session in enumerate(sessions):
+        if _session_name(session) == session_id:
+            return index
+    return None
 
-    for session in sessions:
-        name = _session_name(session)
-        if not name or name in seen:
-            continue
-        seen.add(name)
 
-        if isinstance(session, dict):
-            next_session: dict[str, Any] = dict(session)
-            next_session["name"] = name
-        else:
-            next_session = _session_item(name, _session_state(session))
+def _datalab_declares_session(workspace_name: str, session_id: str) -> bool:
+    if session_id != DEFAULT_SESSION_NAME:
+        return False
 
-        if name == session_id:
-            next_session["state"] = state
-            replaced = True
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if datalab_api is None:
+        return False
 
-        updated.append(next_session)
+    try:
+        datalab = datalab_api.get(name=workspace_name, namespace=current_namespace())
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return False
+        raise
 
-    if not replaced:
-        updated.append(_session_item(session_id, state))
+    spec = _to_spec_dict(datalab) or {}
+    return _find_session(_session_declarations(spec), session_id) is not None
 
-    return updated
+
+def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[str, Any]]:
+    index = _session_index(sessions, session_id)
+    if index is None:
+        return []
+
+    session = sessions[index]
+    path = f"/spec/sessions/{index}"
+    if isinstance(session, dict):
+        return [
+            {
+                "op": "replace" if "state" in session else "add",
+                "path": f"{path}/state",
+                "value": SESSION_STATE_STARTED,
+            }
+        ]
+
+    return [{"op": "replace", "path": path, "value": _session_item(session_id, SESSION_STATE_STARTED)}]
 
 
 def _get_first(*vals: Any) -> str | None:
@@ -1172,9 +1188,10 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
         datalab_spec: dict[str, Any] = {
             "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
             "secretName": workspace_name,
-            "sessions": sessions,
             "vcluster": use_vcluster,
         }
+        if sessions:
+            datalab_spec["sessions"] = sessions
         if enable_registry:
             datalab_spec["registry"] = {"enabled": True}
 
@@ -1243,10 +1260,13 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     ):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
 
-        datalab_path = f"/workspaces/{workspace_name}/sessions/default"
-        datalab_url = make_external_url(request, datalab_path)
+        endpoints = []
+        if _datalab_declares_session(workspace_name, DEFAULT_SESSION_NAME):
+            datalab_path = f"/workspaces/{workspace_name}/sessions/{DEFAULT_SESSION_NAME}"
+            datalab_url = make_external_url(request, datalab_path)
+            endpoints.append({"id": "Datalab (default)", "url": datalab_url})
 
-        endpoints_data = _to_b64_json([{"id": "Datalab (default)", "url": datalab_url}])
+        endpoints_data = _to_b64_json(endpoints)
 
         return templates.TemplateResponse(
             "ui.html",
@@ -1665,6 +1685,11 @@ async def get_workspace_session(
     workspace_name: str = workspace_path_type,
     session_id: str = Path(..., description="Session identifier"),
 ) -> Response:
+    if str(session_id) != DEFAULT_SESSION_NAME:
+        msg = f"Session enabling unavailable: session '{session_id}' is not managed"
+        logger.info(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
     if datalab_api is None:
         msg = f"Session enabling unavailable: CRD {CRD_DATALAB} not found"
@@ -1680,60 +1705,32 @@ async def get_workspace_session(
     spec = _to_spec_dict(dl) or {}
     spec_sessions = _session_declarations(spec)
     spec_session = _find_session(spec_sessions, str(session_id))
-    session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
 
     if spec_session is None:
-        if session_mode == "auto" and str(session_id) == DEFAULT_SESSION_NAME:
-            new_sessions = _sessions_with_state(spec_sessions, str(session_id), SESSION_STATE_STARTED)
-            logger.info(
-                "Enabling session '%s' for workspace '%s' (auto mode).",
-                session_id,
-                workspace_name,
+        msg = f"Session enabling unavailable: session '{session_id}' is not declared"
+        logger.info(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+    if _session_state(spec_session) != SESSION_STATE_STARTED:
+        patch_body = _session_start_patch(spec_sessions, str(session_id))
+        logger.info(
+            "Starting stopped session '%s' for workspace '%s'.",
+            session_id,
+            workspace_name,
+        )
+        try:
+            datalab_api.patch(
+                name=workspace_name,
+                namespace=current_namespace(),
+                body=patch_body,
+                content_type="application/json-patch+json",
             )
-            try:
-                datalab_api.patch(
-                    name=workspace_name,
-                    namespace=current_namespace(),
-                    body={"spec": {"sessions": new_sessions}},
-                    content_type="application/merge-patch+json",
-                )
-            except ApiException as e:
-                msg = f"Enabling session '{session_id}' for workspace '{workspace_name}' failed"
-                logger.warning("%s: %s", msg, e)
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_GATEWAY,
-                    detail={"error": msg, "exception": str(e)},
-                ) from e
-        else:
-            msg = f"Session enabling unavailable: session '{session_id}' not declared and auto mode is disabled"
-            logger.info(msg)
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
-    elif _session_state(spec_session) != SESSION_STATE_STARTED:
-        if session_mode == "auto" and str(session_id) == DEFAULT_SESSION_NAME:
-            new_sessions = _sessions_with_state(spec_sessions, str(session_id), SESSION_STATE_STARTED)
-            logger.info(
-                "Starting stopped session '%s' for workspace '%s' (auto mode).",
-                session_id,
-                workspace_name,
-            )
-            try:
-                datalab_api.patch(
-                    name=workspace_name,
-                    namespace=current_namespace(),
-                    body={"spec": {"sessions": new_sessions}},
-                    content_type="application/merge-patch+json",
-                )
-            except ApiException as e:
-                msg = f"Starting session '{session_id}' for workspace '{workspace_name}' failed"
-                logger.warning("%s: %s", msg, e)
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_GATEWAY,
-                    detail={"error": msg, "exception": str(e)},
-                ) from e
-        else:
-            msg = f"Session enabling unavailable: session '{session_id}' is stopped and auto mode is disabled"
-            logger.info(msg)
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+        except ApiException as e:
+            msg = f"Starting session '{session_id}' for workspace '{workspace_name}' failed"
+            logger.warning("%s: %s", msg, e)
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_GATEWAY,
+                detail={"error": msg, "exception": str(e)},
+            ) from e
 
     st = getattr(dl, "status", None)
     if st is None:
