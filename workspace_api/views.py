@@ -11,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from http import HTTPStatus
 from typing import Any
-from urllib.parse import quote, urlsplit, urlunsplit
 
 import kubernetes.client
 import kubernetes.client.rest
@@ -718,115 +717,42 @@ def _secret_store_key(prefix: str, store_name: str, suffix: str) -> str:
 
 
 def _pg_secret_key(cluster_name: str, suffix: str) -> str:
-    return _secret_store_key("PG", cluster_name, suffix)
+    return _secret_store_key("POSTGRES", cluster_name, suffix)
 
 
 def _pg_db_secret_key(cluster_name: str, database_name: str, suffix: str) -> str:
     normalized_cluster = re.sub(r"[^A-Za-z0-9]+", "_", cluster_name).strip("_").upper()
     normalized_database = re.sub(r"[^A-Za-z0-9]+", "_", database_name).strip("_").upper()
-    return f"PG_{normalized_cluster}_{normalized_database}_{suffix}"
+    return f"POSTGRES_{normalized_cluster}_{normalized_database}_{suffix}"
 
 
-def _database_urls_from_template(template_url: str | None, database_names: Sequence[str]) -> dict[str, str]:
-    if not template_url:
-        return {}
-
-    parsed = urlsplit(template_url)
-    return {
-        name: urlunsplit((parsed.scheme, parsed.netloc, f"/{quote(name, safe='')}", parsed.query, parsed.fragment))
-        for name in database_names
-    }
+def _pg_secret_value(envs: Mapping[str, str], cluster_name: str, suffix: str) -> str | None:
+    return _clean_str(envs.get(_pg_secret_key(cluster_name, suffix)))
 
 
-def _database_url_from_parts(
-    host: str | None,
-    port: str | None,
-    username: str | None,
-    password: str | None,
-    database_name: str,
-) -> str | None:
-    if not host:
-        return None
-
-    credentials = ""
-    if username:
-        credentials = quote(username, safe="")
-        if password:
-            credentials = f"{credentials}:{quote(password, safe='')}"
-        credentials = f"{credentials}@"
-
-    netloc = f"{credentials}{host}"
-    if port:
-        netloc = f"{netloc}:{port}"
-
-    return urlunsplit(("postgresql", netloc, f"/{quote(database_name, safe='')}", "", ""))
-
-
-def _database_urls_from_parts(
-    host: str | None,
-    port: str | None,
-    username: str | None,
-    password: str | None,
-    database_names: Sequence[str],
-) -> dict[str, str]:
-    urls: dict[str, str] = {}
-    for name in database_names:
-        url = _database_url_from_parts(host, port, username, password, name)
-        if url:
-            urls[name] = url
-    return urls
+def _pg_db_secret_value(envs: Mapping[str, str], cluster_name: str, database_name: str, suffix: str) -> str | None:
+    return _clean_str(envs.get(_pg_db_secret_key(cluster_name, database_name, suffix)))
 
 
 def _store_credentials_from_envs(
     envs: dict[str, str],
-    database_names: Sequence[str] = (),
     database_hosts: Mapping[str, Sequence[str]] | None = None,
 ) -> dict[StoreType, dict[str, dict[str, Any]]]:
     store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
-
-    host = _clean_str(envs.get("DATABASE_HOST"))
-    username = _clean_str(envs.get("DATABASE_USERNAME") or envs.get("DATABASE_USER"))
-    password = _clean_str(envs.get("DATABASE_PASSWORD"))
-    port = _clean_str(envs.get("DATABASE_PORT"))
-    host_external = _clean_str(envs.get("DATABASE_HOST_EXTERNAL"))
-    port_external = _clean_str(envs.get("DATABASE_PORT_EXTERNAL") or envs.get("DATABASE_PORT"))
-    url = _clean_str(envs.get("DATABASE_URL"))
-    url_external = _clean_str(envs.get("DATABASE_URL_EXTERNAL"))
-    dbname = _clean_str(envs.get("DATABASE_NAME"))
-    db_names = list(dict.fromkeys([*database_names, *([dbname] if dbname else [])]))
-
-    if host or username or password:
-        _put_store_credentials(
-            store_credentials,
-            StoreType.DATABASE,
-            "pg0",
-            {
-                "host": host,
-                "port": port,
-                "username": username,
-                "password": password,
-                "host_external": host_external,
-                "urls": _database_urls_from_template(url, db_names) or _database_urls_from_parts(host, port, username, password, db_names),
-                "external_urls": _database_urls_from_template(url_external, db_names)
-                or _database_urls_from_parts(host_external, port_external, username, password, db_names),
-            },
-        )
 
     for cluster_name, host_database_names_raw in (database_hosts or {}).items():
         host_database_names = [name for name in host_database_names_raw if name]
         if not host_database_names:
             continue
 
-        host = _clean_str(envs.get(_pg_secret_key(cluster_name, "HOST")))
-        port = _clean_str(envs.get(_pg_secret_key(cluster_name, "PORT")))
-        username = _clean_str(envs.get(_pg_secret_key(cluster_name, "USER")))
-        password = _clean_str(envs.get(_pg_secret_key(cluster_name, "PASSWORD")))
-        host_external = _clean_str(envs.get(_pg_secret_key(cluster_name, "HOST_EXTERNAL")))
-        urls = {name: url for name in host_database_names if (url := _clean_str(envs.get(_pg_db_secret_key(cluster_name, name, "URL"))))}
+        host = _pg_secret_value(envs, cluster_name, "HOST")
+        port = _pg_secret_value(envs, cluster_name, "PORT")
+        username = _pg_secret_value(envs, cluster_name, "USER")
+        password = _pg_secret_value(envs, cluster_name, "PASSWORD")
+        host_external = _pg_secret_value(envs, cluster_name, "HOST_EXTERNAL")
+        urls = {name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL"))}
         external_urls = {
-            name: url
-            for name in host_database_names
-            if (url := _clean_str(envs.get(_pg_db_secret_key(cluster_name, name, "URL_EXTERNAL"))))
+            name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL_EXTERNAL"))
         }
 
         if host or username or password or urls or external_urls:
@@ -1095,8 +1021,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                     region=region or "",
                 )
 
-            database_names = [store.name for store in stores if store.type == StoreType.DATABASE]
-            store_credentials = _store_credentials_from_envs(envs, database_names, database_hosts)
+            store_credentials = _store_credentials_from_envs(envs, database_hosts)
 
             reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))
             reg_pass = _clean_str(envs.get("CONTAINER_REGISTRY_PASSWORD"))

@@ -112,22 +112,25 @@ def test_store_credentials_are_grouped_by_type_and_name() -> None:
     }
 
 
-def test_store_credentials_from_provider_datalab_secret_keys() -> None:
+def test_store_credentials_from_provider_datalab_postgres_secret_keys() -> None:
     credentials = _store_credentials_from_envs(
         {
-            "DATABASE_URL": "postgresql://postgres@example/dev",
-            "DATABASE_URL_EXTERNAL": "postgresql://postgres@external.example/dev",
-            "DATABASE_NAME": "dev",
-            "DATABASE_HOST": "pg0-primary.s-jeff.svc",
-            "DATABASE_PORT": "5432",
-            "DATABASE_USER": "postgres",
-            "DATABASE_PASSWORD": "db-secret",
+            "POSTGRES_PG0_URL": "postgresql://postgres@example/dev",
+            "POSTGRES_PG0_HOST": "pg0-primary.s-jeff.svc",
+            "POSTGRES_PG0_HOST_EXTERNAL": "pg0.external.example",
+            "POSTGRES_PG0_PORT": "5432",
+            "POSTGRES_PG0_USER": "postgres",
+            "POSTGRES_PG0_PASSWORD": "db-secret",
+            "POSTGRES_PG0_DEV_URL": "postgresql://postgres@example/dev",
+            "POSTGRES_PG0_PROD_URL": "postgresql://postgres@example/prod",
+            "POSTGRES_PG0_DEV_URL_EXTERNAL": "postgresql://postgres@external.example/dev",
+            "POSTGRES_PG0_PROD_URL_EXTERNAL": "postgresql://postgres@external.example/prod",
             "QDRANT_PROD_API_KEY": "qdrant-write",
             "QDRANT_PROD_READ_API_KEY": "qdrant-read",
             "REDIS_PROD_PASSWORD": "redis-secret",
             "MONGO_PROD_PASSWORD": "mongo-secret",
         },
-        ["dev", "prod"],
+        database_hosts={"pg0": ["dev", "prod"]},
     )
 
     assert credentials == {
@@ -137,6 +140,8 @@ def test_store_credentials_from_provider_datalab_secret_keys() -> None:
                 "port": "5432",
                 "username": "postgres",
                 "password": "db-secret",
+                "host_external": "pg0.external.example",
+                "databases": "dev,prod",
                 "urls": {
                     "dev": "postgresql://postgres@example/dev",
                     "prod": "postgresql://postgres@example/prod",
@@ -169,13 +174,13 @@ def test_store_credentials_from_provider_datalab_secret_keys() -> None:
 def test_store_credentials_from_expanded_provider_datalab_secret_keys() -> None:
     credentials = _store_credentials_from_envs(
         {
-            "PG_ANALYTICS_HOST": "analytics-primary.s-jeff.svc",
-            "PG_ANALYTICS_PORT": "5432",
-            "PG_ANALYTICS_USER": "postgres",
-            "PG_ANALYTICS_PASSWORD": "db-secret",
-            "PG_ANALYTICS_DATABASES": "prod,dev",
-            "PG_ANALYTICS_PROD_URL": "postgresql://postgres@analytics/prod",
-            "PG_ANALYTICS_DEV_URL_EXTERNAL": "postgresql://postgres@external/dev",
+            "POSTGRES_ANALYTICS_HOST": "analytics-primary.s-jeff.svc",
+            "POSTGRES_ANALYTICS_PORT": "5432",
+            "POSTGRES_ANALYTICS_USER": "postgres",
+            "POSTGRES_ANALYTICS_PASSWORD": "db-secret",
+            "POSTGRES_ANALYTICS_DATABASES": "prod,dev",
+            "POSTGRES_ANALYTICS_PROD_URL": "postgresql://postgres@analytics/prod",
+            "POSTGRES_ANALYTICS_DEV_URL_EXTERNAL": "postgresql://postgres@external/dev",
             "MONGO_DOCS_HOST": "mongodb-docs-svc.s-jeff.svc",
             "MONGO_DOCS_PORT": "27017",
             "MONGO_DOCS_DATABASE": "docs",
