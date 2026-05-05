@@ -1167,19 +1167,24 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     if datalab_api is not None:
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
+        enable_registry = not _as_bool(getattr(config, "DISABLE_DOCKER_REGISTRY", "false"))
         sessions = _initial_sessions_for_mode(session_mode)
+        datalab_spec: dict[str, Any] = {
+            "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
+            "secretName": workspace_name,
+            "sessions": sessions,
+            "vcluster": use_vcluster,
+        }
+        if enable_registry:
+            datalab_spec["registry"] = {"enabled": True}
+
         try:
             datalab_api.create(
                 {
                     "apiVersion": API_DATALAB,
                     "kind": KIND_DATALAB,
                     "metadata": {"name": workspace_name},
-                    "spec": {
-                        "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
-                        "secretName": workspace_name,
-                        "sessions": sessions,
-                        "vcluster": use_vcluster,
-                    },
+                    "spec": datalab_spec,
                 },
                 namespace=current_namespace(),
             )

@@ -58,6 +58,7 @@ def test_create_workspace_sends_started_session_object(client: TestClient, monke
     monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
     monkeypatch.setattr(config, "SESSION_MODE", "on")
     monkeypatch.setattr(config, "USE_VCLUSTER", "false")
+    monkeypatch.setattr(config, "DISABLE_DOCKER_REGISTRY", "false")
 
     storage_api = mock.MagicMock()
     storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
@@ -75,6 +76,31 @@ def test_create_workspace_sends_started_session_object(client: TestClient, monke
     assert response.status_code == HTTPStatus.CREATED
     created = datalab_api.create.call_args.args[0]
     assert created["spec"]["sessions"] == [{"name": "default", "state": "started"}]
+    assert created["spec"]["registry"] == {"enabled": True}
+
+
+def test_create_workspace_can_disable_docker_registry(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
+    monkeypatch.setattr(config, "SESSION_MODE", "on")
+    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
+    monkeypatch.setattr(config, "DISABLE_DOCKER_REGISTRY", "true")
+
+    storage_api = mock.MagicMock()
+    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
+    datalab_api = mock.MagicMock()
+
+    monkeypatch.setattr(views, "_res_required", lambda *_args: storage_api)
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces",
+        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    created = datalab_api.create.call_args.args[0]
+    assert "registry" not in created["spec"]
 
 
 def test_auto_session_request_starts_stopped_session_object(client: TestClient, monkeypatch) -> None:
