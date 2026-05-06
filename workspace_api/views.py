@@ -56,6 +56,14 @@ def _with_prefix(name: str) -> str:
     return f"{p}-{name}" if p else name
 
 
+def _provider_environment() -> str:
+    return str(getattr(config, "PROVIDER_ENVIRONMENT", "datalab") or "datalab").strip() or "datalab"
+
+
+def _provider_environment_annotations(annotation_key: str) -> dict[str, str]:
+    return {annotation_key: _provider_environment()}
+
+
 def _workspace_name_pattern() -> str:
     p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
     if p:
@@ -94,6 +102,14 @@ CRD_DATALAB = "datalabs.pkg.internal"
 DEFAULT_SESSION_NAME = "default"
 SESSION_STATE_STARTED = "started"
 SESSION_STATE_STOPPED = "stopped"
+STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
+DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
+STORE_TYPE_CRDS = {
+    StoreType.DATABASE: "postgresclusters.postgres-operator.crunchydata.com",
+    StoreType.VECTOR: "qdrantclusters.qdrant.io",
+    StoreType.CACHE: "redis.redis.opstreelabs.in",
+    StoreType.DOCUMENT: "mongodbcommunity.mongodbcommunity.mongodb.com",
+}
 
 
 @app.on_event("startup")
@@ -496,13 +512,22 @@ def _datalab_crd_store_fields() -> set[str]:
     return {field for field in (_store_field_for_type(store_type) for store_type in StoreType) if field in spec_properties}
 
 
+def _store_type_crd_present(store_type: StoreType) -> bool:
+    crd_name = STORE_TYPE_CRDS.get(store_type)
+    return bool(crd_name and _crd_exists(crd_name))
+
+
 def _available_store_types(datalab_installed: bool) -> list[StoreType]:
     if not datalab_installed:
         return []
 
     supported_fields = _datalab_crd_store_fields()
     disabled = _disabled_store_types()
-    return [store_type for store_type in StoreType if store_type not in disabled and _store_field_for_type(store_type) in supported_fields]
+    return [
+        store_type
+        for store_type in StoreType
+        if store_type not in disabled and _store_field_for_type(store_type) in supported_fields and _store_type_crd_present(store_type)
+    ]
 
 
 def _stores_from_map(
@@ -1163,7 +1188,10 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
             {
                 "apiVersion": API_STORAGE,
                 "kind": KIND_STORAGE,
-                "metadata": {"name": workspace_name},
+                "metadata": {
+                    "name": workspace_name,
+                    "annotations": _provider_environment_annotations(STORAGE_ENVIRONMENT_ANNOTATION),
+                },
                 "spec": {
                     "principal": workspace_name,
                     "buckets": [{"bucketName": workspace_name, "discoverable": True}],
@@ -1200,7 +1228,10 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
                 {
                     "apiVersion": API_DATALAB,
                     "kind": KIND_DATALAB,
-                    "metadata": {"name": workspace_name},
+                    "metadata": {
+                        "name": workspace_name,
+                        "annotations": _provider_environment_annotations(DATALAB_ENVIRONMENT_ANNOTATION),
+                    },
                     "spec": datalab_spec,
                 },
                 namespace=current_namespace(),

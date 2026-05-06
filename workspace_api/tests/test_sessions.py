@@ -58,6 +58,7 @@ def test_session_start_patch_replaces_legacy_default_session() -> None:
 
 def test_create_workspace_sends_started_session_object(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
+    monkeypatch.setattr(config, "PROVIDER_ENVIRONMENT", "datalab")
     monkeypatch.setattr(config, "SESSION_MODE", "on")
     monkeypatch.setattr(config, "USE_VCLUSTER", "false")
     monkeypatch.setattr(config, "DISABLE_DOCKER_REGISTRY", "false")
@@ -76,9 +77,39 @@ def test_create_workspace_sends_started_session_object(client: TestClient, monke
     )
 
     assert response.status_code == HTTPStatus.CREATED
+    created_storage = storage_api.create.call_args.args[0]
     created = datalab_api.create.call_args.args[0]
+    assert created_storage["metadata"]["annotations"] == {"storages.pkg.internal/environment": "datalab"}
+    assert created["metadata"]["annotations"] == {"datalabs.pkg.internal/environment": "datalab"}
     assert created["spec"]["sessions"] == [{"name": "default", "state": "started"}]
     assert created["spec"]["registry"] == {"enabled": True}
+
+
+def test_create_workspace_uses_configured_provider_environment(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
+    monkeypatch.setattr(config, "PROVIDER_ENVIRONMENT", "demo")
+    monkeypatch.setattr(config, "SESSION_MODE", "on")
+    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
+    monkeypatch.setattr(config, "DISABLE_DOCKER_REGISTRY", "false")
+
+    storage_api = mock.MagicMock()
+    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
+    datalab_api = mock.MagicMock()
+
+    monkeypatch.setattr(views, "_res_required", lambda *_args: storage_api)
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces",
+        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    created_storage = storage_api.create.call_args.args[0]
+    created_datalab = datalab_api.create.call_args.args[0]
+    assert created_storage["metadata"]["annotations"] == {"storages.pkg.internal/environment": "demo"}
+    assert created_datalab["metadata"]["annotations"] == {"datalabs.pkg.internal/environment": "demo"}
 
 
 def test_create_workspace_sends_stopped_default_session_in_auto_mode(client: TestClient, monkeypatch) -> None:

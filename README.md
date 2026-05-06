@@ -48,13 +48,13 @@ These permissions enable the API to **synchronize resource state** and **discove
 
 ## Session Operation Modes
 
-There are three modes that define how the Datalab session for a team is managed:
+There are three modes that define how the API initializes the default Datalab session for a newly created team:
 
-- **Disabled (`SESSION_MODE=off`)** — The Datalab is generally disabled. Only the operator can manually patch the corresponding `Datalab` Custom Resource in the cluster to start a session for a team. In this mode, the workspace is primarily used to provision storage buckets and manage bucket access.
+- **Disabled (`SESSION_MODE=off`)** — The API creates the `Datalab` resource without declaring a default session. The workspace is primarily used to provision storage buckets and manage bucket access. Operators can still manage sessions directly on the corresponding `Datalab` Custom Resource.
 
-- **Always On (`SESSION_MODE=on`)** — The Datalab session is automatically started during workspace provisioning and remains continuously active. Only the operator can manually patch the `Datalab` resource in the cluster to stop (and restart) the session if required.
+- **Always On (`SESSION_MODE=on`)** — The API declares the default Datalab session with state `started` during workspace provisioning. Operators can manually patch the `Datalab` resource in the cluster to stop or restart the session if required.
 
-- **On Demand (`SESSION_MODE=auto`)** — The Datalab session can be started by a team directly through the Workspace UI whenever needed. The operator can define policies for automatic shutdowns of sessions (for example, every day at 8 p.m. or every Friday night). When a team needs access again, they can simply relaunch the session via the Datalab link in the Workspace UI. Examples for configuring time-based shutdown policies are provided in the documentation respectivly can be found on the demo cluster.
+- **On Demand (`SESSION_MODE=auto`)** — The API declares the default Datalab session with state `stopped`. The Workspace UI exposes a Datalab link that starts the session by patching it to `started` when a team needs access. Operators can define external policies for automatic shutdowns of sessions (for example, every day at 8 p.m. or every Friday night). When a team needs access again, they can relaunch the session via the Datalab link in the Workspace UI.
 
 **Note:**
 At the moment, there is only one (“default”) session per team. Operators can manually start additional sessions via the corresponding `Datalab` Custom Resource in the cluster, but multi-session support per team is not yet officially available and is considered experimental.
@@ -269,14 +269,37 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | Variable | Default | What it does |
 |---|---|---|
 | `PREFIX_FOR_NAME` |  | Prefix applied to user-facing names to build K8s object names (e.g. `ws` to get `ws-alice` for `alice`). |
+| `PROVIDER_ENVIRONMENT` | `datalab` | EnvironmentConfig name selected for new provider-storage and provider-datalab XRs. The API writes this value to `storages.pkg.internal/environment` on `Storage` and `datalabs.pkg.internal/environment` on `Datalab`. |
 | `USE_VCLUSTER` | `false` |  Whether to provision an isolated vcluster for each datalab session (`true`) or run in separate namespace on host cluster (`false`). |
-| `SESSION_MODE` | `on` | Whether sessions can be started on-demand with automatic shutdown (`auto`) or are always on (`on`) or off (`off`). |
+| `SESSION_MODE` | `on` | Initial default-session mode for newly created Datalabs: `on` declares it as `started`, `auto` declares it as `stopped` for UI launch, and `off` does not declare it. |
 | `DISABLE_DOCKER_REGISTRY` | `false` | By default, each datalab gets an in-session Docker registry. |
+| `DISABLE_STORES` | `false` | Disable creation and display of all Datalab store types. |
+| `DISABLED_STORE_TYPES` |  | Comma- or semicolon-separated store types to disable even when their backing CRDs are installed. Accepted aliases include `postgres`, `qdrant`, `redis`, and `mongodb`. |
 | `ENDPOINT` | from `AWS_ENDPOINT_URL` | S3 endpoint URL used when falling back to environment-based config. |
 | `REGION` | from `AWS_REGION` or `AWS_DEFAULT_REGION` | S3 region used when falling back to environment-based config. |
 | `UI_MODE` | `no` | Set to `ui` to enable templated HTML shell and SPA embedding. |
 | `FRONTEND_URL` | `/ui/management` | Base path (prod) or absolute URL (dev server like `http://localhost:9000`) for the SPA. |
 | `AUTH_MODE` | `gateway` | Authentication mode `gateway` expects a validated `Authorization: Bearer <access_token>` header to be forwarded by an upstream gateway, `no` disables authentication entirely (for local development only). |
+| `AUTH_DEBUG` | `false` | Enable verbose authentication and workspace debug logging. |
+
+### Store creation
+
+The Workspace UI only offers store types that the cluster can currently reconcile. A store type is available when:
+
+- the `Datalab` CRD exposes the matching spec field,
+- the backing operator CRD is installed in the cluster, and
+- the store type is not disabled through `DISABLE_STORES` or `DISABLED_STORE_TYPES`.
+
+The current store type mapping is:
+
+| Store type | Datalab field | Required backing CRD |
+|---|---|---|
+| Database (Postgres) | `spec.databases` | `postgresclusters.postgres-operator.crunchydata.com` |
+| Vector store (Qdrant) | `spec.vectorStores` | `qdrantclusters.qdrant.io` |
+| Cache (Redis) | `spec.cacheStores` | `redis.redis.opstreelabs.in` |
+| Document store (MongoDB) | `spec.documentStores` | `mongodbcommunity.mongodbcommunity.mongodb.com` |
+
+If a backing CRD is not installed, the UI hides that store type and the API rejects attempts to create it. Manual changes made directly to a `Datalab` XR are not blocked by the Workspace API; in that case Crossplane reports reconciliation failures on the `Datalab` status if the required operator CRD is missing.
 
 ## Docker
 

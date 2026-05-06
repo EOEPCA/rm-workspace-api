@@ -41,8 +41,21 @@ def test_available_store_types_merge_crd_fields_and_env(monkeypatch: pytest.Monk
         "workspace_api.views._datalab_crd_store_fields",
         lambda: {"databases", "vectorStores", "cacheStores"},
     )
+    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda store_type: store_type is StoreType.VECTOR)
 
     assert _available_store_types(datalab_installed=True) == [StoreType.VECTOR]
+
+
+def test_available_store_types_require_backing_crds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(config, "DISABLE_STORES", "false")
+    monkeypatch.setattr(config, "DISABLED_STORE_TYPES", "")
+    monkeypatch.setattr(
+        "workspace_api.views._datalab_crd_store_fields",
+        lambda: {"databases", "vectorStores", "cacheStores", "documentStores"},
+    )
+    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda store_type: store_type is StoreType.DATABASE)
+
+    assert _available_store_types(datalab_installed=True) == [StoreType.DATABASE]
 
 
 def test_available_store_types_can_disable_all(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,6 +65,7 @@ def test_available_store_types_can_disable_all(monkeypatch: pytest.MonkeyPatch) 
         "workspace_api.views._datalab_crd_store_fields",
         lambda: {"databases", "vectorStores", "cacheStores", "documentStores"},
     )
+    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda _store_type: True)
 
     assert _available_store_types(datalab_installed=True) == []
 

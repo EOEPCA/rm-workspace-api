@@ -4,6 +4,7 @@
 import os
 
 PREFIX_FOR_NAME = os.environ.get("PREFIX_FOR_NAME", "")
+PROVIDER_ENVIRONMENT = os.environ.get("PROVIDER_ENVIRONMENT", "datalab")
 USE_VCLUSTER = os.environ.get("USE_VCLUSTER", "false")
 SESSION_MODE = os.environ.get("SESSION_MODE", "on")
 ENDPOINT = os.environ.get("ENDPOINT", os.environ.get("AWS_ENDPOINT_URL"))
