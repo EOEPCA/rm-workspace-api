@@ -107,7 +107,7 @@ DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
 STORE_TYPE_CRDS = {
     StoreType.DATABASE: "postgresclusters.postgres-operator.crunchydata.com",
     StoreType.VECTOR: "qdrantclusters.qdrant.io",
-    StoreType.CACHE: "redis.redis.opstreelabs.in",
+    StoreType.CACHE: "redis.redis.redis.opstreelabs.in",
     StoreType.DOCUMENT: "mongodbcommunity.mongodbcommunity.mongodb.com",
 }
 

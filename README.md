@@ -296,7 +296,7 @@ The current store type mapping is:
 |---|---|---|
 | Database (Postgres) | `spec.databases` | `postgresclusters.postgres-operator.crunchydata.com` |
 | Vector store (Qdrant) | `spec.vectorStores` | `qdrantclusters.qdrant.io` |
-| Cache (Redis) | `spec.cacheStores` | `redis.redis.opstreelabs.in` |
+| Cache (Redis) | `spec.cacheStores` | `redis.redis.redis.opstreelabs.in` |
 | Document store (MongoDB) | `spec.documentStores` | `mongodbcommunity.mongodbcommunity.mongodb.com` |
 
 If a backing CRD is not installed, the UI hides that store type and the API rejects attempts to create it. Manual changes made directly to a `Datalab` XR are not blocked by the Workspace API; in that case Crossplane reports reconciliation failures on the `Datalab` status if the required operator CRD is missing.
