@@ -9,10 +9,14 @@ export type UserPermission =
   | 'VIEW_BUCKETS'
   | 'VIEW_BUCKET_CREDENTIALS'
   | 'VIEW_MEMBERS'
-  | 'VIEW_DATABASES'
+  | 'VIEW_STORES'
   | 'MANAGE_BUCKETS'
   | 'MANAGE_MEMBERS'
-  | 'MANAGE_DATABASES'
+  | 'MANAGE_STORES'
+
+export type StoreType = 'database' | 'vector' | 'cache' | 'document'
+
+export type BucketLifecycleRuleMode = 'Notify' | 'Delete'
 
 export interface WorkspaceUser {
   name: string
@@ -28,9 +32,12 @@ export interface Membership {
   isPending?: boolean
 }
 
-export interface Database {
+export interface Store {
   id: string  // client-side Id
   name: string
+  type: StoreType
+  storage?: string | undefined
+  backup_storage?: string | undefined
   creation_timestamp?: string | undefined
   isNew?: boolean
   isPending?: boolean
@@ -46,6 +53,14 @@ export interface Bucket {
   isPending?: boolean
 }
 
+export interface BucketLifecycleRule {
+  id?: string
+  target: string
+  mode: BucketLifecycleRuleMode
+  min_age?: string | undefined
+  at?: string | undefined
+}
+
 export interface Storage {
   buckets?: BucketNew[]
   credentials?: Record<string, unknown>
@@ -54,8 +69,10 @@ export interface Storage {
 
 export interface Datalab {
   memberships?: Membership[]
-  databases?: Database[]
-  database_credentials?: Record<string, unknown>
+  available?: boolean
+  available_store_types?: StoreType[]
+  stores?: Store[]
+  store_credentials?: Partial<Record<StoreType, Record<string, Record<string, unknown>>>>
   container_registry_credentials?: Record<string, unknown>
 }
 
@@ -71,6 +88,7 @@ export interface Workspace {
 export interface BucketUI {
   bucket: string;
   discoverable: boolean
+  lifecycle_rules?: BucketLifecycleRule[]
   requests: number
   grants: number
   isNew?: boolean
@@ -80,6 +98,7 @@ export interface BucketUI {
 export interface BucketNew {
   name: string
   discoverable: boolean
+  lifecycle_rules?: BucketLifecycleRule[]
   creation_timestamp?: string | undefined
 }
 
@@ -88,12 +107,14 @@ export interface WorkspaceEditUI {
   memberships: Membership[]
   buckets: BucketUI[]
   linked_buckets: Bucket[]
-  databases: Database[]
+  datalab_available: boolean
+  available_store_types: StoreType[]
+  stores: Store[]
 }
 
 export interface WorkspaceEdit {
   add_memberships: Membership[]
-  add_databases: Database[]
+  add_stores: Store[]
   add_buckets: BucketNew[]
   patch_bucket_access_requests?: Bucket[]
 }

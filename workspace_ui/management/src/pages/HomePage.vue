@@ -6,7 +6,7 @@
     </div>
 
     <!-- Error -->
-    <q-banner v-if="errorMessage" class="bg-red-1 text-negative q-mb-md" dense>
+    <q-banner v-if="errorMessage" class="q-mb-md" dense>
       {{ errorMessage }}
     </q-banner>
 
@@ -26,87 +26,148 @@
         </q-card-section>
       </q-card>
 
-      <!-- Storage Credentials -->
-      <q-card
-        v-if="hasCredentials"
-        class="q-mb-md"
-      >
-        <q-card-section class="text-subtitle1">
-          Storage Credentials
-        </q-card-section>
-        <q-separator/>
-        <q-card-section>
-          <pre class="q-pa-md bg-grey-2 rounded-borders">{{ prettyCredentials }}</pre>
-        </q-card-section>
-      </q-card>
-
-      <!-- Members Table -->
+      <!-- Members -->
       <q-card v-if="canSeeMembers && ws.datalab?.memberships?.length" class="q-mb-md">
-        <q-card-section class="text-subtitle1">Members</q-card-section>
-        <q-separator/>
-        <q-card-section class="q-pa-none">
-          <q-markup-table flat>
-            <tbody>
-            <tr v-for="membership in ws.datalab?.memberships" :key="membership.member">
-              <td>{{ membership.member }} ({{ membership.role }})</td>
-            </tr>
-            </tbody>
-          </q-markup-table>
+        <q-card-section class="row items-center q-py-sm">
+          <div class="text-subtitle1">Members</div>
+          <q-space/>
+          <span class="attribute attribute-count">{{ ws.datalab?.memberships?.length }}</span>
         </q-card-section>
+        <q-separator/>
+        <q-list separator dense>
+          <q-item
+            v-for="membership in ws.datalab?.memberships"
+            :key="membership.member"
+            dense
+          >
+            <q-item-section>
+              <div class="entity-line">
+                <span class="entity-name">{{ membership.member }}</span>
+                <span class="attribute">{{ membership.role }}</span>
+              </div>
+            </q-item-section>
+          </q-item>
+        </q-list>
       </q-card>
 
-      <!-- Buckets Table -->
+      <!-- Buckets -->
       <q-card v-if="canSeeBuckets && ws.storage?.buckets?.length" class="q-mb-md">
-        <q-card-section class="text-subtitle1">Buckets</q-card-section>
-        <q-separator/>
-        <q-card-section class="q-pa-none">
-          <q-markup-table flat>
-            <tbody>
-              <tr v-for="bucket in ws.storage?.buckets || []" :key="bucket.name">
-                <td>
-                  {{ bucket.name }}
-                  <span v-if="bucket.discoverable">(discoverable)</span>
-                </td>
-              </tr>
-            </tbody>
-          </q-markup-table>
+        <q-card-section class="row items-center q-py-sm">
+          <div class="text-subtitle1">Buckets</div>
+          <q-space/>
+          <span class="attribute attribute-count">{{ ws.storage?.buckets?.length }}</span>
         </q-card-section>
+        <q-separator/>
+        <q-list separator dense>
+          <template
+            v-for="bucket in ws.storage?.buckets || []"
+            :key="bucket.name"
+          >
+            <q-expansion-item
+              v-if="hasStorageCredentials"
+              dense
+              dense-toggle
+              expand-separator
+            >
+              <template v-slot:header>
+                <q-item-section>
+                  <div class="entity-line">
+                    <span class="entity-name">{{ bucket.name }}</span>
+                    <span v-if="bucket.discoverable" class="attribute">discoverable</span>
+                    <span
+                      v-for="rule in bucket.lifecycle_rules || []"
+                      :key="rule.target"
+                      class="attribute lifecycle-rule"
+                    >
+                      {{ formatLifecycleRule(rule) }}
+                      <q-tooltip>{{ lifecycleRuleTooltip(rule) }}</q-tooltip>
+                    </span>
+                  </div>
+                </q-item-section>
+              </template>
+
+              <pre class="credential-json">{{ prettyStorageCredentials }}</pre>
+            </q-expansion-item>
+
+            <q-item
+              v-else
+              dense
+            >
+              <q-item-section>
+                <div class="entity-line">
+                  <span class="entity-name">{{ bucket.name }}</span>
+                  <span v-if="bucket.discoverable" class="attribute">discoverable</span>
+                  <span
+                    v-for="rule in bucket.lifecycle_rules || []"
+                    :key="rule.target"
+                    class="attribute lifecycle-rule"
+                  >
+                    {{ formatLifecycleRule(rule) }}
+                    <q-tooltip>{{ lifecycleRuleTooltip(rule) }}</q-tooltip>
+                  </span>
+                </div>
+              </q-item-section>
+              <q-tooltip>Credentials not available yet</q-tooltip>
+            </q-item>
+          </template>
+        </q-list>
       </q-card>
 
-      <!-- Databases Table -->
-      <q-card v-if="canSeeDatabases && ws.datalab?.databases?.length" class="q-mb-md">
-        <q-card-section class="text-subtitle1">Databases</q-card-section>
-        <q-separator/>
-        <q-card-section class="q-pa-none">
-          <q-markup-table flat>
-            <tbody>
-            <tr v-for="database in ws.datalab?.databases" :key="database.name">
-              <td>
-                {{ database.name }}
-              </td>
-            </tr>
-            </tbody>
-          </q-markup-table>
+      <!-- Stores -->
+      <q-card v-if="canSeeStores && storeSummaries.length" class="q-mb-md">
+        <q-card-section class="row items-center q-py-sm">
+          <div class="text-subtitle1">Stores</div>
+          <q-space/>
+          <span class="attribute attribute-count">{{ storeSummaries.length }}</span>
         </q-card-section>
+        <q-separator/>
+        <q-list separator dense>
+          <template
+            v-for="store in storeSummaries"
+            :key="`${store.type}:${store.name}`"
+          >
+            <q-expansion-item
+              v-if="store.hasCredentials"
+              dense
+              dense-toggle
+              expand-separator
+            >
+              <template v-slot:header>
+                <q-item-section>
+                  <div class="entity-line">
+                    <span class="entity-name">{{ store.name }}</span>
+                    <span class="attribute">{{ store.label }}</span>
+                    <span v-if="store.storage" class="attribute">{{ store.storage }}</span>
+                    <span v-if="store.backupStorage" class="attribute">backup {{ store.backupStorage }}</span>
+                  </div>
+                </q-item-section>
+              </template>
+
+              <pre class="credential-json">{{ prettyJson(store.credentials) }}</pre>
+            </q-expansion-item>
+
+            <q-item
+              v-else
+              dense
+            >
+              <q-item-section>
+                <div class="entity-line">
+                  <span class="entity-name">{{ store.name }}</span>
+                  <span class="attribute">{{ store.label }}</span>
+                  <span v-if="store.storage" class="attribute">{{ store.storage }}</span>
+                  <span v-if="store.backupStorage" class="attribute">backup {{ store.backupStorage }}</span>
+                </div>
+              </q-item-section>
+              <q-tooltip>Credentials not available yet</q-tooltip>
+            </q-item>
+          </template>
+        </q-list>
       </q-card>
+
     </div>
 
-    <!-- Database Credentials -->
-      <q-card
-        v-if="hasDatabaseCredentials"
-        class="q-mb-md"
-      >
-        <q-card-section class="text-subtitle1">
-          Database Credentials
-        </q-card-section>
-        <q-separator/>
-        <q-card-section>
-          <pre class="q-pa-md bg-grey-2 rounded-borders">{{ prettyDatabaseCredentials }}</pre>
-        </q-card-section>
-      </q-card>
-
     <!-- Fallback if no workspace data -->
-    <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center text-grey-7">
+    <div v-if="!loading && !errorMessage && !ws" class="q-pa-md text-center">
       <p>No workspace data loaded.</p>
     </div>
   </div>
@@ -115,7 +176,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
-import type { Workspace } from 'src/models/models'
+import type { BucketLifecycleRule, Store, Workspace } from 'src/models/models'
 import { useUserStore } from 'src/stores/userStore'
 
 /** ---- State ---- */
@@ -128,26 +189,108 @@ const userStore = useUserStore()
 const canSeeMembers = computed(() => userStore.canViewMembers)
 const canSeeBuckets = computed(() => userStore.canViewBuckets)
 const canSeeBucketCredentials = computed(() => userStore.canViewBucketCredentials)
-const canSeeDatabases = computed(() => userStore.canViewDatabases)
+const canSeeStores = computed(() => userStore.canViewStores)
 
-const hasCredentials = computed<boolean>(() => {
+const hasStorageCredentials = computed<boolean>(() => {
   if (!canSeeBucketCredentials.value) return false
   const creds = ws.value?.storage?.credentials
   return !!creds && Object.keys(creds).length > 0
 })
 
-const prettyCredentials = computed<string>(() =>
-  JSON.stringify(ws.value?.storage?.credentials ?? {}, null, 2)
+const storageCredentialsForDisplay = computed<Record<string, unknown>>(() =>
+  Object.fromEntries(
+    Object.entries(ws.value?.storage?.credentials ?? {}).filter(([key]) => key !== 'bucketname')
+  )
 )
 
-const hasDatabaseCredentials = computed<boolean>(() => {
-  if (!canSeeDatabases.value) return false
-  const creds = ws.value?.datalab?.database_credentials
-  return !!creds && Object.keys(creds).length > 0
-})
+const prettyStorageCredentials = computed<string>(() =>
+  prettyJson(storageCredentialsForDisplay.value)
+)
 
-const prettyDatabaseCredentials = computed<string>(() =>
-  JSON.stringify(ws.value?.datalab?.database_credentials ?? {}, null, 2)
+function storeTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    database: 'Database (Postgres)',
+    vector: 'Vector store (Qdrant)',
+    cache: 'Cache (Redis)',
+    document: 'Document store (MongoDB)',
+  }
+  return labels[type] ?? type
+}
+
+function credentialsForStore(store: Store): Record<string, unknown> {
+  const credentialsByName = ws.value?.datalab?.store_credentials?.[store.type]
+  if (!credentialsByName) return {}
+
+  const directCredentials = credentialsByName[store.name] ?? credentialsByName.pg0 ?? credentialsByName.default
+  if (directCredentials) return credentialsForStoreName(store, directCredentials)
+
+  const credentialGroups = Object.values(credentialsByName)
+  return credentialGroups.length === 1 ? credentialsForStoreName(store, credentialGroups[0] ?? {}) : {}
+}
+
+function credentialsForStoreName(store: Store, credentials: Record<string, unknown>): Record<string, unknown> {
+  if (store.type !== 'database') {
+    return credentials
+  }
+
+  const scopedCredentials: Record<string, unknown> = { ...credentials }
+  const urls = scopedCredentials.urls
+  const externalUrls = scopedCredentials.external_urls
+
+  if (isRecord(urls)) {
+    if (urls[store.name]) {
+      scopedCredentials.url = urls[store.name]
+    }
+    delete scopedCredentials.urls
+  }
+
+  if (isRecord(externalUrls)) {
+    if (externalUrls[store.name]) {
+      scopedCredentials.external_url = externalUrls[store.name]
+    }
+    delete scopedCredentials.external_urls
+  }
+
+  return scopedCredentials
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function credentialEntries(credentials: Record<string, unknown>) {
+  return Object.entries(credentials).filter(([, value]) => value !== null && value !== undefined && value !== '')
+}
+
+function prettyJson(value: unknown) {
+  return JSON.stringify(value ?? {}, null, 2)
+}
+
+function formatLifecycleRule(rule: BucketLifecycleRule) {
+  const condition = rule.min_age ? rule.min_age : rule.at
+  return `${rule.mode} ${rule.target} ${condition ?? ''}`.trim()
+}
+
+function lifecycleRuleTooltip(rule: BucketLifecycleRule) {
+  if (rule.min_age) {
+    return `${rule.mode} ${rule.target} after ${rule.min_age}`
+  }
+  return `${rule.mode} ${rule.target} at ${rule.at}`
+}
+
+const storeSummaries = computed(() =>
+  (ws.value?.datalab?.stores ?? []).map(store => {
+    const credentials = credentialsForStore(store)
+    return {
+      name: store.name,
+      type: store.type,
+      label: storeTypeLabel(store.type),
+      storage: store.storage,
+      backupStorage: store.backup_storage,
+      credentials,
+      hasCredentials: credentialEntries(credentials).length > 0,
+    }
+  })
 )
 
 const { loading } = useLuigiWorkspace({
@@ -166,10 +309,48 @@ const { loading } = useLuigiWorkspace({
 </script>
 
 <style scoped>
-pre {
-  border-radius: 4px;
-  overflow-x: auto;
+.entity-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.entity-name {
+  min-width: 9rem;
+  font-weight: 500;
+}
+
+.attribute {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border: 1px solid #4a4a4a;
+  color: #4a4a4a;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attribute-count {
+  min-width: 2rem;
+  justify-content: center;
+}
+
+.credential-json {
+  margin: 0;
+  padding: 12px;
+  border-top: 1px solid currentColor;
   white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+
+.lifecycle-rule {
+  max-width: 18rem;
 }
 </style>

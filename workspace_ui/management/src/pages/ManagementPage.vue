@@ -36,7 +36,7 @@
             <q-tab v-if="canSeeMembers" name="members" label="Members" :alert="form.memberships.length === 0"/>
             <q-tab v-if="canSeeBuckets" name="buckets" label="Buckets"/>
             <q-tab v-if="canSeeBuckets" name="bucketRequests" label="Requested Buckets"/>
-            <q-tab v-if="canSeeDatabases" name="databases" label="Databases"/>
+            <q-tab v-if="canSeeStores" name="stores" label="Stores"/>
           </q-tabs>
 
           <q-separator/>
@@ -69,10 +69,12 @@
               />
             </q-tab-panel>
 
-            <q-tab-panel name="databases">
-              <DatabasesTab
+            <q-tab-panel name="stores">
+              <StoresTab
                 :workspace-name="form.name"
-                v-model:databases="form.databases"
+                :datalab-available="form.datalab_available"
+                :available-store-types="form.available_store_types"
+                v-model:stores="form.stores"
               />
             </q-tab-panel>
 
@@ -92,7 +94,7 @@ import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
 import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
 import {useUserStore} from 'stores/userStore'
-import DatabasesTab from 'components/DatabasesTab.vue'
+import StoresTab from 'components/StoresTab.vue'
 
 /** ---- State ---- */
 const message = ref<string>('')
@@ -103,16 +105,18 @@ const form = ref<WorkspaceEditUI>({
   memberships: [],
   buckets: [],
   linked_buckets: [],
-  databases: [],
+  datalab_available: false,
+  available_store_types: [],
+  stores: [],
 })
 
 /** ---- Permission-driven computed flags ---- */
 const canSeeMembers = computed(() => userStore.canViewMembers)
 const canSeeBuckets = computed(() => userStore.canViewBuckets)
-const canSeeDatabases = computed(() => userStore.canViewDatabases)
+const canSeeStores = computed(() => userStore.canViewStores && form.value.available_store_types.length > 0)
 
 /** Tabs */
-const activeTab = ref<'members' | 'buckets' | 'bucketRequests'>('members')
+const activeTab = ref<'members' | 'buckets' | 'bucketRequests' | 'stores'>('members')
 
 /** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
@@ -127,9 +131,6 @@ const {loading} = useLuigiWorkspace({
       if (ws.name) {
         message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
         userStore.setUser(ctx.workspace.user ?? null)
-        if (!canSeeMembers.value) {
-          activeTab.value = 'buckets'
-        }
 
         form.value = {
           name: ws.name,
@@ -137,11 +138,21 @@ const {loading} = useLuigiWorkspace({
           buckets: (ws.storage?.buckets ?? []).map(b => ({
               bucket: b.name,
               discoverable: b.discoverable,
+              lifecycle_rules: (b.lifecycle_rules ?? []).map(rule => ({...rule, id: crypto.randomUUID()})),
               requests: 0,
               grants: 0
             } as BucketUI)) ?? [],
           linked_buckets: ws.storage?.bucket_access_requests ?? [],
-          databases: (ws.datalab?.databases ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false}))
+          datalab_available: ws.datalab?.available ?? false,
+          available_store_types: ws.datalab?.available_store_types ?? [],
+          stores: (ws.datalab?.stores ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false}))
+        }
+
+        if (!canSeeMembers.value) {
+          activeTab.value = canSeeBuckets.value ? 'buckets' : 'stores'
+        }
+        if (activeTab.value === 'stores' && !canSeeStores.value) {
+          activeTab.value = canSeeBuckets.value ? 'buckets' : 'members'
         }
 
         // prepare number of requests and grants for buckets

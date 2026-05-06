@@ -1,9 +1,34 @@
+# Editor and local tool state
+#.vscode*
+.code*
+.idea*
+*.swp
+*.swo
+*~
+site/
+
+# Environment files
+.env*
+.envrc
+
+# TLS and secrets
+*.crt
+*.key
+
 # Python
 __pycache__/
+*.pyc
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
+.tox/
+build/
+dist/
+venv/
 .venv/
+
+# Tests
+testjob-20*
 
 # Node / Quasar
 node_modules/
@@ -11,29 +36,3 @@ node_modules/
 dist/
 !dist/.gitkeep
 quasar.config.*.temporary.compiled*
-
-# Logs
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Editor / IDE
-.idea/
-.vscode/
-*.iml
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# Environment files
-.env.local*
-.env.*.local
-
-# OS junk files
-.DS_Store
-.thumbs.db
-
-# Local run artifacts
-run*

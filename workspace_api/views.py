@@ -1,4 +1,4 @@
-# Copyright 2025, EOX (https://eox.at) and Versioneer (https://versioneer.at)
+# Copyright 2026, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
 import base64
@@ -7,7 +7,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from http import HTTPStatus
 from typing import Any
@@ -20,6 +20,7 @@ from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic import DynamicClient
+from pydantic import SecretStr
 from slugify import slugify
 
 from workspace_api import app, config, templates
@@ -27,15 +28,17 @@ from workspace_api import app, config, templates
 from .models import (
     Bucket,
     BucketAccessRequest,
+    BucketLifecycleRule,
+    BucketLifecycleRuleMode,
     BucketPermission,
     ContainerRegistryCredentials,
     Credentials,
-    Database,
-    DatabaseCredentials,
     Datalab,
     Membership,
     MembershipRole,
     Storage,
+    Store,
+    StoreType,
     UserContext,
     UserPermission,
     Workspace,
@@ -53,6 +56,14 @@ def _with_prefix(name: str) -> str:
     return f"{p}-{name}" if p else name
 
 
+def _provider_environment() -> str:
+    return str(getattr(config, "PROVIDER_ENVIRONMENT", "datalab") or "datalab").strip() or "datalab"
+
+
+def _provider_environment_annotations(annotation_key: str) -> dict[str, str]:
+    return {annotation_key: _provider_environment()}
+
+
 def _workspace_name_pattern() -> str:
     p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
     if p:
@@ -66,14 +77,39 @@ def _iso(ts: datetime | None) -> str | None:
     return ts.isoformat() if isinstance(ts, datetime) else str(ts)
 
 
+def _to_datetime(ts: Any) -> datetime | None:
+    if ts is None:
+        return None
+    if isinstance(ts, datetime):
+        return ts
+    s = str(ts).strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    return datetime.fromisoformat(s)
+
+
 WORKSPACE_NAME_PATTERN = _workspace_name_pattern()
 workspace_path_type = Path(..., pattern=WORKSPACE_NAME_PATTERN)
 
-API_PKG_INTERNAL = "pkg.internal/v1beta1"
+API_STORAGE = "pkg.internal/v1beta1"
+API_DATALAB = "pkg.internal/v1beta2"
 KIND_STORAGE = "Storage"
 KIND_DATALAB = "Datalab"
 CRD_STORAGE = "storages.pkg.internal"
 CRD_DATALAB = "datalabs.pkg.internal"
+DEFAULT_SESSION_NAME = "default"
+SESSION_STATE_STARTED = "started"
+SESSION_STATE_STOPPED = "stopped"
+STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
+DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
+STORE_TYPE_CRDS = {
+    StoreType.DATABASE: "postgresclusters.postgres-operator.crunchydata.com",
+    StoreType.VECTOR: "qdrantclusters.qdrant.io",
+    StoreType.CACHE: "redis.redis.opstreelabs.in",
+    StoreType.DOCUMENT: "mongodbcommunity.mongodbcommunity.mongodb.com",
+}
 
 
 @app.on_event("startup")
@@ -185,8 +221,8 @@ async def status() -> Response:
     return JSONResponse(payload, status_code=HTTPStatus.OK)
 
 
-def _get_cr(kind: str, name: str, required: bool) -> Any | None:
-    api = _res_required(API_PKG_INTERNAL, kind) if required else _res_optional(API_PKG_INTERNAL, kind)
+def _get_cr(api_version: str, kind: str, name: str, required: bool) -> Any | None:
+    api = _res_required(api_version, kind) if required else _res_optional(api_version, kind)
     if api is None:
         return None
     try:
@@ -217,6 +253,91 @@ def _as_bool(v: Any) -> bool:
     return s in {"true", "1", "yes", "y", "on"}
 
 
+def _session_name(item: Any) -> str | None:
+    if isinstance(item, str):
+        return item.strip() or None
+    if isinstance(item, dict):
+        return _clean_str(item.get("name"))
+    return None
+
+
+def _session_state(item: Any) -> str:
+    if isinstance(item, dict):
+        return (_clean_str(item.get("state")) or SESSION_STATE_STARTED).lower()
+    return SESSION_STATE_STARTED
+
+
+def _session_item(name: str, state: str) -> dict[str, str]:
+    return {"name": name, "state": state}
+
+
+def _initial_sessions_for_mode(session_mode: str) -> list[dict[str, str]]:
+    match session_mode.strip().lower():
+        case "on":
+            return [_session_item(DEFAULT_SESSION_NAME, SESSION_STATE_STARTED)]
+        case "auto":
+            return [_session_item(DEFAULT_SESSION_NAME, SESSION_STATE_STOPPED)]
+        case _:
+            return []
+
+
+def _session_declarations(spec: dict[str, Any]) -> list[Any]:
+    sessions = spec.get("sessions") or []
+    return sessions if isinstance(sessions, list) else []
+
+
+def _find_session(sessions: Sequence[Any], session_id: str) -> Any | None:
+    for session in sessions:
+        if _session_name(session) == session_id:
+            return session
+    return None
+
+
+def _session_index(sessions: Sequence[Any], session_id: str) -> int | None:
+    for index, session in enumerate(sessions):
+        if _session_name(session) == session_id:
+            return index
+    return None
+
+
+def _datalab_declares_session(workspace_name: str, session_id: str) -> bool:
+    if session_id != DEFAULT_SESSION_NAME:
+        return False
+
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if datalab_api is None:
+        return False
+
+    try:
+        datalab = datalab_api.get(name=workspace_name, namespace=current_namespace())
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return False
+        raise
+
+    spec = _to_spec_dict(datalab) or {}
+    return _find_session(_session_declarations(spec), session_id) is not None
+
+
+def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[str, Any]]:
+    index = _session_index(sessions, session_id)
+    if index is None:
+        return []
+
+    session = sessions[index]
+    path = f"/spec/sessions/{index}"
+    if isinstance(session, dict):
+        return [
+            {
+                "op": "replace" if "state" in session else "add",
+                "path": f"{path}/state",
+                "value": SESSION_STATE_STARTED,
+            }
+        ]
+
+    return [{"op": "replace", "path": path, "value": _session_item(session_id, SESSION_STATE_STARTED)}]
+
+
 def _get_first(*vals: Any) -> str | None:
     for v in vals:
         if v is not None:
@@ -233,6 +354,54 @@ def _bucketname_from(d: dict) -> str | None:
     )
 
 
+def _bucket_lifecycle_rules_from_provider(d: dict[str, Any]) -> list[BucketLifecycleRule]:
+    raw_rules = d.get("lifecycleRules") or []
+    if not isinstance(raw_rules, list):
+        return []
+
+    rules: list[BucketLifecycleRule] = []
+    for raw_rule in raw_rules:
+        if not isinstance(raw_rule, dict):
+            logger.warning("Skipping non-dict lifecycle rule: %r", raw_rule)
+            continue
+
+        target = _clean_str(raw_rule.get("target"))
+        if target is None:
+            logger.warning("Skipping invalid lifecycle rule %r: missing target", raw_rule)
+            continue
+
+        try:
+            mode = BucketLifecycleRuleMode(_clean_str(raw_rule.get("mode")) or BucketLifecycleRuleMode.DELETE.value)
+            rules.append(
+                BucketLifecycleRule(
+                    target=target,
+                    mode=mode,
+                    min_age=raw_rule.get("minAge") or raw_rule.get("min_age"),
+                    at=raw_rule.get("at"),
+                )
+            )
+        except ValueError as e:
+            logger.warning("Skipping invalid lifecycle rule %r: %s", raw_rule, e)
+
+    return rules
+
+
+def _bucket_lifecycle_rules_to_provider(rules: Sequence[BucketLifecycleRule]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rule in rules or []:
+        mode = getattr(rule.mode, "value", rule.mode)
+        item: dict[str, Any] = {
+            "target": rule.target,
+            "mode": mode,
+        }
+        if rule.min_age is not None:
+            item["minAge"] = rule.min_age
+        elif rule.at is not None:
+            item["at"] = _iso(rule.at)
+        out.append(item)
+    return out
+
+
 def _dedup_preserve(items: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -241,6 +410,154 @@ def _dedup_preserve(items: list[str]) -> list[str]:
             seen.add(it)
             out.append(it)
     return out
+
+
+def _store_field_for_type(store_type: StoreType) -> str:
+    return {
+        StoreType.DATABASE: "databases",
+        StoreType.VECTOR: "vectorStores",
+        StoreType.CACHE: "cacheStores",
+        StoreType.DOCUMENT: "documentStores",
+    }[store_type]
+
+
+def _default_storage_for_type(store_type: StoreType) -> str:
+    return {
+        StoreType.DATABASE: "1Gi",
+        StoreType.VECTOR: "1Gi",
+        StoreType.CACHE: "1Gi",
+        StoreType.DOCUMENT: "10Gi",
+    }[store_type]
+
+
+def _store_type_from_config(raw: str) -> StoreType | None:
+    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "database": StoreType.DATABASE,
+        "databases": StoreType.DATABASE,
+        "postgres": StoreType.DATABASE,
+        "postgresql": StoreType.DATABASE,
+        "vector": StoreType.VECTOR,
+        "vector_store": StoreType.VECTOR,
+        "vectorstores": StoreType.VECTOR,
+        "qdrant": StoreType.VECTOR,
+        "cache": StoreType.CACHE,
+        "caches": StoreType.CACHE,
+        "cache_store": StoreType.CACHE,
+        "cachestores": StoreType.CACHE,
+        "redis": StoreType.CACHE,
+        "document": StoreType.DOCUMENT,
+        "documents": StoreType.DOCUMENT,
+        "document_store": StoreType.DOCUMENT,
+        "documentstores": StoreType.DOCUMENT,
+        "mongodb": StoreType.DOCUMENT,
+        "mongo": StoreType.DOCUMENT,
+    }
+    return aliases.get(normalized)
+
+
+def _disabled_store_types() -> set[StoreType]:
+    if _as_bool(getattr(config, "DISABLE_STORES", "false")):
+        return set(StoreType)
+
+    raw = str(getattr(config, "DISABLED_STORE_TYPES", "") or "")
+    parts = [part.strip() for part in raw.replace(";", ",").split(",")]
+    if any(part.lower() in {"*", "all", "true", "yes", "1"} for part in parts):
+        return set(StoreType)
+
+    return {store_type for part in parts if (store_type := _store_type_from_config(part)) is not None}
+
+
+def _get_nested(mapping: dict[str, Any], *keys: str) -> Any:
+    current: Any = mapping
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _schema_value(mapping: dict[str, Any], *names: str) -> Any:
+    for name in names:
+        if name in mapping:
+            return mapping[name]
+    return None
+
+
+def _datalab_crd_store_fields() -> set[str]:
+    try:
+        crd = k8s_client.ApiextensionsV1Api().read_custom_resource_definition(CRD_DATALAB)
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return set()
+        raise
+
+    crd_dict = crd.to_dict() if hasattr(crd, "to_dict") else crd
+    versions = _get_nested(crd_dict, "spec", "versions") or []
+    if not isinstance(versions, list):
+        return set()
+
+    api_version = API_DATALAB.rsplit("/", 1)[-1]
+    selected = next((v for v in versions if isinstance(v, dict) and v.get("name") == api_version), None)
+    if selected is None:
+        selected = next((v for v in versions if isinstance(v, dict) and v.get("served")), None)
+    if selected is None:
+        return set()
+
+    schema = _schema_value(selected.get("schema") or {}, "openAPIV3Schema", "open_apiv3_schema") or {}
+    spec_properties = _get_nested(schema, "properties", "spec", "properties") or {}
+    if not isinstance(spec_properties, dict):
+        return set()
+
+    return {field for field in (_store_field_for_type(store_type) for store_type in StoreType) if field in spec_properties}
+
+
+def _store_type_crd_present(store_type: StoreType) -> bool:
+    crd_name = STORE_TYPE_CRDS.get(store_type)
+    return bool(crd_name and _crd_exists(crd_name))
+
+
+def _available_store_types(datalab_installed: bool) -> list[StoreType]:
+    if not datalab_installed:
+        return []
+
+    supported_fields = _datalab_crd_store_fields()
+    disabled = _disabled_store_types()
+    return [
+        store_type
+        for store_type in StoreType
+        if store_type not in disabled and _store_field_for_type(store_type) in supported_fields and _store_type_crd_present(store_type)
+    ]
+
+
+def _stores_from_map(
+    spec: dict[str, Any],
+    field: str,
+    store_type: StoreType,
+    creation_timestamp: datetime | None,
+) -> list[Store]:
+    stores: list[Store] = []
+    items = spec.get(field) or {}
+    if not isinstance(items, dict):
+        return stores
+
+    for name, cfg in items.items():
+        store_name = str(name or "").strip()
+        if not store_name:
+            continue
+        storage = None
+        if isinstance(cfg, dict):
+            storage = _clean_str(cfg.get("storage"))
+        stores.append(
+            Store(
+                name=store_name,
+                type=store_type,
+                storage=storage,
+                backup_storage=None,
+                creation_timestamp=creation_timestamp,
+            )
+        )
+    return stores
 
 
 def _perm_from_str(s: str | None) -> BucketPermission:
@@ -266,7 +583,7 @@ def _extract_relevant_bucket_access_requests(
     current_workspace_name: str,
 ) -> list[BucketAccessRequest]:
     try:
-        storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+        storage_api = _res_required(API_STORAGE, KIND_STORAGE)
         storages = storage_api.get(namespace=current_namespace())
         storage_items = getattr(storages, "items", []) or []
     except Exception as e:
@@ -413,8 +730,186 @@ def _clean_str(v: object) -> str | None:
     return None
 
 
+def _compact_credentials(values: dict[str, str | None]) -> dict[str, str]:
+    return {key: value for key, value in values.items() if value}
+
+
+def _put_store_credentials(
+    store_credentials: dict[StoreType, dict[str, dict[str, Any]]],
+    store_type: StoreType,
+    store_name: str | None,
+    values: dict[str, Any],
+) -> None:
+    name = (store_name or "default").strip() or "default"
+    credentials = {key: value for key, value in values.items() if value}
+    if not credentials:
+        return
+
+    store_credentials.setdefault(store_type, {}).setdefault(name, {}).update(credentials)
+
+
+def _store_name_from_secret_part(raw: str) -> str:
+    return raw.strip().lower().replace("_", "-")
+
+
+def _secret_store_key(prefix: str, store_name: str, suffix: str) -> str:
+    normalized_store = re.sub(r"[^A-Za-z0-9]+", "_", store_name).strip("_").upper()
+    return f"{prefix}_{normalized_store}_{suffix}"
+
+
+def _pg_secret_key(cluster_name: str, suffix: str) -> str:
+    return _secret_store_key("POSTGRES", cluster_name, suffix)
+
+
+def _pg_db_secret_key(cluster_name: str, database_name: str, suffix: str) -> str:
+    normalized_cluster = re.sub(r"[^A-Za-z0-9]+", "_", cluster_name).strip("_").upper()
+    normalized_database = re.sub(r"[^A-Za-z0-9]+", "_", database_name).strip("_").upper()
+    return f"POSTGRES_{normalized_cluster}_{normalized_database}_{suffix}"
+
+
+def _pg_secret_value(envs: Mapping[str, str], cluster_name: str, suffix: str) -> str | None:
+    return _clean_str(envs.get(_pg_secret_key(cluster_name, suffix)))
+
+
+def _pg_db_secret_value(envs: Mapping[str, str], cluster_name: str, database_name: str, suffix: str) -> str | None:
+    return _clean_str(envs.get(_pg_db_secret_key(cluster_name, database_name, suffix)))
+
+
+def _store_credentials_from_envs(
+    envs: dict[str, str],
+    database_hosts: Mapping[str, Sequence[str]] | None = None,
+) -> dict[StoreType, dict[str, dict[str, Any]]]:
+    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
+
+    for cluster_name, host_database_names_raw in (database_hosts or {}).items():
+        host_database_names = [name for name in host_database_names_raw if name]
+        if not host_database_names:
+            continue
+
+        host = _pg_secret_value(envs, cluster_name, "HOST")
+        port = _pg_secret_value(envs, cluster_name, "PORT")
+        username = _pg_secret_value(envs, cluster_name, "USER")
+        password = _pg_secret_value(envs, cluster_name, "PASSWORD")
+        host_external = _pg_secret_value(envs, cluster_name, "HOST_EXTERNAL")
+        urls = {name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL"))}
+        external_urls = {
+            name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL_EXTERNAL"))
+        }
+
+        if host or username or password or urls or external_urls:
+            _put_store_credentials(
+                store_credentials,
+                StoreType.DATABASE,
+                cluster_name,
+                {
+                    "host": host,
+                    "port": port,
+                    "username": username,
+                    "password": password,
+                    "host_external": host_external,
+                    "databases": ",".join(host_database_names),
+                    "urls": urls,
+                    "external_urls": external_urls,
+                },
+            )
+
+    for key, value in envs.items():
+        cleaned_value = _clean_str(value)
+        if not cleaned_value:
+            continue
+
+        if match := re.fullmatch(r"MONGO_(.+?)_(AUTH_SOURCE|HOST|PORT|DATABASE|USER|PASSWORD|URI)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "DATABASE": "database",
+                "AUTH_SOURCE": "auth_source",
+                "USER": "username",
+                "PASSWORD": "password",
+                "URI": "uri",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.DOCUMENT,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"REDIS_(.+?)_(HOST|PORT|USER|DATABASE|PASSWORD|URL)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "USER": "username",
+                "DATABASE": "database",
+                "PASSWORD": "password",
+                "URL": "url",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.CACHE,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"QDRANT_(.+?)_(READ_API_KEY|GRPC_PORT|API_KEY|HOST|PORT|URL)", key):
+            fields = {
+                "HOST": "host",
+                "PORT": "port",
+                "GRPC_PORT": "grpc_port",
+                "URL": "url",
+                "READ_API_KEY": "read_api_key",
+                "API_KEY": "api_key",
+            }
+            _put_store_credentials(
+                store_credentials,
+                StoreType.VECTOR,
+                _store_name_from_secret_part(match.group(1)),
+                {fields[match.group(2)]: cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"QDRANT_(.+)_READ_API_KEY", key):
+            _put_store_credentials(
+                store_credentials,
+                StoreType.VECTOR,
+                _store_name_from_secret_part(match.group(1)),
+                {"read_api_key": cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"QDRANT_(.+)_API_KEY", key):
+            _put_store_credentials(
+                store_credentials,
+                StoreType.VECTOR,
+                _store_name_from_secret_part(match.group(1)),
+                {"api_key": cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"REDIS_(.+)_PASSWORD", key):
+            _put_store_credentials(
+                store_credentials,
+                StoreType.CACHE,
+                _store_name_from_secret_part(match.group(1)),
+                {"password": cleaned_value},
+            )
+            continue
+
+        if match := re.fullmatch(r"MONGO_(.+)_PASSWORD", key):
+            _put_store_credentials(
+                store_credentials,
+                StoreType.DOCUMENT,
+                _store_name_from_secret_part(match.group(1)),
+                {"password": cleaned_value},
+            )
+
+    return store_credentials
+
+
 def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
-    storage_cr = _get_cr(KIND_STORAGE, workspace_name, required=True)
+    storage_cr = _get_cr(API_STORAGE, KIND_STORAGE, workspace_name, required=True)
     if not storage_cr:
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
@@ -424,7 +919,15 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             },
         )
 
-    datalab_cr = _get_cr(KIND_DATALAB, workspace_name, required=False)
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    available_store_types = _available_store_types(datalab_api is not None)
+    datalab_cr = None
+    if datalab_api is not None:
+        try:
+            datalab_cr = datalab_api.get(name=workspace_name, namespace=current_namespace())
+        except ApiException as e:
+            if e.status != HTTPStatus.NOT_FOUND:
+                raise
 
     storage_spec = _to_spec_dict(storage_cr) or {}
     datalab_spec = _to_spec_dict(datalab_cr) or {}
@@ -434,12 +937,15 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     buckets = storage_spec.get("buckets") or []
     all_buckets: list[str] = []
     discoverable_buckets: list[str] = []
+    bucket_lifecycle_rules: dict[str, list[BucketLifecycleRule]] = {}
 
     for it in buckets:
         bname = _bucketname_from(it or {}) or ""
         if not bname:
             continue
         all_buckets.append(bname)
+        if isinstance(it, dict):
+            bucket_lifecycle_rules[bname] = _bucket_lifecycle_rules_from_provider(it)
         if _as_bool((it or {}).get("discoverable")):
             discoverable_buckets.append(bname)
 
@@ -477,11 +983,11 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             Membership(
                 member=member,
                 role=role,
-                creation_timestamp=_iso(ts),
+                creation_timestamp=_to_datetime(ts),
             )
         )
 
-    databases = []
+    stores: list[Store] = []
 
     db_hosts = (datalab_spec or {}).get("databases") or {}
 
@@ -489,27 +995,42 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         db_hosts = {}
 
     seen_db: set[str] = set()
+    database_hosts: dict[str, list[str]] = {}
 
-    for host_cfg in db_hosts.values():
-        if not isinstance(host_cfg, dict):
-            continue
-        names = host_cfg.get("names") or []
-        if not isinstance(names, list):
-            continue
-        for n in names:
-            name = str(n or "").strip()
-            if not name or name in seen_db:
+    if StoreType.DATABASE in available_store_types:
+        for host_name, host_cfg in db_hosts.items():
+            if not isinstance(host_cfg, dict):
                 continue
-            seen_db.add(name)
-            databases.append(
-                Database(
-                    name=name,
-                    creation_timestamp=_iso(dl_created_at),
+            names = host_cfg.get("names") or []
+            if not isinstance(names, list):
+                continue
+            host_key = str(host_name or "").strip() or "pg0"
+            database_hosts.setdefault(host_key, [])
+            for n in names:
+                name = str(n or "").strip()
+                if not name or name in seen_db:
+                    continue
+                seen_db.add(name)
+                database_hosts[host_key].append(name)
+                stores.append(
+                    Store(
+                        name=name,
+                        type=StoreType.DATABASE,
+                        storage=_clean_str(host_cfg.get("storage")),
+                        backup_storage=_clean_str(host_cfg.get("backupStorage")),
+                        creation_timestamp=dl_created_at,
+                    )
                 )
-            )
+
+    if StoreType.VECTOR in available_store_types:
+        stores.extend(_stores_from_map(datalab_spec, "vectorStores", StoreType.VECTOR, dl_created_at))
+    if StoreType.CACHE in available_store_types:
+        stores.extend(_stores_from_map(datalab_spec, "cacheStores", StoreType.CACHE, dl_created_at))
+    if StoreType.DOCUMENT in available_store_types:
+        stores.extend(_stores_from_map(datalab_spec, "documentStores", StoreType.DOCUMENT, dl_created_at))
 
     credentials: Credentials | None = None
-    database_credentials: DatabaseCredentials | None = None
+    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
     container_registry_credentials: ContainerRegistryCredentials | None = None
 
     secret = None
@@ -538,36 +1059,17 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                     access=access,
                     secret=secret_key,
                     endpoint=endpoint,
-                    region=region,
+                    region=region or "",
                 )
 
-            database_url = _clean_str(envs.get("DATABASE_URL"))
-            host = _clean_str(envs.get("DATABASE_HOST"))
-            username = _clean_str(envs.get("DATABASE_USERNAME"))
-            password = _clean_str(envs.get("DATABASE_PASSWORD"))
-            port = _clean_str(envs.get("DATABASE_PORT"))
-            dbname = _clean_str(envs.get("DATABASE_NAME"))
-            host_external = _clean_str(envs.get("DATABASE_HOST_EXTERNAL"))
-            url_external = _clean_str(envs.get("DATABASE_URL_EXTERNAL"))
-
-            if database_url:
-                database_credentials = DatabaseCredentials(
-                    url=database_url,
-                    host=host,
-                    username=username,
-                    password=password,
-                    port=port,
-                    dbname=dbname,
-                    host_external=host_external,
-                    url_external=url_external,
-                )
+            store_credentials = _store_credentials_from_envs(envs, database_hosts)
 
             reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))
             reg_pass = _clean_str(envs.get("CONTAINER_REGISTRY_PASSWORD"))
             if reg_user and reg_pass:
                 container_registry_credentials = ContainerRegistryCredentials(
                     username=reg_user,
-                    password=reg_pass,
+                    password=SecretStr(reg_pass),
                 )
 
         except (KeyError, TypeError, binascii.Error, UnicodeDecodeError) as e:
@@ -586,6 +1088,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             Bucket(
                 name=b,
                 discoverable=b in discoverable_buckets,
+                lifecycle_rules=bucket_lifecycle_rules.get(b, []),
+                creation_timestamp=None,
             )
             for b in all_buckets
         ],
@@ -594,8 +1098,10 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     )
     datalab = Datalab(
         memberships=memberships,
-        databases=databases,
-        database_credentials=database_credentials,
+        available=datalab_api is not None,
+        available_store_types=available_store_types,
+        stores=stores,
+        store_credentials=store_credentials,
         container_registry_credentials=container_registry_credentials,
     )
 
@@ -614,7 +1120,11 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             setattr(storage, "bucket_access_requests", []),  # type: ignore[func-returns-value]
         ),
         UserPermission.VIEW_MEMBERS: lambda: setattr(datalab, "memberships", []),
-        UserPermission.VIEW_DATABASES: lambda: setattr(datalab, "databases", []),
+        UserPermission.VIEW_STORES: lambda: (
+            setattr(datalab, "stores", []),  # type: ignore[func-returns-value]
+            setattr(datalab, "store_credentials", {}),  # type: ignore[func-returns-value]
+            setattr(datalab, "container_registry_credentials", None),  # type: ignore[func-returns-value]
+        ),
     }
 
     for permission, guard in permission_guards.items():
@@ -634,7 +1144,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         ),
     )
 
-    logger.info(f"Returning workspace '{workspace_name}' for user '{username}'")
+    logger.info("Returning workspace '%s' for user '%s'", workspace_name, user_ctx["username"])
 
     if config.AUTH_DEBUG:
         logger.debug(f"workspace={workspace}")
@@ -660,8 +1170,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     workspace_name = _with_prefix(slugify(data.preferred_name, max_length=32) or str(uuid.uuid4()))[:63]
 
-    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
-    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
 
     try:
         storage_api.get(name=workspace_name, namespace=current_namespace())
@@ -676,9 +1186,12 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     try:
         storage_api.create(
             {
-                "apiVersion": API_PKG_INTERNAL,
+                "apiVersion": API_STORAGE,
                 "kind": KIND_STORAGE,
-                "metadata": {"name": workspace_name},
+                "metadata": {
+                    "name": workspace_name,
+                    "annotations": _provider_environment_annotations(STORAGE_ENVIRONMENT_ANNOTATION),
+                },
                 "spec": {
                     "principal": workspace_name,
                     "buckets": [{"bucketName": workspace_name, "discoverable": True}],
@@ -698,18 +1211,28 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     if datalab_api is not None:
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
+        enable_registry = not _as_bool(getattr(config, "DISABLE_DOCKER_REGISTRY", "false"))
+        sessions = _initial_sessions_for_mode(session_mode)
+        datalab_spec: dict[str, Any] = {
+            "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
+            "secretName": workspace_name,
+            "vcluster": use_vcluster,
+        }
+        if sessions:
+            datalab_spec["sessions"] = sessions
+        if enable_registry:
+            datalab_spec["registry"] = {"enabled": True}
+
         try:
             datalab_api.create(
                 {
-                    "apiVersion": API_PKG_INTERNAL,
+                    "apiVersion": API_DATALAB,
                     "kind": KIND_DATALAB,
-                    "metadata": {"name": workspace_name},
-                    "spec": {
-                        "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
-                        "secretName": workspace_name,
-                        "sessions": ["default"] if session_mode == "on" else [],
-                        "vcluster": use_vcluster,
+                    "metadata": {
+                        "name": workspace_name,
+                        "annotations": _provider_environment_annotations(DATALAB_ENVIRONMENT_ANNOTATION),
                     },
+                    "spec": datalab_spec,
                 },
                 namespace=current_namespace(),
             )
@@ -768,10 +1291,13 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
     ):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
 
-        datalab_path = f"/workspaces/{workspace_name}/sessions/default"
-        datalab_url = make_external_url(request, datalab_path)
+        endpoints = []
+        if _datalab_declares_session(workspace_name, DEFAULT_SESSION_NAME):
+            datalab_path = f"/workspaces/{workspace_name}/sessions/{DEFAULT_SESSION_NAME}"
+            datalab_url = make_external_url(request, datalab_path)
+            endpoints.append({"id": "Datalab (default)", "url": datalab_url})
 
-        endpoints_data = _to_b64_json([{"id": "Datalab (default)", "url": datalab_url}])
+        endpoints_data = _to_b64_json(endpoints)
 
         return templates.TemplateResponse(
             "ui.html",
@@ -819,14 +1345,14 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     if update.add_memberships:
         required_perms.add(UserPermission.MANAGE_MEMBERS)
 
-    if update.add_databases:
-        required_perms.add(UserPermission.MANAGE_DATABASES)
+    if update.add_stores:
+        required_perms.add(UserPermission.MANAGE_STORES)
 
     missing = required_perms - workspace_perms
     if missing:
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
 
-    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
+    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
 
     try:
         storage_obj = storage_api.get(name=workspace_name, namespace=current_namespace())
@@ -838,24 +1364,32 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     storage_spec = _to_spec_dict(storage_obj) or {}
 
     buckets = storage_spec.get("buckets") or []
-    existing_names = {(_bucketname_from(b) or ""): b for b in buckets}
+    if not isinstance(buckets, list):
+        buckets = []
+    existing_names = {(_bucketname_from(b) or ""): b for b in buckets if isinstance(b, dict)}
 
     for b in update.add_buckets or []:
         bname = (getattr(b, "name", None) or "").strip()
         if not bname:
             continue
+        lifecycle_rules_was_set = "lifecycle_rules" in getattr(b, "model_fields_set", set())
+        lifecycle_rules = _bucket_lifecycle_rules_to_provider(b.lifecycle_rules) if lifecycle_rules_was_set else None
         if bname not in existing_names:
-            buckets.append(
-                {
-                    "bucketName": bname,
-                    "discoverable": bool(getattr(b, "discoverable", False)),
-                }
-            )
+            bucket_spec: dict[str, Any] = {
+                "bucketName": bname,
+                "discoverable": bool(getattr(b, "discoverable", False)),
+            }
+            if lifecycle_rules is not None:
+                bucket_spec["lifecycleRules"] = lifecycle_rules
+
+            buckets.append(bucket_spec)
             existing_names[bname] = buckets[-1]
         else:
             existing = existing_names[bname]
             if isinstance(existing, dict) and "discoverable" not in existing:
                 existing["discoverable"] = bool(getattr(b, "discoverable", False))
+            if isinstance(existing, dict) and lifecycle_rules is not None:
+                existing["lifecycleRules"] = lifecycle_rules
 
     requests: list[dict] = storage_spec.get("bucketAccessRequests") or []
     grants: list[dict] = storage_spec.get("bucketAccessGrants") or []
@@ -962,23 +1496,32 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
         logger.warning("Patching Storage '%s' failed: %s", workspace_name, e)
         raise
 
-    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    available_store_types = _available_store_types(datalab_api is not None)
 
     add_memberships = update.add_memberships or []
-    add_databases = update.add_databases or []
+    add_stores = list(update.add_stores or [])
 
-    if (add_memberships or add_databases) and datalab_api is None:
-        if add_memberships:
-            logger.warning(
-                "Datalab CRD not present; cannot add memberships for workspace '%s'.",
-                workspace_name,
-            )
-        if add_databases:
-            logger.warning(
-                "Datalab CRD not present; cannot add databases for workspace '%s'.",
-                workspace_name,
-            )
-    elif add_memberships or add_databases:
+    if (add_memberships or add_stores) and datalab_api is None:
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail={
+                "error": "provider_datalab_not_installed",
+                "message": "Datalab CRD not present; cannot update memberships or stores.",
+            },
+        )
+
+    disabled_store_types = sorted({store.type.value for store in add_stores if store.type not in available_store_types})
+    if disabled_store_types:
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "store_type_unavailable",
+                "store_types": disabled_store_types,
+            },
+        )
+
+    if add_memberships or add_stores:
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
@@ -1042,7 +1585,8 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
             datalab_patch_spec["users"] = users
             datalab_patch_spec["userOverrides"] = user_overrides
 
-        if add_databases:
+        database_stores = [store for store in add_stores if store.type == StoreType.DATABASE]
+        if database_stores:
             databases_spec = datalab_spec.get("databases")
             if not isinstance(databases_spec, dict):
                 databases_spec = {}
@@ -1058,25 +1602,47 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
             if not isinstance(names, list):
                 names = []
 
-            existing = {n.strip() for n in names if isinstance(n, str) and n.strip()}
+            existing_database_names = {n.strip() for n in names if isinstance(n, str) and n.strip()}
 
-            for db in add_databases:
-                dn = (getattr(db, "name", None) or "").strip()
-                if not dn or dn in existing:
+            for store in database_stores:
+                dn = (getattr(store, "name", None) or "").strip()
+                if not dn or dn in existing_database_names:
                     continue
                 names.append(dn)
-                existing.add(dn)
+                existing_database_names.add(dn)
 
             host_obj["names"] = names
 
             if "storage" not in host_obj:
-                host_obj["storage"] = "1Gi"
+                host_obj["storage"] = next((s.storage for s in database_stores if s.storage), None) or "1Gi"
 
             if "backupStorage" not in host_obj:
-                host_obj["backupStorage"] = "10Gi"
+                host_obj["backupStorage"] = next((s.backup_storage for s in database_stores if s.backup_storage), None) or "10Gi"
 
             databases_spec[host] = host_obj
             datalab_patch_spec["databases"] = databases_spec
+
+        for store_type in (StoreType.VECTOR, StoreType.CACHE, StoreType.DOCUMENT):
+            typed_stores = [store for store in add_stores if store.type == store_type]
+            if not typed_stores:
+                continue
+
+            field = _store_field_for_type(store_type)
+            stores_spec = datalab_spec.get(field)
+            if not isinstance(stores_spec, dict):
+                stores_spec = {}
+
+            for store in typed_stores:
+                name = (store.name or "").strip()
+                if not name:
+                    continue
+                item = stores_spec.get(name)
+                if not isinstance(item, dict):
+                    item = {}
+                item.setdefault("storage", store.storage or _default_storage_for_type(store_type))
+                stores_spec[name] = item
+
+            datalab_patch_spec[field] = stores_spec
 
         if datalab_patch_spec:
             try:
@@ -1108,8 +1674,8 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     },
 )
 async def delete_workspace(workspace_name: str = workspace_path_type) -> Response:
-    storage_api = _res_required(API_PKG_INTERNAL, KIND_STORAGE)
-    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
 
     try:
         storage_api.delete(name=workspace_name, namespace=current_namespace())
@@ -1150,47 +1716,52 @@ async def get_workspace_session(
     workspace_name: str = workspace_path_type,
     session_id: str = Path(..., description="Session identifier"),
 ) -> Response:
-    datalab_api = _res_optional(API_PKG_INTERNAL, KIND_DATALAB)
+    if str(session_id) != DEFAULT_SESSION_NAME:
+        msg = f"Session enabling unavailable: session '{session_id}' is not managed"
+        logger.info(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
     if datalab_api is None:
         msg = f"Session enabling unavailable: CRD {CRD_DATALAB} not found"
         logger.warning(msg)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 
-    dl = _get_cr(KIND_DATALAB, workspace_name, required=False)
+    dl = _get_cr(API_DATALAB, KIND_DATALAB, workspace_name, required=False)
     if dl is None:
         msg = f"Session enabling failed: workspace '{workspace_name}' not found"
         logger.warning(msg)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
 
     spec = _to_spec_dict(dl) or {}
-    spec_sessions = [str(x) for x in (spec.get("sessions") or [])]
-    if str(session_id) not in spec_sessions:
-        session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
-        if session_mode == "auto" and str(session_id) == "default":
-            new_sessions = list(dict.fromkeys([*spec_sessions, "default"]))
-            logger.info(
-                "Enabling session '%s' for workspace '%s' (auto mode).",
-                session_id,
-                workspace_name,
+    spec_sessions = _session_declarations(spec)
+    spec_session = _find_session(spec_sessions, str(session_id))
+
+    if spec_session is None:
+        msg = f"Session enabling unavailable: session '{session_id}' is not declared"
+        logger.info(msg)
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+    if _session_state(spec_session) != SESSION_STATE_STARTED:
+        patch_body = _session_start_patch(spec_sessions, str(session_id))
+        logger.info(
+            "Starting stopped session '%s' for workspace '%s'.",
+            session_id,
+            workspace_name,
+        )
+        try:
+            datalab_api.patch(
+                name=workspace_name,
+                namespace=current_namespace(),
+                body=patch_body,
+                content_type="application/json-patch+json",
             )
-            try:
-                datalab_api.patch(
-                    name=workspace_name,
-                    namespace=current_namespace(),
-                    body={"spec": {"sessions": new_sessions}},
-                    content_type="application/merge-patch+json",
-                )
-            except ApiException as e:
-                msg = f"Enabling session '{session_id}' for workspace '{workspace_name}' failed"
-                logger.warning("%s: %s", msg, e)
-                raise HTTPException(
-                    status_code=HTTPStatus.BAD_GATEWAY,
-                    detail={"error": msg, "exception": str(e)},
-                ) from e
-        else:
-            msg = f"Session enabling unavailable: session '{session_id}' not declared and auto mode is disabled"
-            logger.info(msg)
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+        except ApiException as e:
+            msg = f"Starting session '{session_id}' for workspace '{workspace_name}' failed"
+            logger.warning("%s: %s", msg, e)
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_GATEWAY,
+                detail={"error": msg, "exception": str(e)},
+            ) from e
 
     st = getattr(dl, "status", None)
     if st is None:
