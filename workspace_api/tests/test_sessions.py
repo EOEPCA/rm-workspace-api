@@ -10,7 +10,13 @@ from fastapi.testclient import TestClient
 from kubernetes.client.rest import ApiException
 
 from workspace_api import config, views
-from workspace_api.views import _datalab_declares_session, _initial_sessions_for_mode, _session_start_patch
+from workspace_api.views import (
+    _datalab_declares_session,
+    _initial_sessions_for_mode,
+    _session_probe_url,
+    _session_start_patch,
+    _session_url_ready,
+)
 
 
 def _dev_token() -> str:
@@ -54,6 +60,10 @@ def test_session_start_patch_replaces_legacy_default_session() -> None:
     assert _session_start_patch(["default"], "default") == [
         {"op": "replace", "path": "/spec/sessions/0", "value": {"name": "default", "state": "started"}}
     ]
+
+
+def test_session_probe_url_uses_internal_session_service() -> None:
+    assert _session_probe_url("workspace-a", "default") == "http://workspace-a-default.workspace-a.svc.cluster.local/"
 
 
 def test_create_workspace_sends_started_session_object(client: TestClient, monkeypatch) -> None:
@@ -261,6 +271,7 @@ def test_started_session_object_returns_status_url(client: TestClient, monkeypat
 
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
+    monkeypatch.setattr(views, "_session_url_ready", lambda _url: True)
 
     response = client.get(
         "/workspaces/workspace-a/sessions/default",
@@ -270,3 +281,59 @@ def test_started_session_object_returns_status_url(client: TestClient, monkeypat
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {"url": "https://session.example"}
     datalab_api.patch.assert_not_called()
+
+
+def test_started_session_keeps_waiting_when_status_url_returns_503(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
+    datalab.status = {"sessions": {"default": {"state": "started", "url": "https://session.example"}}}
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
+    monkeypatch.setattr(views, "_session_url_ready", lambda _url: False)
+
+    response = client.get(
+        "/workspaces/workspace-a/sessions/default",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.ACCEPTED
+    assert response.json() == {"status": "starting", "url": "https://session.example"}
+    datalab_api.patch.assert_not_called()
+
+
+def test_session_url_ready_accepts_auth_redirect(requests_mock) -> None:
+    requests_mock.head("https://session.example", status_code=HTTPStatus.FOUND, headers={"Location": "https://auth.example/start"})
+
+    assert _session_url_ready("https://session.example") is True
+
+
+def test_session_url_ready_waits_on_server_error(requests_mock) -> None:
+    requests_mock.head("https://session.example", status_code=HTTPStatus.SERVICE_UNAVAILABLE)
+
+    assert _session_url_ready("https://session.example") is False
+
+
+def test_html_session_waiter_redirects_without_cross_origin_probe(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
+    datalab.status = {"sessions": {"default": {"state": "started", "url": "https://session.example"}}}
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
+
+    response = client.get(
+        "/workspaces/workspace-a/sessions/default",
+        headers={**_auth_headers(), "Accept": "text/html"},
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert "checked-url" in response.text
+    assert "showUrl('Checking:', apiUrl)" in response.text
+    assert "showUrl('Session URL:', url)" in response.text
+    assert "showUrl('Session URL:', d.url)" in response.text
+    assert "location.replace(url)" in response.text
+    assert "fetch(url" not in response.text
+    assert "method:'HEAD'" not in response.text

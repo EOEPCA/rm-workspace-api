@@ -14,6 +14,7 @@ from typing import Any
 
 import kubernetes.client
 import kubernetes.client.rest
+import requests
 from fastapi import HTTPException, Path, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from kubernetes import client as k8s_client
@@ -1696,6 +1697,25 @@ async def delete_workspace(workspace_name: str = workspace_path_type) -> Respons
 
 POLL_INTERVAL_SECONDS = 10
 MIN_DISPLAY_SECONDS = 3
+SESSION_PROBE_TIMEOUT_SECONDS = 5
+
+
+def _session_probe_url(workspace_name: str, session_id: str) -> str:
+    return f"http://{workspace_name}-{session_id}.{workspace_name}.svc.cluster.local/"
+
+
+def _session_url_ready(url: str) -> bool:
+    try:
+        response = requests.head(url, allow_redirects=False, timeout=SESSION_PROBE_TIMEOUT_SECONDS)
+    except requests.RequestException as e:
+        logger.info("Session URL '%s' is not reachable yet: %s", url, e)
+        return False
+
+    if 500 <= response.status_code < 600:
+        logger.info("Session URL '%s' is not ready yet: status %s", url, response.status_code)
+        return False
+
+    return True
 
 
 @app.get(
@@ -1781,32 +1801,43 @@ async def get_workspace_session(
             "<!doctype html><meta charset='utf-8'>"
             "<title>Preparing session…</title>"
             "<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}"
-            "p{padding:1em 2em;border-radius:4px;background:#eee;}</style>"
-            "<p id='msg'>Preparing session, please wait…</p>"
+            "p{padding:1em 2em;border-radius:4px;background:#eee;}"
+            "small{display:block;margin-top:.75em;color:#555;word-break:break-all;}</style>"
+            "<p><span id='msg'>Preparing session, please wait…</span><small id='checked-url'></small></p>"
             "<script>"
             f"const waitBefore={MIN_DISPLAY_SECONDS};"
             "const pollInterval=10000;"
             "function isHttp(u){try{const x=new URL(u);return x.protocol==='http:'||x.protocol==='https:';}catch{return false;}}"
             "function api(){const b=location.href.split('#')[0];const s=b.includes('?')?'&':'?';return b+s+'format=json&ts='+Date.now();}"
-            "function checkUrl(url) {"
-            "  document.getElementById('msg').textContent='Session is starting. Verifying...';"
-            "  fetch(url, {method:'HEAD', cache:'no-store'})"
-            "    .then(r => {"
-            "      if (!r.ok) throw new Error('status:' + r.status);"
-            "      document.getElementById('msg').innerHTML = `Session ready. Redirecting to <a href='${url}'>${url}</a>…`;"
-            "      setTimeout(() => location.replace(url), waitBefore * 1000);"
-            "    })"
-            "    .catch(err => {"
-            "      document.getElementById('msg').textContent='Session not ready yet. Will re-check shortly...';"
-            "      setTimeout(check, pollInterval);"
-            "    });"
+            "function showUrl(label,url){"
+            "  const el=document.getElementById('checked-url');"
+            "  const link=document.createElement('a');"
+            "  link.href=url;"
+            "  link.textContent=url;"
+            "  el.textContent=label+' ';"
+            "  el.appendChild(link);"
+            "}"
+            "function redirect(url) {"
+            "  const msg=document.getElementById('msg');"
+            "  const link=document.createElement('a');"
+            "  link.href=url;"
+            "  link.textContent=url;"
+            "  showUrl('Session URL:', url);"
+            "  msg.textContent='Session ready. Redirecting to ';"
+            "  msg.appendChild(link);"
+            "  msg.append('...');"
+            "  setTimeout(() => location.replace(url), waitBefore * 1000);"
             "}"
             "function check() {"
-            "  fetch(api(),{headers:{'Accept':'application/json','Cache-Control':'no-store'},cache:'no-store'})"
-            "    .then(r => r.status === 200 ? r.json() : Promise.reject(new Error('status:'+r.status)))"
-            "    .then(d => {"
-            "       if(d && d.url && isHttp(d.url)) { checkUrl(d.url); }"
-            "       else { throw new Error('no-url'); }"
+            "  const apiUrl=api();"
+            "  showUrl('Checking:', apiUrl);"
+            "  fetch(apiUrl,{headers:{'Accept':'application/json','Cache-Control':'no-store'},cache:'no-store'})"
+            "    .then(r => r.json().then(d => ({status:r.status,d})))"
+            "    .then(x => {"
+            "       const d=x.d;"
+            "       if(x.status === 200 && d && d.url && isHttp(d.url)) { redirect(d.url); }"
+            "       if(d && d.url && isHttp(d.url)) { showUrl('Session URL:', d.url); }"
+            "       throw new Error('status:'+x.status);"
             "    })"
             "    .catch(e => {"
             "       document.getElementById('msg').textContent='Session not ready yet. Retrying...';"
@@ -1818,14 +1849,17 @@ async def get_workspace_session(
         )
         return HTMLResponse(html, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
 
-    if url:
+    if url and _session_url_ready(_session_probe_url(workspace_name, str(session_id))):
         return JSONResponse(
             {"url": url},
             status_code=HTTPStatus.OK,
             headers={"Cache-Control": "no-store"},
         )
+    payload = {"status": "starting"}
+    if url:
+        payload["url"] = str(url)
     return JSONResponse(
-        {"status": "starting"},
+        payload,
         status_code=HTTPStatus.ACCEPTED,
         headers={
             "Retry-After": str(POLL_INTERVAL_SECONDS),
