@@ -12,6 +12,7 @@ function ensureViewPermissions(perms: UserPermission[]): UserPermission[] {
   if (set.has('MANAGE_BUCKETS')) set.add('VIEW_BUCKETS')
   if (set.has('MANAGE_MEMBERS')) set.add('VIEW_MEMBERS')
   if (set.has('MANAGE_STORES')) set.add('VIEW_STORES')
+  if (set.has('MANAGE_SESSIONS')) set.add('VIEW_SESSIONS')
 
   return Array.from(set)
 }
@@ -62,6 +63,12 @@ export const useUserStore = defineStore('user', {
     },
     canManageStores(): boolean {
       return this.permissions.includes('MANAGE_STORES')
+    },
+    canViewSessions(): boolean {
+      return this.permissions.includes('VIEW_SESSIONS')
+    },
+    canManageSessions(): boolean {
+      return this.permissions.includes('MANAGE_SESSIONS')
     },
   },
 

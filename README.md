@@ -57,7 +57,7 @@ There are three modes that define how the API initializes the default Datalab se
 - **On Demand (`SESSION_MODE=auto`)** — The API declares the default Datalab session with state `stopped`. The Workspace UI exposes a Datalab link that starts the session by patching it to `started` when a team needs access. Operators can define external policies for automatic shutdowns of sessions (for example, every day at 8 p.m. or every Friday night). When a team needs access again, they can relaunch the session via the Datalab link in the Workspace UI.
 
 **Note:**
-At the moment, there is only one (“default”) session per team. Operators can manually start additional sessions via the corresponding `Datalab` Custom Resource in the cluster, but multi-session support per team is not yet officially available and is considered experimental.
+The Workspace UI can manage multiple sessions per team. By default, up to three sessions may be declared; operators can change this with `MAX_SESSIONS`.
 
 ## Table of Contents
 
@@ -272,6 +272,7 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | `PROVIDER_ENVIRONMENT` | `datalab` | EnvironmentConfig name selected for new provider-storage and provider-datalab XRs. The API writes this value to `storages.pkg.internal/environment` on `Storage` and `datalabs.pkg.internal/environment` on `Datalab`. |
 | `USE_VCLUSTER` | `false` |  Whether to provision an isolated vcluster for each datalab session (`true`) or run in separate namespace on host cluster (`false`). |
 | `SESSION_MODE` | `on` | Initial default-session mode for newly created Datalabs: `on` declares it as `started`, `auto` declares it as `stopped` for UI launch, and `off` does not declare it. |
+| `MAX_SESSIONS` | `3` | Maximum number of Datalab sessions that can be declared for a workspace. |
 | `DISABLE_DOCKER_REGISTRY` | `false` | By default, each datalab gets an in-session Docker registry. |
 | `DISABLE_STORES` | `false` | Disable creation and display of all Datalab store types. |
 | `DISABLED_STORE_TYPES` |  | Comma- or semicolon-separated store types to disable even when their backing CRDs are installed. Accepted aliases include `postgres`, `qdrant`, `redis`, and `mongodb`. |

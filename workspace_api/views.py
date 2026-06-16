@@ -27,6 +27,7 @@ from slugify import slugify
 from workspace_api import app, config, templates
 
 from .models import (
+    SESSION_NAME_PATTERN,
     Bucket,
     BucketAccessRequest,
     BucketLifecycleRule,
@@ -37,6 +38,10 @@ from .models import (
     Datalab,
     Membership,
     MembershipRole,
+    Session,
+    SessionCreate,
+    SessionState,
+    SessionStateUpdate,
     Storage,
     Store,
     StoreType,
@@ -63,6 +68,20 @@ def _provider_environment() -> str:
 
 def _provider_environment_annotations(annotation_key: str) -> dict[str, str]:
     return {annotation_key: _provider_environment()}
+
+
+DEFAULT_MAX_SESSIONS = 3
+
+
+def _max_sessions() -> int:
+    raw = getattr(config, "MAX_SESSIONS", str(DEFAULT_MAX_SESSIONS))
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid MAX_SESSIONS=%r; using %s.", raw, DEFAULT_MAX_SESSIONS)
+        return DEFAULT_MAX_SESSIONS
+
+    return max(0, value)
 
 
 def _workspace_name_pattern() -> str:
@@ -101,8 +120,8 @@ KIND_DATALAB = "Datalab"
 CRD_STORAGE = "storages.pkg.internal"
 CRD_DATALAB = "datalabs.pkg.internal"
 DEFAULT_SESSION_NAME = "default"
-SESSION_STATE_STARTED = "started"
-SESSION_STATE_STOPPED = "stopped"
+SESSION_STATE_STARTED = SessionState.STARTED.value
+SESSION_STATE_STOPPED = SessionState.STOPPED.value
 STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
 DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
 STORE_TYPE_CRDS = {
@@ -254,6 +273,22 @@ def _as_bool(v: Any) -> bool:
     return s in {"true", "1", "yes", "y", "on"}
 
 
+def _workspace_permissions(request: Request, workspace_name: str) -> set[UserPermission]:
+    user_ctx = request.state.user
+
+    workspace_perms = set()
+    if "*" in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"]["*"]
+    if workspace_name in user_ctx["workspaces"]:
+        workspace_perms |= user_ctx["workspaces"][workspace_name]
+    return workspace_perms
+
+
+def _require_workspace_permission(request: Request, workspace_name: str, permission: UserPermission) -> None:
+    if permission not in _workspace_permissions(request, workspace_name):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+
 def _session_name(item: Any) -> str | None:
     if isinstance(item, str):
         return item.strip() or None
@@ -268,8 +303,8 @@ def _session_state(item: Any) -> str:
     return SESSION_STATE_STARTED
 
 
-def _session_item(name: str, state: str) -> dict[str, str]:
-    return {"name": name, "state": state}
+def _session_item(name: str, state: str | SessionState) -> dict[str, str]:
+    return {"name": name, "state": getattr(state, "value", state)}
 
 
 def _initial_sessions_for_mode(session_mode: str) -> list[dict[str, str]]:
@@ -302,9 +337,6 @@ def _session_index(sessions: Sequence[Any], session_id: str) -> int | None:
 
 
 def _datalab_declares_session(workspace_name: str, session_id: str) -> bool:
-    if session_id != DEFAULT_SESSION_NAME:
-        return False
-
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
     if datalab_api is None:
         return False
@@ -320,7 +352,7 @@ def _datalab_declares_session(workspace_name: str, session_id: str) -> bool:
     return _find_session(_session_declarations(spec), session_id) is not None
 
 
-def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[str, Any]]:
+def _session_state_patch(sessions: Sequence[Any], session_id: str, state: str | SessionState) -> list[dict[str, Any]]:
     index = _session_index(sessions, session_id)
     if index is None:
         return []
@@ -332,11 +364,69 @@ def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[
             {
                 "op": "replace" if "state" in session else "add",
                 "path": f"{path}/state",
-                "value": SESSION_STATE_STARTED,
+                "value": getattr(state, "value", state),
             }
         ]
 
-    return [{"op": "replace", "path": path, "value": _session_item(session_id, SESSION_STATE_STARTED)}]
+    return [{"op": "replace", "path": path, "value": _session_item(session_id, state)}]
+
+
+def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[str, Any]]:
+    return _session_state_patch(sessions, session_id, SESSION_STATE_STARTED)
+
+
+def _session_status_dict(datalab: Any) -> dict[str, Any]:
+    st = getattr(datalab, "status", None)
+    if st is None:
+        return {}
+    if isinstance(st, dict):
+        return st
+    if hasattr(st, "to_dict"):
+        return st.to_dict()
+    return {}
+
+
+def _session_status_payload(datalab: Any, session_id: str) -> dict[str, Any]:
+    sessions = _session_status_dict(datalab).get("sessions") or {}
+    if not isinstance(sessions, dict):
+        return {}
+    payload = sessions.get(session_id) or {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _sessions_from_datalab(datalab: Any) -> list[Session]:
+    spec = _to_spec_dict(datalab) or {}
+    declared_sessions = _session_declarations(spec)
+
+    sessions: list[Session] = []
+    seen: set[str] = set()
+    for item in declared_sessions:
+        name = _session_name(item)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+
+        state = _session_state(item)
+        if state not in {SESSION_STATE_STARTED, SESSION_STATE_STOPPED}:
+            state = SESSION_STATE_STARTED
+
+        payload = _session_status_payload(datalab, name)
+        runtime_state = (_clean_str(payload.get("state")) or state).lower()
+        url = _clean_str(payload.get("url"))
+
+        try:
+            sessions.append(
+                Session(
+                    name=name,
+                    state=state,
+                    url=url,
+                    ready=bool(url and runtime_state == SESSION_STATE_STARTED),
+                )
+            )
+        except ValueError as e:
+            logger.warning("Skipping invalid session declaration %r: %s", item, e)
+
+    return sessions
 
 
 def _get_first(*vals: Any) -> str | None:
@@ -1030,6 +1120,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     if StoreType.DOCUMENT in available_store_types:
         stores.extend(_stores_from_map(datalab_spec, "documentStores", StoreType.DOCUMENT, dl_created_at))
 
+    sessions = _sessions_from_datalab(datalab_cr) if datalab_cr is not None else []
+
     credentials: Credentials | None = None
     store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
     container_registry_credentials: ContainerRegistryCredentials | None = None
@@ -1102,6 +1194,8 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         available=datalab_api is not None,
         available_store_types=available_store_types,
         stores=stores,
+        sessions=sessions,
+        max_sessions=_max_sessions(),
         store_credentials=store_credentials,
         container_registry_credentials=container_registry_credentials,
     )
@@ -1126,6 +1220,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             setattr(datalab, "store_credentials", {}),  # type: ignore[func-returns-value]
             setattr(datalab, "container_registry_credentials", None),  # type: ignore[func-returns-value]
         ),
+        UserPermission.VIEW_SESSIONS: lambda: setattr(datalab, "sessions", []),
     }
 
     for permission, guard in permission_guards.items():
@@ -1213,7 +1308,7 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
         session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
         use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
         enable_registry = not _as_bool(getattr(config, "DISABLE_DOCKER_REGISTRY", "false"))
-        sessions = _initial_sessions_for_mode(session_mode)
+        sessions = _initial_sessions_for_mode(session_mode)[: _max_sessions()]
         datalab_spec: dict[str, Any] = {
             "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
             "secretName": workspace_name,
@@ -1293,10 +1388,12 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
 
         endpoints = []
-        if _datalab_declares_session(workspace_name, DEFAULT_SESSION_NAME):
-            datalab_path = f"/workspaces/{workspace_name}/sessions/{DEFAULT_SESSION_NAME}"
+        for session in ws.datalab.sessions:
+            if session.state != SessionState.STARTED:
+                continue
+            datalab_path = f"/workspaces/{workspace_name}/sessions/{session.name}"
             datalab_url = make_external_url(request, datalab_path)
-            endpoints.append({"id": "Datalab (default)", "url": datalab_url})
+            endpoints.append({"id": f"Datalab ({session.name})", "url": datalab_url})
 
         endpoints_data = _to_b64_json(endpoints)
 
@@ -1718,6 +1815,191 @@ def _session_url_ready(url: str) -> bool:
     return True
 
 
+def _get_datalab_for_sessions(workspace_name: str) -> tuple[Any, Any, dict[str, Any], list[Any]]:
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if datalab_api is None:
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail={
+                "error": "provider_datalab_not_installed",
+                "message": "Datalab CRD not present; cannot manage sessions.",
+            },
+        )
+
+    try:
+        datalab = datalab_api.get(name=workspace_name, namespace=current_namespace())
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
+        raise
+
+    spec = _to_spec_dict(datalab) or {}
+    return datalab_api, datalab, spec, _session_declarations(spec)
+
+
+def _session_create_patch(spec: dict[str, Any], session: SessionCreate) -> list[dict[str, Any]]:
+    item = _session_item(session.name, session.state)
+    if isinstance(spec.get("sessions"), list):
+        return [{"op": "add", "path": "/spec/sessions/-", "value": item}]
+
+    return [
+        {
+            "op": "replace" if "sessions" in spec else "add",
+            "path": "/spec/sessions",
+            "value": [item],
+        }
+    ]
+
+
+def _patch_datalab_sessions(datalab_api: Any, workspace_name: str, patch_body: list[dict[str, Any]]) -> None:
+    try:
+        datalab_api.patch(
+            name=workspace_name,
+            namespace=current_namespace(),
+            body=patch_body,
+            content_type="application/json-patch+json",
+        )
+    except ApiException as e:
+        msg = f"Patching sessions for workspace '{workspace_name}' failed"
+        logger.warning("%s: %s", msg, e)
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": msg, "exception": str(e)},
+        ) from e
+
+
+@app.get(
+    "/workspaces/{workspace_name}/sessions",
+    status_code=HTTPStatus.OK,
+    response_model=list[Session],
+    response_model_exclude_none=True,
+    tags=["Sessions"],
+    summary="List sessions for a workspace",
+    responses={
+        200: {"description": "Workspace sessions returned."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace not found."},
+        503: {"description": "Datalab CRD unavailable."},
+    },
+)
+async def list_workspace_sessions(request: Request, workspace_name: str = workspace_path_type) -> list[Session]:
+    _require_workspace_permission(request, workspace_name, UserPermission.VIEW_SESSIONS)
+    _, datalab, _, _ = _get_datalab_for_sessions(workspace_name)
+    return _sessions_from_datalab(datalab)
+
+
+@app.post(
+    "/workspaces/{workspace_name}/sessions",
+    status_code=HTTPStatus.CREATED,
+    response_model=Session,
+    response_model_exclude_none=True,
+    tags=["Sessions"],
+    summary="Add a session to a workspace",
+    responses={
+        201: {"description": "Session declared."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace not found."},
+        409: {"description": "Session already exists."},
+        503: {"description": "Datalab CRD unavailable."},
+    },
+)
+async def create_workspace_session(
+    request: Request,
+    data: SessionCreate,
+    workspace_name: str = workspace_path_type,
+) -> Session:
+    _require_workspace_permission(request, workspace_name, UserPermission.MANAGE_SESSIONS)
+    datalab_api, _, spec, spec_sessions = _get_datalab_for_sessions(workspace_name)
+
+    if _find_session(spec_sessions, data.name) is not None:
+        raise HTTPException(
+            status_code=HTTPStatus.CONFLICT,
+            detail={"error": "session_exists", "session": data.name},
+        )
+
+    max_sessions = _max_sessions()
+    if len(spec_sessions) >= max_sessions:
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={
+                "error": "session_limit_exceeded",
+                "max_sessions": max_sessions,
+            },
+        )
+
+    _patch_datalab_sessions(datalab_api, workspace_name, _session_create_patch(spec, data))
+    return Session(name=data.name, state=data.state)
+
+
+@app.patch(
+    "/workspaces/{workspace_name}/sessions/{session_id}",
+    status_code=HTTPStatus.ACCEPTED,
+    response_model=Session,
+    response_model_exclude_none=True,
+    tags=["Sessions"],
+    summary="Change a session state",
+    responses={
+        202: {"description": "Session state update accepted."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace/session not found."},
+        503: {"description": "Datalab CRD unavailable."},
+    },
+)
+async def update_workspace_session_state(
+    request: Request,
+    data: SessionStateUpdate,
+    workspace_name: str = workspace_path_type,
+    session_id: str = Path(..., pattern=SESSION_NAME_PATTERN, description="Session identifier"),
+) -> Session:
+    _require_workspace_permission(request, workspace_name, UserPermission.MANAGE_SESSIONS)
+    datalab_api, datalab, _, spec_sessions = _get_datalab_for_sessions(workspace_name)
+    patch_body = _session_state_patch(spec_sessions, session_id, data.state)
+    if not patch_body:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"error": "session_not_found", "session": session_id},
+        )
+
+    _patch_datalab_sessions(datalab_api, workspace_name, patch_body)
+    payload = _session_status_payload(datalab, session_id)
+    return Session(
+        name=session_id,
+        state=data.state,
+        url=_clean_str(payload.get("url")) if data.state == SessionState.STARTED else None,
+        ready=bool(data.state == SessionState.STARTED and _clean_str(payload.get("url"))),
+    )
+
+
+@app.delete(
+    "/workspaces/{workspace_name}/sessions/{session_id}",
+    status_code=HTTPStatus.NO_CONTENT,
+    tags=["Sessions"],
+    summary="Remove a session from a workspace",
+    responses={
+        204: {"description": "Session removed."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace/session not found."},
+        503: {"description": "Datalab CRD unavailable."},
+    },
+)
+async def delete_workspace_session(
+    request: Request,
+    workspace_name: str = workspace_path_type,
+    session_id: str = Path(..., pattern=SESSION_NAME_PATTERN, description="Session identifier"),
+) -> Response:
+    _require_workspace_permission(request, workspace_name, UserPermission.MANAGE_SESSIONS)
+    datalab_api, _, _, spec_sessions = _get_datalab_for_sessions(workspace_name)
+    index = _session_index(spec_sessions, session_id)
+    if index is None:
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"error": "session_not_found", "session": session_id},
+        )
+
+    _patch_datalab_sessions(datalab_api, workspace_name, [{"op": "remove", "path": f"/spec/sessions/{index}"}])
+    return Response(status_code=HTTPStatus.NO_CONTENT)
+
+
 @app.get(
     "/workspaces/{workspace_name}/sessions/{session_id}",
     status_code=HTTPStatus.OK,
@@ -1734,12 +2016,9 @@ def _session_url_ready(url: str) -> bool:
 async def get_workspace_session(
     request: Request,
     workspace_name: str = workspace_path_type,
-    session_id: str = Path(..., description="Session identifier"),
+    session_id: str = Path(..., pattern=SESSION_NAME_PATTERN, description="Session identifier"),
 ) -> Response:
-    if str(session_id) != DEFAULT_SESSION_NAME:
-        msg = f"Session enabling unavailable: session '{session_id}' is not managed"
-        logger.info(msg)
-        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
+    _require_workspace_permission(request, workspace_name, UserPermission.VIEW_SESSIONS)
 
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
     if datalab_api is None:

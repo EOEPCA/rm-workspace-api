@@ -10,11 +10,14 @@ export type UserPermission =
   | 'VIEW_BUCKET_CREDENTIALS'
   | 'VIEW_MEMBERS'
   | 'VIEW_STORES'
+  | 'VIEW_SESSIONS'
   | 'MANAGE_BUCKETS'
   | 'MANAGE_MEMBERS'
   | 'MANAGE_STORES'
+  | 'MANAGE_SESSIONS'
 
 export type StoreType = 'database' | 'vector' | 'cache' | 'document'
+export type SessionState = 'started' | 'stopped'
 
 export type BucketLifecycleRuleMode = 'Notify' | 'Delete'
 
@@ -41,6 +44,25 @@ export interface Store {
   creation_timestamp?: string | undefined
   isNew?: boolean
   isPending?: boolean
+}
+
+export interface WorkspaceSession {
+  id?: string
+  name: string
+  state: SessionState
+  url?: string | undefined
+  ready?: boolean
+  isNew?: boolean
+  isPending?: boolean
+}
+
+export interface SessionCreate {
+  name: string
+  state: SessionState
+}
+
+export interface SessionStateUpdate {
+  state: SessionState
 }
 
 export interface Bucket {
@@ -72,6 +94,8 @@ export interface Datalab {
   available?: boolean
   available_store_types?: StoreType[]
   stores?: Store[]
+  sessions?: WorkspaceSession[]
+  max_sessions?: number
   store_credentials?: Partial<Record<StoreType, Record<string, Record<string, unknown>>>>
   container_registry_credentials?: Record<string, unknown>
 }
@@ -110,6 +134,8 @@ export interface WorkspaceEditUI {
   datalab_available: boolean
   available_store_types: StoreType[]
   stores: Store[]
+  sessions: WorkspaceSession[]
+  max_sessions: number
 }
 
 export interface WorkspaceEdit {

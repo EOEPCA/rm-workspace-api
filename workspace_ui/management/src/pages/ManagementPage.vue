@@ -37,6 +37,7 @@
             <q-tab v-if="canSeeBuckets" name="buckets" label="Buckets"/>
             <q-tab v-if="canSeeBuckets" name="bucketRequests" label="Requested Buckets"/>
             <q-tab v-if="canSeeStores" name="stores" label="Stores"/>
+            <q-tab v-if="canSeeSessions" name="sessions" label="Sessions"/>
           </q-tabs>
 
           <q-separator/>
@@ -78,6 +79,15 @@
               />
             </q-tab-panel>
 
+            <q-tab-panel name="sessions">
+              <SessionsTab
+                :workspace-name="form.name"
+                :datalab-available="form.datalab_available"
+                :max-sessions="form.max_sessions"
+                v-model:sessions="form.sessions"
+              />
+            </q-tab-panel>
+
           </q-tab-panels>
 
         </q-form>
@@ -95,6 +105,7 @@ import BucketsTab from 'src/components/BucketsTab.vue'
 import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
 import {useUserStore} from 'stores/userStore'
 import StoresTab from 'components/StoresTab.vue'
+import SessionsTab from 'components/SessionsTab.vue'
 
 /** ---- State ---- */
 const message = ref<string>('')
@@ -108,15 +119,35 @@ const form = ref<WorkspaceEditUI>({
   datalab_available: false,
   available_store_types: [],
   stores: [],
+  sessions: [],
+  max_sessions: 3,
 })
 
 /** ---- Permission-driven computed flags ---- */
 const canSeeMembers = computed(() => userStore.canViewMembers)
 const canSeeBuckets = computed(() => userStore.canViewBuckets)
 const canSeeStores = computed(() => userStore.canViewStores && form.value.available_store_types.length > 0)
+const canSeeSessions = computed(() => userStore.canViewSessions)
 
 /** Tabs */
-const activeTab = ref<'members' | 'buckets' | 'bucketRequests' | 'stores'>('members')
+type ManagementTab = 'members' | 'buckets' | 'bucketRequests' | 'stores' | 'sessions'
+const activeTab = ref<ManagementTab>('members')
+
+function firstAvailableTab(): ManagementTab {
+  if (canSeeMembers.value) return 'members'
+  if (canSeeBuckets.value) return 'buckets'
+  if (canSeeStores.value) return 'stores'
+  if (canSeeSessions.value) return 'sessions'
+  return 'members'
+}
+
+function tabIsVisible(tab: ManagementTab) {
+  if (tab === 'members') return canSeeMembers.value
+  if (tab === 'buckets' || tab === 'bucketRequests') return canSeeBuckets.value
+  if (tab === 'stores') return canSeeStores.value
+  if (tab === 'sessions') return canSeeSessions.value
+  return false
+}
 
 /** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
@@ -145,14 +176,13 @@ const {loading} = useLuigiWorkspace({
           linked_buckets: ws.storage?.bucket_access_requests ?? [],
           datalab_available: ws.datalab?.available ?? false,
           available_store_types: ws.datalab?.available_store_types ?? [],
-          stores: (ws.datalab?.stores ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false}))
+          stores: (ws.datalab?.stores ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+          sessions: (ws.datalab?.sessions ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+          max_sessions: ws.datalab?.max_sessions ?? 3
         }
 
-        if (!canSeeMembers.value) {
-          activeTab.value = canSeeBuckets.value ? 'buckets' : 'stores'
-        }
-        if (activeTab.value === 'stores' && !canSeeStores.value) {
-          activeTab.value = canSeeBuckets.value ? 'buckets' : 'members'
+        if (!tabIsVisible(activeTab.value)) {
+          activeTab.value = firstAvailableTab()
         }
 
         // prepare number of requests and grants for buckets

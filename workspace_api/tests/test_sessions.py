@@ -13,8 +13,10 @@ from workspace_api import config, views
 from workspace_api.views import (
     _datalab_declares_session,
     _initial_sessions_for_mode,
+    _max_sessions,
     _session_probe_url,
     _session_start_patch,
+    _session_state_patch,
     _session_url_ready,
 )
 
@@ -44,6 +46,24 @@ def test_initial_sessions_use_provider_datalab_v1beta2_shape() -> None:
     assert _initial_sessions_for_mode("off") == []
 
 
+def test_max_sessions_defaults_to_three(monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "3")
+
+    assert _max_sessions() == 3
+
+
+def test_max_sessions_invalid_value_falls_back_to_three(monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "many")
+
+    assert _max_sessions() == 3
+
+
+def test_max_sessions_does_not_go_below_zero(monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "-1")
+
+    assert _max_sessions() == 0
+
+
 def test_session_start_patch_only_touches_default_session() -> None:
     patch = _session_start_patch(
         [
@@ -59,6 +79,12 @@ def test_session_start_patch_only_touches_default_session() -> None:
 def test_session_start_patch_replaces_legacy_default_session() -> None:
     assert _session_start_patch(["default"], "default") == [
         {"op": "replace", "path": "/spec/sessions/0", "value": {"name": "default", "state": "started"}}
+    ]
+
+
+def test_session_state_patch_stops_session() -> None:
+    assert _session_state_patch([{"name": "default", "state": "started"}], "default", "stopped") == [
+        {"op": "replace", "path": "/spec/sessions/0/state", "value": "stopped"}
     ]
 
 
@@ -170,6 +196,31 @@ def test_create_workspace_does_not_touch_sessions_in_off_mode(client: TestClient
     assert "sessions" not in created["spec"]
 
 
+def test_create_workspace_respects_zero_session_limit(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
+    monkeypatch.setattr(config, "SESSION_MODE", "on")
+    monkeypatch.setattr(config, "MAX_SESSIONS", "0")
+    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
+    monkeypatch.setattr(config, "DISABLE_DOCKER_REGISTRY", "false")
+
+    storage_api = mock.MagicMock()
+    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
+    datalab_api = mock.MagicMock()
+
+    monkeypatch.setattr(views, "_res_required", lambda *_args: storage_api)
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces",
+        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    created = datalab_api.create.call_args.args[0]
+    assert "sessions" not in created["spec"]
+
+
 def test_create_workspace_can_disable_docker_registry(client: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
     monkeypatch.setattr(config, "SESSION_MODE", "on")
@@ -233,9 +284,14 @@ def test_missing_session_request_does_not_create_default_session(client: TestCli
     datalab_api.patch.assert_not_called()
 
 
-def test_non_default_session_request_is_not_managed(client: TestClient, monkeypatch) -> None:
+def test_undeclared_non_default_session_request_is_not_managed(client: TestClient, monkeypatch) -> None:
     datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
+    datalab.status = {"sessions": {}}
+
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
         "/workspaces/workspace-a/sessions/other",
@@ -244,10 +300,9 @@ def test_non_default_session_request_is_not_managed(client: TestClient, monkeypa
 
     assert response.status_code == HTTPStatus.NOT_FOUND
     datalab_api.patch.assert_not_called()
-    datalab_api.get.assert_not_called()
 
 
-def test_default_session_menu_visibility_uses_declared_sessions(monkeypatch) -> None:
+def test_session_menu_visibility_uses_declared_sessions(monkeypatch) -> None:
     datalab_api = mock.MagicMock()
     datalab = mock.MagicMock()
     datalab.spec = {"sessions": [{"name": "default", "state": "stopped"}]}
@@ -259,7 +314,157 @@ def test_default_session_menu_visibility_uses_declared_sessions(monkeypatch) -> 
     datalab.spec = {"sessions": [{"name": "other", "state": "started"}]}
 
     assert _datalab_declares_session("workspace-a", "default") is False
-    assert _datalab_declares_session("workspace-a", "other") is False
+    assert _datalab_declares_session("workspace-a", "other") is True
+
+
+def test_non_default_session_request_starts_declared_session(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "analysis", "state": "stopped"}]}
+    datalab.status = {"sessions": {"analysis": {"state": "stopped"}}}
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
+
+    response = client.get(
+        "/workspaces/workspace-a/sessions/analysis",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.ACCEPTED
+    assert datalab_api.patch.call_args.kwargs["body"] == [{"op": "replace", "path": "/spec/sessions/0/state", "value": "started"}]
+
+
+def test_list_workspace_sessions_returns_declared_sessions(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}, {"name": "analysis", "state": "stopped"}]}
+    datalab.status = {"sessions": {"default": {"state": "started", "url": "https://session.example"}}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.get(
+        "/workspaces/workspace-a/sessions",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == [
+        {"name": "default", "state": "started", "url": "https://session.example", "ready": True},
+        {"name": "analysis", "state": "stopped", "ready": False},
+    ]
+
+
+def test_create_workspace_session_appends_session(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "3")
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
+    datalab.status = {"sessions": {}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces/workspace-a/sessions",
+        json={"name": "analysis", "state": "stopped"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    assert response.json() == {"name": "analysis", "state": "stopped", "ready": False}
+    assert datalab_api.patch.call_args.kwargs["body"] == [
+        {"op": "add", "path": "/spec/sessions/-", "value": {"name": "analysis", "state": "stopped"}}
+    ]
+    assert datalab_api.patch.call_args.kwargs["content_type"] == "application/json-patch+json"
+
+
+def test_create_workspace_session_initializes_sessions_field(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "3")
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {}
+    datalab.status = {"sessions": {}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces/workspace-a/sessions",
+        json={"name": "analysis"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    assert datalab_api.patch.call_args.kwargs["body"] == [
+        {"op": "add", "path": "/spec/sessions", "value": [{"name": "analysis", "state": "stopped"}]}
+    ]
+
+
+def test_create_workspace_session_rejects_session_limit(client: TestClient, monkeypatch) -> None:
+    monkeypatch.setattr(config, "MAX_SESSIONS", "3")
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {
+        "sessions": [
+            {"name": "default", "state": "started"},
+            {"name": "analysis", "state": "stopped"},
+            {"name": "debug", "state": "stopped"},
+        ]
+    }
+    datalab.status = {"sessions": {}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.post(
+        "/workspaces/workspace-a/sessions",
+        json={"name": "extra"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert response.json()["detail"] == {"error": "session_limit_exceeded", "max_sessions": 3}
+    datalab_api.patch.assert_not_called()
+
+
+def test_update_workspace_session_state_stops_session(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
+    datalab.status = {"sessions": {"default": {"state": "started", "url": "https://session.example"}}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.patch(
+        "/workspaces/workspace-a/sessions/default",
+        json={"state": "stopped"},
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.ACCEPTED
+    assert response.json() == {"name": "default", "state": "stopped", "ready": False}
+    assert datalab_api.patch.call_args.kwargs["body"] == [{"op": "replace", "path": "/spec/sessions/0/state", "value": "stopped"}]
+
+
+def test_delete_workspace_session_removes_session(client: TestClient, monkeypatch) -> None:
+    datalab_api = mock.MagicMock()
+    datalab = mock.MagicMock()
+    datalab.spec = {"sessions": [{"name": "default", "state": "started"}, {"name": "analysis", "state": "stopped"}]}
+    datalab.status = {"sessions": {}}
+    datalab_api.get.return_value = datalab
+
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+
+    response = client.delete(
+        "/workspaces/workspace-a/sessions/analysis",
+        headers=_auth_headers(),
+    )
+
+    assert response.status_code == HTTPStatus.NO_CONTENT
+    assert datalab_api.patch.call_args.kwargs["body"] == [{"op": "remove", "path": "/spec/sessions/1"}]
 
 
 def test_started_session_object_returns_status_url(client: TestClient, monkeypatch) -> None:

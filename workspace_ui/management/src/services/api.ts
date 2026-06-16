@@ -1,6 +1,16 @@
 import type {AxiosError, AxiosResponse} from 'axios'
 import axios from 'axios'
-import type {Bucket, BucketNew, Membership, Store, WorkspaceEdit} from 'src/models/models'
+import type {
+  Bucket,
+  BucketNew,
+  Membership,
+  SessionCreate,
+  SessionState,
+  SessionStateUpdate,
+  Store,
+  WorkspaceEdit,
+  WorkspaceSession
+} from 'src/models/models'
 
 export function saveMembers(workspaceName: string, memberships: Membership[], simulate = false) {
   const workspaceEdit = {
@@ -74,4 +84,48 @@ export function saveWorkspace(workspaceName: string, workspaceEdit: WorkspaceEdi
         reject(error)
       })
   })
+}
+
+export function createSession(workspaceName: string, session: SessionCreate) {
+  return new Promise<WorkspaceSession>((resolve, reject) => {
+    axios
+      .post(`/workspaces/${encodeURIComponent(workspaceName)}/sessions`, session)
+      .then((response: AxiosResponse<WorkspaceSession>) => {
+        resolve(response.data)
+      })
+      .catch((error: AxiosError) => {
+        reject(error)
+      })
+  })
+}
+
+export function updateSessionState(workspaceName: string, sessionName: string, state: SessionState) {
+  const payload = {state} as SessionStateUpdate
+  return new Promise<WorkspaceSession>((resolve, reject) => {
+    axios
+      .patch(`/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`, payload)
+      .then((response: AxiosResponse<WorkspaceSession>) => {
+        resolve(response.data)
+      })
+      .catch((error: AxiosError) => {
+        reject(error)
+      })
+  })
+}
+
+export function deleteSession(workspaceName: string, sessionName: string) {
+  return new Promise<void>((resolve, reject) => {
+    axios
+      .delete(`/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`)
+      .then(() => {
+        resolve()
+      })
+      .catch((error: AxiosError) => {
+        reject(error)
+      })
+  })
+}
+
+export function sessionOpenUrl(workspaceName: string, sessionName: string) {
+  return `/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`
 }

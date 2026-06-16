@@ -35,9 +35,11 @@ class UserPermission(str, enum.Enum):
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
     VIEW_STORES = "VIEW_STORES"
+    VIEW_SESSIONS = "VIEW_SESSIONS"
     MANAGE_MEMBERS = "MANAGE_MEMBERS"
     MANAGE_BUCKETS = "MANAGE_BUCKETS"
     MANAGE_STORES = "MANAGE_STORES"
+    MANAGE_SESSIONS = "MANAGE_SESSIONS"
 
 
 class StoreType(str, enum.Enum):
@@ -47,21 +49,32 @@ class StoreType(str, enum.Enum):
     DOCUMENT = "document"
 
 
+class SessionState(str, enum.Enum):
+    STARTED = "started"
+    STOPPED = "stopped"
+
+
+SESSION_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+
+
 ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
     "ws_access": {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
         UserPermission.VIEW_STORES,
+        UserPermission.VIEW_SESSIONS,
     },
     "ws_admin": {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
         UserPermission.VIEW_STORES,
+        UserPermission.VIEW_SESSIONS,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
         UserPermission.MANAGE_STORES,
+        UserPermission.MANAGE_SESSIONS,
     },
 }
 
@@ -129,6 +142,14 @@ def _validate_bucket_list(values: list[str]) -> list[str]:
     return [_validate_bucket_name(b) for b in values]
 
 
+def _validate_session_name(v: str) -> str:
+    v2 = _strip_required_string(v).lower()
+    if not re.fullmatch(SESSION_NAME_PATTERN, v2):
+        msg = "Invalid session name."
+        raise ValueError(msg)
+    return v2
+
+
 def _strip_required_string(v: Any) -> str:
     v2 = (v or "").strip()
     if not v2:
@@ -191,6 +212,52 @@ class Store(BaseModel):
     @classmethod
     def _ts_utc(cls, v: datetime | None) -> datetime | None:
         return _coerce_utc(v)
+
+
+class Session(BaseModel):
+    """A provider-datalab session declared for a workspace."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace session entry."})
+
+    name: str = Field(..., description="The session name.")
+    state: SessionState = Field(SessionState.STOPPED, description="Desired session lifecycle state.")
+    url: str | None = Field(None, description="Published URL when the session has one.")
+    ready: bool = Field(False, description="Whether the provider reports a usable session URL.")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: Any) -> str:
+        return _validate_session_name(v)
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def _strip_url(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        v2 = str(v).strip()
+        return v2 or None
+
+
+class SessionCreate(BaseModel):
+    """Payload for creating a session."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Session create request."})
+
+    name: str = Field(..., description="The session name.")
+    state: SessionState = Field(SessionState.STOPPED, description="Initial session state.")
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def _strip_name(cls, v: Any) -> str:
+        return _validate_session_name(v)
+
+
+class SessionStateUpdate(BaseModel):
+    """Payload for changing a session state."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Session state update request."})
+
+    state: SessionState = Field(..., description="Desired session state.")
 
 
 class BucketLifecycleRule(BaseModel):
@@ -527,6 +594,8 @@ class Datalab(BaseModel):
         description="Store types enabled by config and supported by the Datalab CRD.",
     )
     stores: list[Store] = Field(default_factory=list, description="Detailed store entries.")
+    sessions: list[Session] = Field(default_factory=list, description="Declared datalab sessions.")
+    max_sessions: int = Field(3, ge=0, description="Maximum number of sessions that can be declared.")
     store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = Field(
         default_factory=dict,
         description="Credentials grouped by store type and store name.",
@@ -556,6 +625,8 @@ class Workspace(BaseModel):
             available=False,
             available_store_types=[],
             stores=[],
+            sessions=[],
+            max_sessions=3,
             store_credentials={},
             container_registry_credentials=None,
         ),
