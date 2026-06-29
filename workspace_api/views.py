@@ -3,6 +3,7 @@
 
 import base64
 import binascii
+import html
 import json
 import logging
 import re
@@ -50,6 +51,8 @@ from .models import (
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
+    WorkspaceListItem,
+    WorkspaceListSession,
     WorkspaceStatus,
 )
 
@@ -287,6 +290,17 @@ def _workspace_permissions(request: Request, workspace_name: str) -> set[UserPer
 def _require_workspace_permission(request: Request, workspace_name: str, permission: UserPermission) -> None:
     if permission not in _workspace_permissions(request, workspace_name):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+
+def _resource_name(obj: Any) -> str | None:
+    if isinstance(obj, dict):
+        metadata = obj.get("metadata") or {}
+        return _clean_str(metadata.get("name")) if isinstance(metadata, dict) else None
+
+    metadata = getattr(obj, "metadata", None)
+    if isinstance(metadata, dict):
+        return _clean_str(metadata.get("name"))
+    return _clean_str(getattr(metadata, "name", None))
 
 
 def _session_name(item: Any) -> str | None:
@@ -1360,6 +1374,127 @@ def make_external_url(request: Request, path: str) -> str:
 
 
 @app.get(
+    "/workspaces",
+    status_code=HTTPStatus.OK,
+    response_model=list[WorkspaceListItem],
+    tags=["Workspaces"],
+    summary="List workspaces",
+    description="Returns actual workspace names visible to the authenticated caller.",
+    responses={
+        200: {"description": "Visible workspace names returned."},
+        502: {"description": "Backend failure while listing workspaces."},
+    },
+)
+async def list_workspaces(request: Request) -> Response:
+    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
+
+    try:
+        storages = storage_api.get(namespace=current_namespace())
+    except ApiException as e:
+        msg = "Listing workspaces failed"
+        logger.warning("%s: %s", msg, e)
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": msg, "exception": str(e)},
+        ) from e
+
+    workspace_names = sorted(
+        {
+            name
+            for item in (getattr(storages, "items", []) or [])
+            if (name := _resource_name(item)) and _workspace_permissions(request, name)
+        }
+    )
+
+    datalabs_by_name: dict[str, Any] = {}
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if datalab_api is not None:
+        try:
+            datalabs = datalab_api.get(namespace=current_namespace())
+            datalabs_by_name = {name: item for item in (getattr(datalabs, "items", []) or []) if (name := _resource_name(item))}
+        except Exception as e:
+            logger.warning("Listing Datalab sessions for workspace list failed: %s", e)
+
+    workspaces = [
+        WorkspaceListItem(
+            name=name,
+            url=make_external_url(request, f"/workspaces/{name}"),
+            sessions=[
+                WorkspaceListSession(
+                    name=session.name,
+                    url=make_external_url(request, f"/workspaces/{name}/sessions/{session.name}"),
+                )
+                for session in _sessions_from_datalab(datalabs_by_name[name])
+                if UserPermission.VIEW_SESSIONS in _workspace_permissions(request, name) and session.state == SessionState.STARTED
+            ]
+            if name in datalabs_by_name
+            else [],
+        )
+        for name in workspace_names
+    ]
+
+    accept_header = request.headers.get("accept", "").lower()
+    if "text/html" in accept_header:
+        open_icon = (
+            "<svg class='open-icon' viewBox='0 0 24 24' aria-hidden='true' focusable='false'>"
+            "<path d='M14 3h7v7h-2V6.41l-9.83 9.83-1.41-1.41L17.59 5H14V3z'/>"
+            "<path d='M5 5h7v2H7v12h12v-5h2v7H5V5z'/>"
+            "</svg>"
+        )
+        rows = "".join(
+            "<li>"
+            f"<a class='workspace-link' href='{html.escape(workspace.url, quote=True)}'>"
+            f"<span>{html.escape(workspace.name)}</span>{open_icon}"
+            "</a>"
+            + (
+                "<ul class='sessions'>"
+                + "".join(
+                    "<li>"
+                    f"<a href='{html.escape(session.url, quote=True)}'>"
+                    f"<span>Datalab ({html.escape(session.name)})</span>{open_icon}"
+                    "</a>"
+                    "</li>"
+                    for session in workspace.sessions
+                )
+                + "</ul>"
+                if workspace.sessions
+                else ""
+            )
+            + "</li>"
+            for workspace in workspaces
+        )
+        if not rows:
+            rows = "<li class='empty'>No workspaces available.</li>"
+
+        document = (
+            "<!doctype html><html lang='en'><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Workspaces</title>"
+            "<style>"
+            "body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;"
+            "background:#f7f7f5;color:#202124;}"
+            "main{max-width:760px;margin:0 auto;padding:48px 24px;}"
+            "h1{font-size:28px;line-height:1.2;margin:0 0 24px;}"
+            "ul.workspaces{list-style:none;margin:0;padding:0;border:1px solid #d7d9d6;border-radius:8px;background:#fff;overflow:hidden;}"
+            "ul.workspaces>li+li{border-top:1px solid #e6e8e5;}"
+            "a{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;"
+            "color:#174ea6;text-decoration:none;font-weight:500;}"
+            "a:hover{background:#f1f5fb;text-decoration:underline;}"
+            ".workspace-link{color:#174ea6;}"
+            ".sessions{list-style:none;margin:0 0 8px 28px;padding:0 16px 0 0;}"
+            ".sessions a{padding:8px 18px;color:#3c4043;font-size:14px;font-weight:450;}"
+            ".open-icon{width:20px;height:20px;flex:0 0 20px;fill:currentColor;}"
+            ".empty{padding:16px 18px;color:#5f6368;}"
+            "</style><main><h1>Workspaces</h1><ul class='workspaces'>"
+            f"{rows}"
+            "</ul></main></html>"
+        )
+        return HTMLResponse(document, headers={"Cache-Control": "no-store"})
+
+    return JSONResponse([workspace.model_dump(mode="json") for workspace in workspaces], status_code=HTTPStatus.OK)
+
+
+@app.get(
     "/workspaces/{workspace_name}",
     status_code=HTTPStatus.OK,
     response_model=Workspace,
@@ -1373,10 +1508,14 @@ def make_external_url(request: Request, path: str) -> str:
     ),
     responses={
         200: {"description": "Workspace details returned."},
+        403: {"description": "Forbidden."},
         404: {"description": "Workspace not found."},
     },
 )
 async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
+    if not _workspace_permissions(request, workspace_name):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
     ws = _combine_workspace(request, workspace_name)
 
     accept_header = request.headers.get("accept", "").lower()

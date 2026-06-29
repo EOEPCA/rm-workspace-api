@@ -65,6 +65,9 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
     },
+    "ws_api": {
+        UserPermission.VIEW_BUCKET_CREDENTIALS,
+    },
     "ws_admin": {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
@@ -646,6 +649,38 @@ class Workspace(BaseModel):
     @classmethod
     def _ts_utc_opt(cls, v: datetime | None) -> datetime | None:
         return _coerce_utc(v)
+
+
+class WorkspaceListSession(BaseModel):
+    """Session link entry for workspace lists."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace list session link entry."})
+
+    name: str = Field(..., description="Session name.")
+    url: str = Field(..., description="URL for opening the session through the workspace API.")
+
+    @field_validator("name", "url", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+
+class WorkspaceListItem(BaseModel):
+    """Workspace entry for workspace lists."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace list entry."})
+
+    name: str = Field(..., description="Workspace name.")
+    url: str = Field(..., description="URL for opening the workspace.")
+    sessions: list[WorkspaceListSession] = Field(
+        default_factory=list,
+        description="Started session links for this workspace.",
+    )
+
+    @field_validator("name", "url", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)
 
 
 class Endpoint(BaseModel):

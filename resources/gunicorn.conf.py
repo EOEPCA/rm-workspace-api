@@ -13,7 +13,7 @@ def child_exit(_server: Any, worker: Any) -> None:
 
 
 daemon = False
-bind = os.environ.get("GUNICORN_BIND", "0.0.0.0:8080")
+bind = os.environ.get("GUNICORN_BIND", "0.0.0.0:8181")
 _workers_default = str(2 * cpu_count())
 workers = int(os.environ.get("GUNICORN_WORKERS", _workers_default))
 worker_class = os.environ.get("GUNICORN_WORKER_CLASS", "uvicorn.workers.UvicornWorker")

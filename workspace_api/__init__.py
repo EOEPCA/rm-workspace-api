@@ -151,6 +151,8 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
                 workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_admin"])
             elif "ws_access" in roles:
                 workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_access"])
+            elif "ws_api" in roles:
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_api"])
 
         request.state.user = {
             "username": username,

@@ -21,6 +21,7 @@ def test_store_permissions_are_role_defaults() -> None:
     assert UserPermission.VIEW_STORES in ROLE_TO_PERMISSIONS["ws_access"]
     assert UserPermission.VIEW_STORES in ROLE_TO_PERMISSIONS["ws_admin"]
     assert UserPermission.MANAGE_STORES in ROLE_TO_PERMISSIONS["ws_admin"]
+    assert ROLE_TO_PERMISSIONS["ws_api"] == {UserPermission.VIEW_BUCKET_CREDENTIALS}
 
     permission_values = {permission.value for permission in UserPermission}
     assert "VIEW_DATABASES" not in permission_values

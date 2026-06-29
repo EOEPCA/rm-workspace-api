@@ -125,10 +125,10 @@ The Workspace UI can manage multiple sessions per team. By default, up to three 
 ### Run backend only
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
-The API will be at <http://localhost:8080>.
+The API will be at <http://localhost:8181>.
 
 ### Run backend API and Frontend UI
 
@@ -145,10 +145,10 @@ npm run dev
 Then in another terminal, from the `workspace_api/` folder:
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
-Open `http://localhost:8080/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
+Open `http://localhost:8181/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
 
 #### B) Production mode (no dev server)
 
@@ -161,7 +161,7 @@ From the `workspace_ui/` folder:
 ```
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
 > The Docker image (below) builds both the API and the UI and copies `workspace_ui/dist/` into the container.
@@ -233,14 +233,23 @@ External roles are normalized into explicit permissions:
   - `VIEW_MEMBERS`
   - `VIEW_BUCKETS`
   - `VIEW_STORES`
+  - `VIEW_SESSIONS`
+
+- **`ws_api`**
+  - `VIEW_BUCKET_CREDENTIALS`
 
 - **`ws_admin`**
-  - all of the above, plus:
+  - all `ws_access` permissions, plus:
   - `MANAGE_MEMBERS`
   - `MANAGE_BUCKETS`
   - `MANAGE_STORES`
+  - `MANAGE_SESSIONS`
 
 Authorization decisions are based exclusively on these permissions, not on raw roles.
+
+The `ws_api` role is intended for workspace-local machine/API access, for example a Keycloak client-credentials token minted from a provider-datalab-generated confidential workspace client. It currently grants only bucket credential visibility and deliberately does not grant session, member, bucket, or store management permissions.
+
+The platform-wide `workspace-api` client remains separate: its `admin` role grants wildcard workspace administration.
 
 When `AUTH_MODE=no`, authentication is disabled. The backend injects a synthetic user context with username `Default` and wildcard workspace permissions granting full access.
 
@@ -257,6 +266,9 @@ The following JSON document is an example of claims that matches the expectation
     },
     "ws-bob": {
       "roles": ["ws_access"]
+    },
+    "ws-ci": {
+      "roles": ["ws_api"]
     }
   }
 }
@@ -314,7 +326,7 @@ Run it, e.g.
 
 ```bash
 docker run --rm \
-   -p 8080:8080 \
+   -p 8181:8181 \
    -e GUNICORN_WORKERS=2 \
    -e UI_MODE=ui \
    -e PREFIX_FOR_NAME=ws \

@@ -89,7 +89,7 @@ def test_session_state_patch_stops_session() -> None:
 
 
 def test_session_probe_url_uses_internal_session_service() -> None:
-    assert _session_probe_url("workspace-a", "default") == "http://workspace-a-default.workspace-a.svc.cluster.local/"
+    assert _session_probe_url("ws-alice", "default") == "http://ws-alice-default.ws-alice.svc.cluster.local/"
 
 
 def test_create_workspace_sends_started_session_object(client: TestClient, monkeypatch) -> None:
@@ -256,7 +256,7 @@ def test_session_request_starts_stopped_session_object(client: TestClient, monke
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         headers=_auth_headers(),
     )
 
@@ -276,7 +276,7 @@ def test_missing_session_request_does_not_create_default_session(client: TestCli
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         headers=_auth_headers(),
     )
 
@@ -294,7 +294,7 @@ def test_undeclared_non_default_session_request_is_not_managed(client: TestClien
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/other",
+        "/workspaces/ws-alice/sessions/other",
         headers=_auth_headers(),
     )
 
@@ -309,12 +309,12 @@ def test_session_menu_visibility_uses_declared_sessions(monkeypatch) -> None:
     datalab_api.get.return_value = datalab
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
-    assert _datalab_declares_session("workspace-a", "default") is True
+    assert _datalab_declares_session("ws-alice", "default") is True
 
     datalab.spec = {"sessions": [{"name": "other", "state": "started"}]}
 
-    assert _datalab_declares_session("workspace-a", "default") is False
-    assert _datalab_declares_session("workspace-a", "other") is True
+    assert _datalab_declares_session("ws-alice", "default") is False
+    assert _datalab_declares_session("ws-alice", "other") is True
 
 
 def test_non_default_session_request_starts_declared_session(client: TestClient, monkeypatch) -> None:
@@ -327,7 +327,7 @@ def test_non_default_session_request_starts_declared_session(client: TestClient,
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/analysis",
+        "/workspaces/ws-alice/sessions/analysis",
         headers=_auth_headers(),
     )
 
@@ -345,7 +345,7 @@ def test_list_workspace_sessions_returns_declared_sessions(client: TestClient, m
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions",
+        "/workspaces/ws-alice/sessions",
         headers=_auth_headers(),
     )
 
@@ -367,7 +367,7 @@ def test_create_workspace_session_appends_session(client: TestClient, monkeypatc
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.post(
-        "/workspaces/workspace-a/sessions",
+        "/workspaces/ws-alice/sessions",
         json={"name": "analysis", "state": "stopped"},
         headers=_auth_headers(),
     )
@@ -391,7 +391,7 @@ def test_create_workspace_session_initializes_sessions_field(client: TestClient,
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.post(
-        "/workspaces/workspace-a/sessions",
+        "/workspaces/ws-alice/sessions",
         json={"name": "analysis"},
         headers=_auth_headers(),
     )
@@ -419,7 +419,7 @@ def test_create_workspace_session_rejects_session_limit(client: TestClient, monk
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.post(
-        "/workspaces/workspace-a/sessions",
+        "/workspaces/ws-alice/sessions",
         json={"name": "extra"},
         headers=_auth_headers(),
     )
@@ -439,7 +439,7 @@ def test_update_workspace_session_state_stops_session(client: TestClient, monkey
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.patch(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         json={"state": "stopped"},
         headers=_auth_headers(),
     )
@@ -459,7 +459,7 @@ def test_delete_workspace_session_removes_session(client: TestClient, monkeypatc
     monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
 
     response = client.delete(
-        "/workspaces/workspace-a/sessions/analysis",
+        "/workspaces/ws-alice/sessions/analysis",
         headers=_auth_headers(),
     )
 
@@ -479,7 +479,7 @@ def test_started_session_object_returns_status_url(client: TestClient, monkeypat
     monkeypatch.setattr(views, "_session_url_ready", lambda _url: True)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         headers=_auth_headers(),
     )
 
@@ -499,7 +499,7 @@ def test_started_session_keeps_waiting_when_status_url_returns_503(client: TestC
     monkeypatch.setattr(views, "_session_url_ready", lambda _url: False)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         headers=_auth_headers(),
     )
 
@@ -530,7 +530,7 @@ def test_html_session_waiter_redirects_without_cross_origin_probe(client: TestCl
     monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: datalab)
 
     response = client.get(
-        "/workspaces/workspace-a/sessions/default",
+        "/workspaces/ws-alice/sessions/default",
         headers={**_auth_headers(), "Accept": "text/html"},
     )
 

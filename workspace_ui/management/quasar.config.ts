@@ -104,7 +104,7 @@ export default defineConfig((ctx) => {
       proxy: {
         // proxy all requests starting with /workspaces
         '/workspaces': {
-          target: 'http://localhost:8080/workspaces',
+          target: 'http://localhost:8181/workspaces',
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/workspaces/, ''),
         },
