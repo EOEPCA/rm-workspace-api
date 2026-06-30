@@ -29,6 +29,7 @@ def _dev_token() -> str:
     header = enc({"alg": "none", "typ": "JWT"})
     payload = enc(
         {
+            "aud": "workspace-api",
             "preferred_username": "test",
             "resource_access": {"workspace-api": {"roles": ["admin"]}},
         }

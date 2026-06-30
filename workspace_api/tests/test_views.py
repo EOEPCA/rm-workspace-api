@@ -15,7 +15,10 @@ from kubernetes import client as k8s_client  # type: ignore[import-untyped]
 from workspace_api import views
 
 
-def _dev_token(resource_access: dict[str, dict[str, list[str]]] | None = None) -> str:
+def _dev_token(
+    resource_access: dict[str, dict[str, list[str]]] | None = None,
+    audience: str | list[str] | None = "workspace-api",
+) -> str:
     def enc(obj: object) -> str:
         raw = json.dumps(obj, separators=(",", ":")).encode()
         return base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -24,12 +27,14 @@ def _dev_token(resource_access: dict[str, dict[str, list[str]]] | None = None) -
         resource_access = {"workspace-api": {"roles": ["admin"]}}
 
     header = enc({"alg": "none", "typ": "JWT"})
-    payload = enc(
-        {
-            "preferred_username": "test",
-            "resource_access": resource_access,
-        }
-    )
+    claims: dict[str, object] = {
+        "preferred_username": "test",
+        "resource_access": resource_access,
+    }
+    if audience is not None:
+        claims["aud"] = audience
+
+    payload = enc(claims)
     return f"{header}.{payload}."
 
 
@@ -69,6 +74,40 @@ def mock_secret() -> k8s_client.V1Secret:
 def test_get_workspace_rejects_invalid_names(client: TestClient) -> None:
     response = client.get("/workspaces/not_a_prefix", headers={"Authorization": f"Bearer {_dev_token()}"})
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_get_workspace_rejects_missing_audience(client: TestClient) -> None:
+    response = client.get(
+        "/workspaces/ws-alice",
+        headers={"Authorization": f"Bearer {_dev_token(audience=None)}"},
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json() == {"detail": "Invalid token audience"}
+
+
+def test_get_workspace_rejects_wrong_audience(client: TestClient) -> None:
+    response = client.get(
+        "/workspaces/ws-alice",
+        headers={"Authorization": f"Bearer {_dev_token(audience=['account'])}"},
+    )
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert response.json() == {"detail": "Invalid token audience"}
+
+
+def test_get_workspace_accepts_string_audience(client: TestClient) -> None:
+    token = _dev_token(
+        {"resource-catalogue": {"roles": ["records_editor"]}},
+        audience="workspace-api",
+    )
+
+    response = client.get(
+        "/workspaces/ws-alice",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
 
 
 def test_get_workspace_rejects_ungranted_workspace(client: TestClient) -> None:
