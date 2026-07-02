@@ -24,6 +24,7 @@ def _dev_token() -> str:
     header = enc({"alg": "none", "typ": "JWT"})
     payload = enc(
         {
+            "aud": "workspace-api",
             "preferred_username": "test",
             "resource_access": {"workspace-api": {"roles": ["admin"]}},
         }
@@ -78,10 +79,10 @@ def test_update_workspace_patches_bucket_lifecycle_rules(client: TestClient, mon
     storage_api = mock.MagicMock()
     storage_api.get.return_value = SimpleNamespace(
         spec={
-            "principal": "workspace-a",
+            "principal": "ws-alice",
             "buckets": [
                 {
-                    "bucketName": "workspace-a-data",
+                    "bucketName": "ws-alice-data",
                     "discoverable": True,
                     "lifecycleRules": [{"target": "old/*", "mode": "Notify", "minAge": "1d"}],
                 }
@@ -95,13 +96,13 @@ def test_update_workspace_patches_bucket_lifecycle_rules(client: TestClient, mon
     monkeypatch.setattr(views, "_res_optional", lambda *_args: None)
 
     response = client.put(
-        "/workspaces/workspace-a",
+        "/workspaces/ws-alice",
         json={
             "add_memberships": [],
             "add_stores": [],
             "add_buckets": [
                 {
-                    "name": "workspace-a-data",
+                    "name": "ws-alice-data",
                     "discoverable": True,
                     "lifecycle_rules": [
                         {"target": "tmp/*", "mode": "Delete", "min_age": "2w"},
@@ -126,10 +127,10 @@ def test_update_workspace_keeps_lifecycle_rules_when_field_is_omitted(client: Te
     storage_api = mock.MagicMock()
     storage_api.get.return_value = SimpleNamespace(
         spec={
-            "principal": "workspace-a",
+            "principal": "ws-alice",
             "buckets": [
                 {
-                    "bucketName": "workspace-a-data",
+                    "bucketName": "ws-alice-data",
                     "discoverable": True,
                     "lifecycleRules": [{"target": "old/*", "mode": "Notify", "minAge": "1d"}],
                 }
@@ -143,11 +144,11 @@ def test_update_workspace_keeps_lifecycle_rules_when_field_is_omitted(client: Te
     monkeypatch.setattr(views, "_res_optional", lambda *_args: None)
 
     response = client.put(
-        "/workspaces/workspace-a",
+        "/workspaces/ws-alice",
         json={
             "add_memberships": [],
             "add_stores": [],
-            "add_buckets": [{"name": "workspace-a-data", "discoverable": True}],
+            "add_buckets": [{"name": "ws-alice-data", "discoverable": True}],
             "patch_bucket_access_requests": [],
         },
         headers=_auth_headers(),
@@ -160,7 +161,7 @@ def test_update_workspace_keeps_lifecycle_rules_when_field_is_omitted(client: Te
 
 def test_bucket_model_deduplicates_lifecycle_rules_by_target() -> None:
     bucket = Bucket(
-        name="workspace-a-data",
+        name="ws-alice-data",
         discoverable=False,
         lifecycle_rules=[
             BucketLifecycleRule(target="tmp/*", mode=BucketLifecycleRuleMode.DELETE, min_age="1d", at=None),

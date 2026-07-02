@@ -13,6 +13,7 @@ REGION = os.environ.get("REGION", os.environ.get("AWS_REGION", os.environ.get("A
 UI_MODE = os.environ.get("UI_MODE", "no")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "/ui/management")
 AUTH_MODE = os.environ.get("AUTH_MODE", "gateway")
+AUTH_AUDIENCE = os.environ.get("AUTH_AUDIENCE", "workspace-api")
 AUTH_DEBUG = os.environ.get("AUTH_DEBUG", "false")
 DISABLE_STORES = os.environ.get("DISABLE_STORES", "false")
 DISABLED_STORE_TYPES = os.environ.get("DISABLED_STORE_TYPES", os.environ.get("DISABLED_STORES", ""))

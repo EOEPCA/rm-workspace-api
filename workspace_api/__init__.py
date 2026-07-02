@@ -99,6 +99,15 @@ def debug(request: Request) -> dict[str, Any]:
     }
 
 
+def _token_has_audience(payload: dict[str, Any], expected_audience: str) -> bool:
+    aud = payload.get("aud")
+    if isinstance(aud, str):
+        return aud == expected_audience
+    if isinstance(aud, list):
+        return expected_audience in aud
+    return False
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     ignored_paths = ["/probe", "/metrics", "/docs", "/ui", "/openapi.json"]
@@ -134,6 +143,9 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
         except Exception:
             return JSONResponse(status_code=401, content={"detail": "Invalid access token"})
 
+        if not _token_has_audience(payload, config.AUTH_AUDIENCE):
+            return JSONResponse(status_code=401, content={"detail": "Invalid token audience"})
+
         username = payload.get("preferred_username")
 
         workspaces: dict[str, set[UserPermission]] = {}
@@ -151,6 +163,8 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
                 workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_admin"])
             elif "ws_access" in roles:
                 workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_access"])
+            elif "ws_api" in roles:
+                workspaces[resource] = set(ROLE_TO_PERMISSIONS["ws_api"])
 
         request.state.user = {
             "username": username,

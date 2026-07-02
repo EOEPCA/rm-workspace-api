@@ -51,5 +51,5 @@ RUN chown -R app:app "$prometheus_multiproc_dir"
 USER app
 WORKDIR /home/app
 
-EXPOSE 8080
+EXPOSE 8181
 CMD ["gunicorn", "--config", "/etc/gunicorn.conf.py"]

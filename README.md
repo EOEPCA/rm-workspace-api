@@ -125,10 +125,10 @@ The Workspace UI can manage multiple sessions per team. By default, up to three 
 ### Run backend only
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
-The API will be at <http://localhost:8080>.
+The API will be at <http://localhost:8181>.
 
 ### Run backend API and Frontend UI
 
@@ -145,10 +145,10 @@ npm run dev
 Then in another terminal, from the `workspace_api/` folder:
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" FRONTEND_URL="http://localhost:9000" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
-Open `http://localhost:8080/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
+Open `http://localhost:8181/workspaces/<YOUR_WS_NAME>` in a browser (sends `Accept: text/html`) to load the UI via the dev server.
 
 #### B) Production mode (no dev server)
 
@@ -161,7 +161,7 @@ From the `workspace_ui/` folder:
 ```
 
 ```bash
-KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8080 --log-level=info
+KUBECONFIG=~/.kube/config-eoepca-demo UI_MODE="ui" uv run uvicorn workspace_api:app --reload --host=0.0.0.0 --port=8181 --log-level=info
 ```
 
 > The Docker image (below) builds both the API and the UI and copies `workspace_ui/dist/` into the container.
@@ -217,14 +217,22 @@ Run via `uv run <tool>` from `workspace_api/`.
 
 ## Authentication and Authorization
 
-The Workspace API uses a **gateway-centric authentication model**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway validates the access token (signature, issuer, audience, expiration). Only authenticated requests are forwarded to the backend.
+The Workspace API uses a **gateway-centric authentication model**. Authentication is enforced upstream by an API gateway (for example APISIX) using OpenID Connect. The gateway validates the access token signature, issuer, expiration, and other token policy. Only authenticated requests are forwarded to the backend.
 
-The backend **does not re-validate tokens cryptographically**. Instead, it treats the token as trusted input and extracts a minimal identity and authorization context, which is attached to each request via `request.state.user`.
+The backend **does not re-validate tokens cryptographically**. It treats the forwarded token as trusted input, requires the decoded `aud` claim to contain `AUTH_AUDIENCE` (default `workspace-api`), and extracts a minimal identity and authorization context, which is attached to each request via `request.state.user`. It does not enforce `azp` or `client_id` itself.
 
-Internally, the API retains only:
+Backend JWT handling checks only the forwarded token shape and authorization claims:
 
-- the username (`preferred_username`)
-- a workspace-to-permissions mapping derived from the token’s `resource_access` claim
+- `Authorization` header exists and uses `Bearer <token>`.
+- JWT payload can be decoded.
+- `aud` is either a string equal to `AUTH_AUDIENCE` or a list containing it.
+- `resource_access` is mapped to permissions:
+  - `workspace-api:admin` -> wildcard admin
+  - `<workspace>:ws_admin` -> admin permissions
+  - `<workspace>:ws_access` -> read/session visibility permissions
+  - `<workspace>:ws_api` -> bucket credential visibility only
+
+The gateway remains responsible for signature validation, issuer validation, expiration/`nbf`, token policy, client trust, and OIDC/JWKS handling. The backend does not enforce `azp` or `client_id`; `resource_access` still says what the caller may do.
 
 External roles are normalized into explicit permissions:
 
@@ -233,23 +241,37 @@ External roles are normalized into explicit permissions:
   - `VIEW_MEMBERS`
   - `VIEW_BUCKETS`
   - `VIEW_STORES`
+  - `VIEW_SESSIONS`
+
+- **`ws_api`**
+  - `VIEW_BUCKET_CREDENTIALS`
 
 - **`ws_admin`**
-  - all of the above, plus:
+  - all `ws_access` permissions, plus:
   - `MANAGE_MEMBERS`
   - `MANAGE_BUCKETS`
   - `MANAGE_STORES`
+  - `MANAGE_SESSIONS`
 
 Authorization decisions are based exclusively on these permissions, not on raw roles.
 
+The `ws_api` role is intended for workspace-local machine/API access, for example a Keycloak client-credentials token minted from a provider-datalab-generated confidential workspace client. It currently grants only bucket credential visibility and deliberately does not grant session, member, bucket, or store management permissions.
+
+Workspace API does not evaluate Keycloak role-scope mappings. It only authorizes the roles present in the token's `resource_access` claim, so a client-credentials token is treated as machine/API access only when it carries `ws_api`.
+
+The platform-wide `workspace-api` client remains separate: its `admin` role grants wildcard workspace administration. A token requested through a workspace client such as `ws-bob` is accepted by the backend only when its audience is valid for Workspace API; a token intended only for the workspace runtime must not be forwarded to this backend.
+
 When `AUTH_MODE=no`, authentication is disabled. The backend injects a synthetic user context with username `Default` and wildcard workspace permissions granting full access.
 
-### Example Access Token Claims for Development
+### Example Access Token Claims
 
-The following JSON document is an example of claims that matches the expectations of the Workspace API. For development or testing purposes, this payload can be encoded as a JWT and passed via the `Authorization` header as a Bearer token.
+Human Workspace API/UI access normally uses a token requested through the `workspace-api` client. The token can contain workspace-local roles for the workspaces the user may access:
 
 ```json
 {
+  "aud": ["workspace-api"],
+  "azp": "workspace-api",
+  "sub": "user-id-alice",
   "preferred_username": "alice",
   "resource_access": {
     "ws-alice": {
@@ -257,10 +279,40 @@ The following JSON document is an example of claims that matches the expectation
     },
     "ws-bob": {
       "roles": ["ws_access"]
+    },
+    "ws-ci": {
+      "roles": ["ws_api"]
     }
   }
 }
 ```
+
+Workspace-local automation can use a client-credentials token requested through the confidential workspace client, provided the token audience is valid for Workspace API. The request authenticates the `ws-bob` client itself; `preferred_username` is added by Keycloak from the service-account user and is usually `service-account-ws-bob`.
+
+```bash
+curl -sS -X POST \
+  "https://<keycloak>/realms/<realm>/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "grant_type=client_credentials" \
+  --data-urlencode "client_id=ws-bob" \
+  --data-urlencode "client_secret=<client-secret>"
+```
+
+```json
+{
+  "aud": ["workspace-api"],
+  "azp": "ws-bob",
+  "sub": "<keycloak-service-account-user-id>",
+  "preferred_username": "service-account-ws-bob",
+  "resource_access": {
+    "ws-bob": {
+      "roles": ["ws_api"]
+    }
+  }
+}
+```
+
+For development or testing purposes, similar payloads can be encoded as JWTs and passed via the `Authorization` header as Bearer tokens when `AUTH_MODE=gateway`.
 
 ## Configuration
 
@@ -281,6 +333,7 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | `UI_MODE` | `no` | Set to `ui` to enable templated HTML shell and SPA embedding. |
 | `FRONTEND_URL` | `/ui/management` | Base path (prod) or absolute URL (dev server like `http://localhost:9000`) for the SPA. |
 | `AUTH_MODE` | `gateway` | Authentication mode `gateway` expects a validated `Authorization: Bearer <access_token>` header to be forwarded by an upstream gateway, `no` disables authentication entirely (for local development only). |
+| `AUTH_AUDIENCE` | `workspace-api` | Required JWT `aud` value when `AUTH_MODE=gateway`. The decoded `aud` may be a string or list, but it must contain this value. |
 | `AUTH_DEBUG` | `false` | Enable verbose authentication and workspace debug logging. |
 
 ### Store creation
@@ -314,7 +367,7 @@ Run it, e.g.
 
 ```bash
 docker run --rm \
-   -p 8080:8080 \
+   -p 8181:8181 \
    -e GUNICORN_WORKERS=2 \
    -e UI_MODE=ui \
    -e PREFIX_FOR_NAME=ws \
