@@ -115,6 +115,7 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
     if config.AUTH_MODE == "no":
         request.state.user = {
             "username": "Default",
+            "is_admin": True,
             "workspaces": {
                 "*": set(ROLE_TO_PERMISSIONS["ws_admin"]),
             },
@@ -150,12 +151,14 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
 
         workspaces: dict[str, set[UserPermission]] = {}
         resource_access = payload.get("resource_access", {})
+        is_admin = False
 
         for resource, data in resource_access.items():
             roles = data.get("roles", [])
 
             if resource == "workspace-api":
                 if "admin" in roles:
+                    is_admin = True
                     workspaces["*"] = set(ROLE_TO_PERMISSIONS["ws_admin"])
                 continue
 
@@ -168,6 +171,7 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
 
         request.state.user = {
             "username": username,
+            "is_admin": is_admin,
             "workspaces": workspaces,
         }
 

@@ -9,8 +9,10 @@ export type UserPermission =
   | 'VIEW_BUCKETS'
   | 'VIEW_BUCKET_CREDENTIALS'
   | 'VIEW_MEMBERS'
+  | 'VIEW_RESOURCE_USAGE'
   | 'VIEW_STORES'
   | 'VIEW_SESSIONS'
+  | 'ISSUE_TOKENS'
   | 'MANAGE_BUCKETS'
   | 'MANAGE_MEMBERS'
   | 'MANAGE_STORES'
@@ -89,6 +91,22 @@ export interface Storage {
   bucket_access_requests?: Bucket[]
 }
 
+export interface PersistentVolumeClaimStorage {
+  name: string
+  size: string
+}
+
+export interface ResourceStorageUsage {
+  quota?: string
+  requested: string
+  remaining?: string
+  persistent_volume_claims: PersistentVolumeClaimStorage[]
+}
+
+export interface WorkspaceResourceUsage {
+  storage: ResourceStorageUsage
+}
+
 export interface Datalab {
   memberships?: Membership[]
   available?: boolean
@@ -106,6 +124,7 @@ export interface Workspace {
   status: WorkspaceStatus
   storage?: Storage
   datalab?: Datalab
+  resource_usage?: WorkspaceResourceUsage
   user?: WorkspaceUser
 }
 

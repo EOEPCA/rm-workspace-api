@@ -34,8 +34,10 @@ class UserPermission(str, enum.Enum):
     VIEW_BUCKET_CREDENTIALS = "VIEW_BUCKET_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
+    VIEW_RESOURCE_USAGE = "VIEW_RESOURCE_USAGE"
     VIEW_STORES = "VIEW_STORES"
     VIEW_SESSIONS = "VIEW_SESSIONS"
+    ISSUE_TOKENS = "ISSUE_TOKENS"
     MANAGE_MEMBERS = "MANAGE_MEMBERS"
     MANAGE_BUCKETS = "MANAGE_BUCKETS"
     MANAGE_STORES = "MANAGE_STORES"
@@ -62,6 +64,7 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
+        UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
     },
@@ -72,8 +75,10 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_BUCKET_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
+        UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
+        UserPermission.ISSUE_TOKENS,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
         UserPermission.MANAGE_STORES,
@@ -585,6 +590,36 @@ class Storage(BaseModel):
         return out
 
 
+class PersistentVolumeClaimStorage(BaseModel):
+    """Storage request declared by a workspace PersistentVolumeClaim."""
+
+    name: str = Field(..., description="PersistentVolumeClaim name.")
+    size: str = Field(..., description="Requested storage as a Kubernetes quantity.")
+
+    @field_validator("name", "size", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+
+class ResourceStorageUsage(BaseModel):
+    """Workspace namespace storage quota and PersistentVolumeClaim requests."""
+
+    quota: str | None = Field(None, description="Effective requests.storage quota as a Kubernetes quantity.")
+    requested: str = Field(..., description="Sum of PVC storage requests as a Kubernetes quantity.")
+    remaining: str | None = Field(None, description="Quota minus summed PVC requests as a Kubernetes quantity.")
+    persistent_volume_claims: list[PersistentVolumeClaimStorage] = Field(
+        default_factory=list,
+        description="Workspace PersistentVolumeClaims and their storage requests.",
+    )
+
+
+class WorkspaceResourceUsage(BaseModel):
+    """Kubernetes resource usage associated with a workspace."""
+
+    storage: ResourceStorageUsage = Field(..., description="Persistent storage quota and requests.")
+
+
 class Datalab(BaseModel):
     """Datalab for a workspace."""
 
@@ -635,6 +670,10 @@ class Workspace(BaseModel):
         ),
         description="Datalab for memberships and sessions.",
     )
+    resource_usage: WorkspaceResourceUsage | None = Field(
+        None,
+        description="Kubernetes resource quota and request usage visible to the current user.",
+    )
     user: UserContext = Field(
         ...,
         description="User context with effective permissions for this workspace.",
@@ -681,6 +720,30 @@ class WorkspaceListItem(BaseModel):
     @classmethod
     def _strip_required(cls, v: Any) -> str:
         return _strip_required_string(v)
+
+
+class WorkspaceToken(BaseModel):
+    """OAuth access token brokered for workspace-local API access."""
+
+    model_config = ConfigDict(json_schema_extra={"description": "Workspace OAuth access token response."})
+
+    access_token: str = Field(..., description="Bearer access token issued by the configured authorization server.")
+    token_type: str = Field("Bearer", description="OAuth token type.")
+    expires_in: int | None = Field(None, ge=0, description="Token lifetime in seconds, when supplied by the issuer.")
+    scope: str | None = Field(None, description="Granted scope, when supplied by the issuer.")
+
+    @field_validator("access_token", "token_type", mode="before")
+    @classmethod
+    def _strip_required(cls, v: Any) -> str:
+        return _strip_required_string(v)
+
+    @field_validator("scope", mode="before")
+    @classmethod
+    def _strip_optional(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        v2 = str(v).strip()
+        return v2 or None
 
 
 class Endpoint(BaseModel):

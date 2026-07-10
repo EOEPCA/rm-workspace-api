@@ -17,7 +17,9 @@
                 "UI_MODE": "ui",
                 "SESSION_MODE": "auto",
                 "AUTH_MODE": "gateway",
-                "AUTH_DEBUG": "true"
+                "AUTH_DEBUG": "true",
+                "AUTH_AUDIENCE": "workspace-api",
+                "TOKEN_BROKER_TOKEN_ENDPOINT": "https://iam-auth.develop.eoepca.org/realms/eoepca/protocol/openid-connect/token"
             },
             "args": [
                 "workspace_api:app",
@@ -46,7 +48,9 @@
                 "UI_MODE": "ui",
                 "SESSION_MODE": "auto",
                 "AUTH_MODE": "gateway",
-                "AUTH_DEBUG": "true"
+                "AUTH_DEBUG": "true",
+                "AUTH_AUDIENCE": "workspace-api",
+                "TOKEN_BROKER_TOKEN_ENDPOINT": "https://keycloak.k.versioneer.at/realms/k2/protocol/openid-connect/token"
             },
             "args": [
                 "workspace_api:app",

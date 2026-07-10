@@ -42,7 +42,12 @@ rules:
     resources: ["customresourcedefinitions"]
     verbs: ["get"]
     resourceNames: ["storages.pkg.internal", "datalabs.pkg.internal"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims", "resourcequotas"]
+    verbs: ["list"]
 ```
+
+The `persistentvolumeclaims` and `resourcequotas` ClusterRole rule is optional. Without it, workspace details still load, but the API omits `resource_usage` and the UI hides the Persistent storage section.
 
 These permissions enable the API to **synchronize resource state** and **discover CRD schemas** while maintaining namespace isolation and least privilege.
 
@@ -240,6 +245,7 @@ External roles are normalized into explicit permissions:
   - `VIEW_BUCKET_CREDENTIALS`
   - `VIEW_MEMBERS`
   - `VIEW_BUCKETS`
+  - `VIEW_RESOURCE_USAGE`
   - `VIEW_STORES`
   - `VIEW_SESSIONS`
 
@@ -248,6 +254,7 @@ External roles are normalized into explicit permissions:
 
 - **`ws_admin`**
   - all `ws_access` permissions, plus:
+  - `ISSUE_TOKENS`
   - `MANAGE_MEMBERS`
   - `MANAGE_BUCKETS`
   - `MANAGE_STORES`
@@ -260,6 +267,23 @@ The `ws_api` role is intended for workspace-local machine/API access, for exampl
 Workspace API does not evaluate Keycloak role-scope mappings. It only authorizes the roles present in the token's `resource_access` claim, so a client-credentials token is treated as machine/API access only when it carries `ws_api`.
 
 The platform-wide `workspace-api` client remains separate: its `admin` role grants wildcard workspace administration. A token requested through a workspace client such as `ws-bob` is accepted by the backend only when its audience is valid for Workspace API; a token intended only for the workspace runtime must not be forwarded to this backend.
+
+### Workspace Token Issuing
+
+`GET /workspaces/{workspace_name}/token` exchanges the workspace OAuth client secret from the Kubernetes secret `{workspace_name}-oauth-client` for a client-credentials access token. The caller must present a token whose `aud` contains `AUTH_AUDIENCE` and either be global admin or have `ws_admin` permissions for the requested workspace.
+
+The broker requests a client-credentials token for `AUTH_AUDIENCE` from `TOKEN_BROKER_TOKEN_ENDPOINT`. It returns only `access_token`, `token_type`, `expires_in`, and `scope` with `Cache-Control: no-store`, and rejects tokens that lack the expected audience or the requested workspace's `ws_api` role.
+
+The expected secret can contain direct keys:
+
+```json
+{
+  "clientID": "ws-bob",
+  "clientSecret": "<client-secret>"
+}
+```
+
+or one JSON-encoded secret value with those fields. Accepted client id keys are `clientID`, `client_id`, and `CLIENT_ID`; accepted client secret keys are `clientSecret`, `client_secret`, and `CLIENT_SECRET`. The broker authenticates with `client_secret_basic`.
 
 When `AUTH_MODE=no`, authentication is disabled. The backend injects a synthetic user context with username `Default` and wildcard workspace permissions granting full access.
 
@@ -335,6 +359,8 @@ Environment variables used by the backend (besides `KUBECONFIG` for Kubernetes a
 | `AUTH_MODE` | `gateway` | Authentication mode `gateway` expects a validated `Authorization: Bearer <access_token>` header to be forwarded by an upstream gateway, `no` disables authentication entirely (for local development only). |
 | `AUTH_AUDIENCE` | `workspace-api` | Required JWT `aud` value when `AUTH_MODE=gateway`. The decoded `aud` may be a string or list, but it must contain this value. |
 | `AUTH_DEBUG` | `false` | Enable verbose authentication and workspace debug logging. |
+| `TOKEN_BROKER_TOKEN_ENDPOINT` |  | OAuth/OIDC token endpoint used by `GET /workspaces/{workspace_name}/token`. Required for the broker endpoint. |
+| `TOKEN_BROKER_TIMEOUT_SECONDS` | `10` | Timeout for the outbound token endpoint request. |
 
 ### Store creation
 
