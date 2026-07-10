@@ -52,6 +52,9 @@ export const useUserStore = defineStore('user', {
     canViewMembers(): boolean {
       return this.permissions.includes('VIEW_MEMBERS')
     },
+    canViewResourceUsage(): boolean {
+      return this.permissions.includes('VIEW_RESOURCE_USAGE')
+    },
     canManageMembers(): boolean {
       return this.permissions.includes('MANAGE_MEMBERS')
     },

@@ -11,8 +11,10 @@ from unittest import mock
 import pytest
 from fastapi.testclient import TestClient
 from kubernetes import client as k8s_client  # type: ignore[import-untyped]
+from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 from workspace_api import views
+from workspace_api.models import ROLE_TO_PERMISSIONS
 
 
 def _dev_token(
@@ -158,6 +160,11 @@ def test_get_workspace_ws_api_role_returns_only_bucket_credentials(
     monkeypatch.setattr(views, "_available_store_types", lambda _datalab_installed: [])
     monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
     monkeypatch.setattr(views, "fetch_secret", lambda *_args: secret)
+    monkeypatch.setattr(
+        views.k8s_client,
+        "CoreV1Api",
+        mock.MagicMock(side_effect=AssertionError("ws_api must not read workspace resource usage")),
+    )
     token = _dev_token({"ws-alice": {"roles": ["ws_api"]}})
 
     response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {token}"})
@@ -176,7 +183,106 @@ def test_get_workspace_ws_api_role_returns_only_bucket_credentials(
     assert data["datalab"]["memberships"] == []
     assert data["datalab"]["stores"] == []
     assert data["datalab"]["sessions"] == []
+    assert "resource_usage" not in data
     assert data["user"]["permissions"] == ["VIEW_BUCKET_CREDENTIALS"]
+
+
+def test_get_workspace_returns_storage_quota_pvcs_sum_and_remaining(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = SimpleNamespace(
+        metadata=SimpleNamespace(creationTimestamp=None, resourceVersion="1"),
+        spec={"principal": "ws-alice", "buckets": []},
+    )
+    datalab = SimpleNamespace(
+        metadata=SimpleNamespace(creationTimestamp=None),
+        spec={"users": ["alice"], "sessions": []},
+        status={},
+    )
+    datalab_api = mock.MagicMock()
+    datalab_api.get.return_value = datalab
+    core_api = mock.MagicMock()
+    core_api.list_namespaced_resource_quota.return_value = k8s_client.V1ResourceQuotaList(
+        items=[
+            k8s_client.V1ResourceQuota(
+                metadata=k8s_client.V1ObjectMeta(name="workspace-storage"),
+                status=k8s_client.V1ResourceQuotaStatus(
+                    hard={"requests.storage": "10Gi"},
+                    used={"requests.storage": "1536Mi"},
+                ),
+            )
+        ]
+    )
+    core_api.list_namespaced_persistent_volume_claim.return_value = k8s_client.V1PersistentVolumeClaimList(
+        items=[
+            k8s_client.V1PersistentVolumeClaim(
+                metadata=k8s_client.V1ObjectMeta(name="workspace-data"),
+                spec=k8s_client.V1PersistentVolumeClaimSpec(resources=k8s_client.V1VolumeResourceRequirements(requests={"storage": "1Gi"})),
+            ),
+            k8s_client.V1PersistentVolumeClaim(
+                metadata=k8s_client.V1ObjectMeta(name="cache"),
+                spec=k8s_client.V1PersistentVolumeClaimSpec(
+                    resources=k8s_client.V1VolumeResourceRequirements(requests={"storage": "512Mi"})
+                ),
+            ),
+        ]
+    )
+
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: storage)
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_available_store_types", lambda _datalab_installed: [])
+    monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
+    monkeypatch.setattr(views, "fetch_secret", lambda *_args: None)
+    monkeypatch.setattr(views.k8s_client, "CoreV1Api", lambda: core_api)
+
+    response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {_dev_token()}"})
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["resource_usage"] == {
+        "storage": {
+            "quota": "10Gi",
+            "requested": "1536Mi",
+            "remaining": "8704Mi",
+            "persistent_volume_claims": [
+                {"name": "cache", "size": "512Mi"},
+                {"name": "workspace-data", "size": "1Gi"},
+            ],
+        }
+    }
+    core_api.list_namespaced_resource_quota.assert_called_once_with(namespace="ws-alice")
+    core_api.list_namespaced_persistent_volume_claim.assert_called_once_with(namespace="ws-alice")
+
+
+def test_get_workspace_omits_resource_usage_when_kubernetes_access_is_forbidden(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    storage = SimpleNamespace(
+        metadata=SimpleNamespace(creationTimestamp=None, resourceVersion="1"),
+        spec={"principal": "ws-alice", "buckets": []},
+    )
+    datalab = SimpleNamespace(
+        metadata=SimpleNamespace(creationTimestamp=None),
+        spec={"users": ["alice"], "sessions": []},
+        status={},
+    )
+    datalab_api = mock.MagicMock()
+    datalab_api.get.return_value = datalab
+    core_api = mock.MagicMock()
+    core_api.list_namespaced_resource_quota.side_effect = ApiException(status=HTTPStatus.FORBIDDEN)
+
+    monkeypatch.setattr(views, "_get_cr", lambda *_args, **_kwargs: storage)
+    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
+    monkeypatch.setattr(views, "_available_store_types", lambda _datalab_installed: [])
+    monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
+    monkeypatch.setattr(views, "fetch_secret", lambda *_args: None)
+    monkeypatch.setattr(views.k8s_client, "CoreV1Api", lambda: core_api)
+
+    response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {_dev_token()}"})
+
+    assert response.status_code == HTTPStatus.OK
+    assert "resource_usage" not in response.json()
 
 
 def _storage_list(*names: str) -> SimpleNamespace:
@@ -345,3 +451,153 @@ def test_list_workspaces_filters_actual_workspaces_by_explicit_grants(
             "sessions": [],
         }
     ]
+
+
+def _encoded_secret_value(raw: str) -> str:
+    return base64.b64encode(raw.encode()).decode()
+
+
+def test_only_ws_admin_role_grants_issue_tokens_permission() -> None:
+    assert "ISSUE_TOKENS" in {permission.value for permission in ROLE_TO_PERMISSIONS["ws_admin"]}
+    assert "ISSUE_TOKENS" not in {permission.value for permission in ROLE_TO_PERMISSIONS["ws_access"]}
+    assert "ISSUE_TOKENS" not in {permission.value for permission in ROLE_TO_PERMISSIONS["ws_api"]}
+
+
+def test_workspace_token_allows_requested_workspace_admin_role(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(views.config, "TOKEN_BROKER_TOKEN_ENDPOINT", "")
+    token = _dev_token({"ws-bob": {"roles": ["ws_admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json()["detail"]["error"] == "token_broker_not_configured"
+
+
+def test_workspace_token_rejects_admin_of_different_workspace(client: TestClient) -> None:
+    token = _dev_token({"ws-alice": {"roles": ["ws_admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_workspace_token_exchanges_workspace_oauth_client_secret(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    requests_mock,
+) -> None:
+    monkeypatch.setattr(views.config, "TOKEN_BROKER_TOKEN_ENDPOINT", "http://idp.example/realms/main/protocol/openid-connect/token")
+    monkeypatch.setattr(views.config, "AUTH_AUDIENCE", "workspace-api")
+
+    oauth_secret = SimpleNamespace(
+        metadata=SimpleNamespace(name="ws-bob-oauth-client"),
+        data={
+            "clientID": _encoded_secret_value("ws-bob"),
+            "clientSecret": _encoded_secret_value("bob-secret"),
+        },
+    )
+    monkeypatch.setattr(views, "fetch_secret", lambda name, _namespace: oauth_secret if name == "ws-bob-oauth-client" else None)
+
+    issued_token = _dev_token({"ws-bob": {"roles": ["ws_api"]}}, audience="workspace-api")
+    token_request = requests_mock.post(
+        "http://idp.example/realms/main/protocol/openid-connect/token",
+        json={
+            "access_token": issued_token,
+            "token_type": "Bearer",
+            "expires_in": 300,
+            "refresh_token": "should-not-be-forwarded",
+        },
+    )
+    broker_token = _dev_token({"workspace-api": {"roles": ["admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {broker_token}"})
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+    assert response.json() == {
+        "access_token": issued_token,
+        "token_type": "Bearer",
+        "expires_in": 300,
+        "scope": None,
+    }
+    assert token_request.called
+    assert token_request.last_request is not None
+    basic = token_request.last_request.headers["Authorization"].removeprefix("Basic ")
+    assert base64.b64decode(basic).decode() == "ws-bob:bob-secret"
+    assert token_request.last_request.text == "grant_type=client_credentials&audience=workspace-api"
+
+
+def test_workspace_token_accepts_json_encoded_oauth_client_secret(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    requests_mock,
+) -> None:
+    monkeypatch.setattr(views.config, "TOKEN_BROKER_TOKEN_ENDPOINT", "https://idp.example/token")
+    monkeypatch.setattr(views.config, "AUTH_AUDIENCE", "workspace-api")
+
+    oauth_secret = SimpleNamespace(
+        metadata=SimpleNamespace(name="ws-bob-oauth-client"),
+        data={
+            "oauth-client.json": _encoded_secret_value(
+                json.dumps(
+                    {
+                        "clientID": "ws-bob",
+                        "clientSecret": "bob-secret",
+                    }
+                )
+            )
+        },
+    )
+    monkeypatch.setattr(views, "fetch_secret", lambda name, _namespace: oauth_secret if name == "ws-bob-oauth-client" else None)
+
+    issued_token = _dev_token({"ws-bob": {"roles": ["ws_api"]}}, audience="workspace-api")
+    requests_mock.post("https://idp.example/token", json={"access_token": issued_token, "token_type": "Bearer"})
+    broker_token = _dev_token({"workspace-api": {"roles": ["admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {broker_token}"})
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["access_token"] == issued_token
+
+
+def test_workspace_token_rejects_authorization_server_token_without_ws_api_role(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    requests_mock,
+) -> None:
+    monkeypatch.setattr(views.config, "TOKEN_BROKER_TOKEN_ENDPOINT", "https://idp.example/token")
+    monkeypatch.setattr(views.config, "AUTH_AUDIENCE", "workspace-api")
+
+    oauth_secret = SimpleNamespace(
+        metadata=SimpleNamespace(name="ws-bob-oauth-client"),
+        data={
+            "clientID": _encoded_secret_value("ws-bob"),
+            "clientSecret": _encoded_secret_value("bob-secret"),
+        },
+    )
+    monkeypatch.setattr(views, "fetch_secret", lambda *_args: oauth_secret)
+    issued_token = _dev_token({"ws-bob": {"roles": ["ws_access"]}}, audience="workspace-api")
+    requests_mock.post("https://idp.example/token", json={"access_token": issued_token, "token_type": "Bearer"})
+    broker_token = _dev_token({"workspace-api": {"roles": ["admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {broker_token}"})
+
+    assert response.status_code == HTTPStatus.BAD_GATEWAY
+    assert response.json()["detail"]["error"] == "token_validation_failed"
+
+
+def test_workspace_token_requires_configured_token_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(views.config, "TOKEN_BROKER_TOKEN_ENDPOINT", "")
+    broker_token = _dev_token({"workspace-api": {"roles": ["admin"]}})
+
+    response = client.get("/workspaces/ws-bob/token", headers={"Authorization": f"Bearer {broker_token}"})
+
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json()["detail"]["error"] == "token_broker_not_configured"

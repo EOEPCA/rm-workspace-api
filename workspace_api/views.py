@@ -10,6 +10,7 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 from http import HTTPStatus
 from typing import Any
 
@@ -22,6 +23,7 @@ from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic import DynamicClient
+from kubernetes.utils.quantity import parse_quantity
 from pydantic import SecretStr
 from slugify import slugify
 
@@ -39,6 +41,8 @@ from .models import (
     Datalab,
     Membership,
     MembershipRole,
+    PersistentVolumeClaimStorage,
+    ResourceStorageUsage,
     Session,
     SessionCreate,
     SessionState,
@@ -53,7 +57,9 @@ from .models import (
     WorkspaceEdit,
     WorkspaceListItem,
     WorkspaceListSession,
+    WorkspaceResourceUsage,
     WorkspaceStatus,
+    WorkspaceToken,
 )
 
 logger = logging.getLogger(__name__)
@@ -420,9 +426,10 @@ def _sessions_from_datalab(datalab: Any) -> list[Session]:
             continue
         seen.add(name)
 
-        state = _session_state(item)
-        if state not in {SESSION_STATE_STARTED, SESSION_STATE_STOPPED}:
-            state = SESSION_STATE_STARTED
+        state_value = _session_state(item)
+        if state_value not in {SESSION_STATE_STARTED, SESSION_STATE_STOPPED}:
+            state_value = SESSION_STATE_STARTED
+        state = SessionState(state_value)
 
         payload = _session_status_payload(datalab, name)
         runtime_state = (_clean_str(payload.get("state")) or state).lower()
@@ -1013,6 +1020,92 @@ def _store_credentials_from_envs(
     return store_credentials
 
 
+_BINARY_STORAGE_UNITS = (
+    ("Ei", 1024**6),
+    ("Pi", 1024**5),
+    ("Ti", 1024**4),
+    ("Gi", 1024**3),
+    ("Mi", 1024**2),
+    ("Ki", 1024),
+)
+
+
+def _parse_storage_quantity(raw: Any) -> tuple[str, Decimal] | None:
+    value = _clean_str(raw)
+    if value is None:
+        return None
+    try:
+        parsed = parse_quantity(value)
+    except ValueError:
+        logger.warning("Ignoring invalid Kubernetes storage quantity %r.", value)
+        return None
+    if parsed < 0:
+        logger.warning("Ignoring negative Kubernetes storage quantity %r.", value)
+        return None
+    return value, parsed
+
+
+def _format_storage_quantity(value: Decimal) -> str:
+    if value == 0:
+        return "0"
+
+    for suffix, factor in _BINARY_STORAGE_UNITS:
+        quantity = value / factor
+        if quantity == quantity.to_integral_value():
+            return f"{int(quantity)}{suffix}"
+
+    return format(value.normalize(), "f")
+
+
+def _workspace_resource_usage(workspace_name: str) -> WorkspaceResourceUsage | None:
+    core_api = k8s_client.CoreV1Api()
+    try:
+        resource_quotas = core_api.list_namespaced_resource_quota(namespace=workspace_name)
+        persistent_volume_claims = core_api.list_namespaced_persistent_volume_claim(namespace=workspace_name)
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return None
+        if e.status == HTTPStatus.FORBIDDEN:
+            logger.warning(
+                "Skipping resource usage for workspace '%s': Kubernetes access forbidden.",
+                workspace_name,
+            )
+            return None
+        raise
+
+    quota_candidates: list[tuple[str, Decimal]] = []
+    for resource_quota in resource_quotas.items:
+        status_hard = getattr(getattr(resource_quota, "status", None), "hard", None) or {}
+        spec_hard = getattr(getattr(resource_quota, "spec", None), "hard", None) or {}
+        parsed_quota = _parse_storage_quantity(status_hard.get("requests.storage") or spec_hard.get("requests.storage"))
+        if parsed_quota is not None:
+            quota_candidates.append(parsed_quota)
+
+    quota, quota_value = min(quota_candidates, key=lambda candidate: candidate[1]) if quota_candidates else (None, None)
+
+    requested_value = Decimal(0)
+    pvc_storage: list[PersistentVolumeClaimStorage] = []
+    for pvc in persistent_volume_claims.items:
+        name = _clean_str(getattr(getattr(pvc, "metadata", None), "name", None))
+        requests = getattr(getattr(getattr(pvc, "spec", None), "resources", None), "requests", None) or {}
+        parsed_size = _parse_storage_quantity(requests.get("storage"))
+        if name is None or parsed_size is None:
+            continue
+        size, size_value = parsed_size
+        requested_value += size_value
+        pvc_storage.append(PersistentVolumeClaimStorage(name=name, size=size))
+
+    remaining_value = max(Decimal(0), quota_value - requested_value) if quota_value is not None else None
+    return WorkspaceResourceUsage(
+        storage=ResourceStorageUsage(
+            quota=quota,
+            requested=_format_storage_quantity(requested_value),
+            remaining=_format_storage_quantity(remaining_value) if remaining_value is not None else None,
+            persistent_volume_claims=sorted(pvc_storage, key=lambda pvc: pvc.name),
+        )
+    )
+
+
 def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     storage_cr = _get_cr(API_STORAGE, KIND_STORAGE, workspace_name, required=True)
     if not storage_cr:
@@ -1023,6 +1116,9 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
                 "crd": CRD_STORAGE,
             },
         )
+
+    user_ctx = request.state.user
+    workspace_perms = _workspace_permissions(request, workspace_name)
 
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
     available_store_types = _available_store_types(datalab_api is not None)
@@ -1213,14 +1309,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         store_credentials=store_credentials,
         container_registry_credentials=container_registry_credentials,
     )
-
-    user_ctx = request.state.user
-
-    workspace_perms = set()
-    if "*" in user_ctx["workspaces"]:
-        workspace_perms |= user_ctx["workspaces"]["*"]
-    if workspace_name in user_ctx["workspaces"]:
-        workspace_perms |= user_ctx["workspaces"][workspace_name]
+    resource_usage = _workspace_resource_usage(workspace_name) if UserPermission.VIEW_RESOURCE_USAGE in workspace_perms else None
 
     permission_guards = {
         UserPermission.VIEW_BUCKET_CREDENTIALS: lambda: setattr(storage, "credentials", None),
@@ -1248,6 +1337,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         status=workspace_status,
         storage=storage,
         datalab=datalab,
+        resource_usage=resource_usage,
         user=UserContext(
             name=user_ctx["username"],
             permissions=sorted(workspace_perms),
@@ -1371,6 +1461,226 @@ def make_external_url(request: Request, path: str) -> str:
     if not path.startswith("/"):
         path = "/" + path
     return base + path
+
+
+def _broker_timeout_seconds() -> float:
+    raw = getattr(config, "TOKEN_BROKER_TIMEOUT_SECONDS", "10")
+    try:
+        return max(1.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        logger.warning("Invalid TOKEN_BROKER_TIMEOUT_SECONDS=%r; using 10 seconds.", raw)
+        return 10.0
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
+    try:
+        _header_b64, payload_b64, _sig = token.split(".")
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+    except (ValueError, TypeError, json.JSONDecodeError, binascii.Error, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _payload_has_audience(payload: dict[str, Any], expected_audience: str) -> bool:
+    aud = payload.get("aud")
+    if isinstance(aud, str):
+        return aud == expected_audience
+    if isinstance(aud, list):
+        return expected_audience in aud
+    return False
+
+
+def _secret_config_value(decoded: Mapping[str, str], keys: Sequence[str]) -> str | None:
+    for key in keys:
+        value = _clean_str(decoded.get(key))
+        if value:
+            return value
+    return None
+
+
+def _json_secret_config_value(decoded: Mapping[str, str], keys: Sequence[str]) -> str | None:
+    for value in decoded.values():
+        try:
+            obj = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        found = _secret_config_value({str(k): str(v) for k, v in obj.items() if v is not None}, keys)
+        if found:
+            return found
+    return None
+
+
+def _workspace_oauth_client_credentials(workspace_name: str) -> tuple[str, str]:
+    secret_name = f"{workspace_name}-oauth-client"
+    secret = fetch_secret(secret_name, current_namespace())
+    if not secret or not getattr(secret, "data", None):
+        raise HTTPException(
+            status_code=HTTPStatus.NOT_FOUND,
+            detail={"error": "oauth_client_secret_not_found", "secret": secret_name},
+        )
+
+    try:
+        decoded = _b64decode_secret_data(secret.data)
+    except (KeyError, TypeError, binascii.Error, UnicodeDecodeError) as e:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "oauth_client_secret_invalid", "secret": secret_name},
+        ) from e
+
+    client_id_keys = ("clientID", "client_id", "CLIENT_ID")
+    client_secret_keys = ("clientSecret", "client_secret", "CLIENT_SECRET")
+    client_id = _secret_config_value(decoded, client_id_keys) or _json_secret_config_value(decoded, client_id_keys)
+    client_secret = _secret_config_value(decoded, client_secret_keys) or _json_secret_config_value(decoded, client_secret_keys)
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "oauth_client_secret_missing_fields", "secret": secret_name},
+        )
+
+    return client_id, client_secret
+
+
+def _require_workspace_token_broker_role(request: Request, workspace_name: str) -> None:
+    user_ctx = request.state.user
+    can_issue_tokens = UserPermission.ISSUE_TOKENS in _workspace_permissions(request, workspace_name)
+    if not user_ctx.get("is_admin", False) and not can_issue_tokens:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+
+def _require_configured_token_endpoint() -> str:
+    token_endpoint = _clean_str(getattr(config, "TOKEN_BROKER_TOKEN_ENDPOINT", None))
+    if not token_endpoint:
+        raise HTTPException(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            detail={"error": "token_broker_not_configured", "config": "TOKEN_BROKER_TOKEN_ENDPOINT"},
+        )
+
+    return token_endpoint
+
+
+def _request_workspace_token(client_id: str, client_secret: str) -> dict[str, Any]:
+    token_endpoint = _require_configured_token_endpoint()
+    data = {
+        "grant_type": "client_credentials",
+        "audience": config.AUTH_AUDIENCE,
+    }
+
+    try:
+        response = requests.post(
+            token_endpoint,
+            data=data,
+            auth=(client_id, client_secret),
+            headers={"Accept": "application/json"},
+            timeout=_broker_timeout_seconds(),
+        )
+    except requests.RequestException as e:
+        logger.warning("Workspace token request failed: %s", e)
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_endpoint_unreachable"},
+        ) from e
+
+    if not response.ok:
+        logger.warning("Workspace token endpoint returned status %s.", response.status_code)
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_endpoint_error", "status": response.status_code},
+        )
+
+    try:
+        payload = response.json()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_endpoint_invalid_json"},
+        ) from e
+
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_endpoint_invalid_json"},
+        )
+
+    return payload
+
+
+def _validate_brokered_workspace_token(token_response: Mapping[str, Any], workspace_name: str) -> WorkspaceToken:
+    access_token = _clean_str(token_response.get("access_token"))
+    if not access_token:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_endpoint_missing_access_token"},
+        )
+
+    payload = _decode_jwt_payload(access_token)
+    expected_audience = config.AUTH_AUDIENCE
+    if payload is None or not _payload_has_audience(payload, expected_audience):
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_validation_failed", "message": "access token is not audience-restricted for Workspace API"},
+        )
+
+    resource_access = payload.get("resource_access") or {}
+    workspace_access = resource_access.get(workspace_name) if isinstance(resource_access, dict) else None
+    roles = workspace_access.get("roles") if isinstance(workspace_access, dict) else []
+    if not isinstance(roles, list) or "ws_api" not in roles:
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_validation_failed", "message": "access token is missing the workspace ws_api role"},
+        )
+
+    token = WorkspaceToken(
+        access_token=access_token,
+        token_type=_clean_str(token_response.get("token_type")) or "Bearer",
+        expires_in=token_response.get("expires_in"),
+        scope=token_response.get("scope"),
+    )
+
+    if token.token_type.lower() != "bearer":
+        raise HTTPException(
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "token_validation_failed", "message": "access token response is not a bearer token"},
+        )
+
+    return token
+
+
+@app.get(
+    "/workspaces/{workspace_name}/token",
+    status_code=HTTPStatus.OK,
+    response_model=WorkspaceToken,
+    tags=["Workspaces"],
+    summary="Broker a workspace OAuth access token",
+    description=(
+        "Admin-only broker endpoint that exchanges the workspace OAuth client secret for a short-lived access token "
+        "intended for Workspace API machine access."
+    ),
+    responses={
+        200: {"description": "Workspace access token returned."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace OAuth client secret not found."},
+        502: {"description": "Authorization server or token validation failure."},
+        503: {"description": "Token broker is not configured."},
+    },
+)
+async def get_workspace_token(request: Request, workspace_name: str = workspace_path_type) -> Response:
+    _require_workspace_token_broker_role(request, workspace_name)
+    _require_configured_token_endpoint()
+    client_id, client_secret = _workspace_oauth_client_credentials(workspace_name)
+    token_response = _request_workspace_token(client_id, client_secret)
+    token = _validate_brokered_workspace_token(token_response, workspace_name)
+    return JSONResponse(
+        token.model_dump(mode="json"),
+        status_code=HTTPStatus.OK,
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.get(
@@ -2067,7 +2377,7 @@ async def create_workspace_session(
         )
 
     _patch_datalab_sessions(datalab_api, workspace_name, _session_create_patch(spec, data))
-    return Session(name=data.name, state=data.state)
+    return Session(name=data.name, state=data.state, url=None, ready=False)
 
 
 @app.patch(

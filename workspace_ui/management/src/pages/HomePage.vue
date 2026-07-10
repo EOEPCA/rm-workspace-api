@@ -24,6 +24,48 @@
             Status: {{ ws.status }}
           </q-chip>
         </q-card-section>
+
+        <template v-if="canSeeResourceUsage && resourceStorage">
+          <q-separator/>
+          <q-list separator dense>
+            <q-expansion-item
+              dense
+              dense-toggle
+              expand-separator
+            >
+              <template v-slot:header>
+                <q-item-section>
+                  <div class="entity-line">
+                    <span class="entity-name">Persistent storage</span>
+                    <span class="storage-total">{{ storageRequestedLabel }}</span>
+                    <span class="text-grey-7">({{ storageQuotaLabel }})</span>
+                  </div>
+                </q-item-section>
+              </template>
+
+              <q-markup-table
+                flat
+                dense
+                separator="horizontal"
+                class="storage-usage-table"
+                aria-label="Persistent volume claims and requested sizes"
+              >
+                <tbody>
+                  <tr
+                    v-for="pvc in resourceStorage.persistent_volume_claims"
+                    :key="pvc.name"
+                  >
+                    <td>{{ pvc.name }}</td>
+                    <td class="text-right storage-value">{{ pvc.size }}</td>
+                  </tr>
+                  <tr v-if="resourceStorage.persistent_volume_claims.length === 0">
+                    <td colspan="2" class="text-grey-7">No persistent volume claims</td>
+                  </tr>
+                </tbody>
+              </q-markup-table>
+            </q-expansion-item>
+          </q-list>
+        </template>
       </q-card>
 
       <!-- Members -->
@@ -177,6 +219,7 @@
 import { computed, ref } from 'vue'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
 import type { BucketLifecycleRule, Store, Workspace } from 'src/models/models'
+import { formatStorageQuantity } from 'src/services/storageQuantity'
 import { useUserStore } from 'src/stores/userStore'
 
 /** ---- State ---- */
@@ -189,7 +232,15 @@ const userStore = useUserStore()
 const canSeeMembers = computed(() => userStore.canViewMembers)
 const canSeeBuckets = computed(() => userStore.canViewBuckets)
 const canSeeBucketCredentials = computed(() => userStore.canViewBucketCredentials)
+const canSeeResourceUsage = computed(() => userStore.canViewResourceUsage)
 const canSeeStores = computed(() => userStore.canViewStores)
+
+const resourceStorage = computed(() => ws.value?.resource_usage?.storage)
+const storageRequestedLabel = computed(() => formatStorageQuantity(resourceStorage.value?.requested ?? '0'))
+const storageQuotaLabel = computed(() => {
+  const quota = resourceStorage.value?.quota
+  return quota ? `${formatStorageQuantity(quota)} allowed` : 'No quota set'
+})
 
 const hasStorageCredentials = computed<boolean>(() => {
   if (!canSeeBucketCredentials.value) return false
@@ -352,5 +403,21 @@ const { loading } = useLuigiWorkspace({
 
 .lifecycle-rule {
   max-width: 18rem;
+}
+
+.storage-usage-table {
+  width: 100%;
+  border-top: 1px solid currentColor;
+}
+
+.storage-value {
+  width: 10rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.storage-total {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
 }
 </style>
