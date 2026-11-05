@@ -1,131 +1,58 @@
-import type {AxiosError, AxiosResponse} from 'axios'
 import axios from 'axios'
-import type {
-  Bucket,
-  BucketNew,
-  Membership,
-  SessionCreate,
-  SessionState,
-  SessionStateUpdate,
-  Store,
-  WorkspaceEdit,
-  WorkspaceSession
-} from 'src/models/models'
+import type { VClusterGroup, VClusterGroupCreate } from 'src/models/models'
+import type { Bucket, BucketNew, Membership, SessionCreate, SessionState, Store, Workspace, WorkspaceEdit, WorkspaceSession } from 'src/models/models'
 
-export function saveMembers(workspaceName: string, memberships: Membership[], simulate = false) {
-  const workspaceEdit = {
-    add_memberships: memberships,
-    add_stores: [],
-    add_buckets: [],
-    patch_bucket_access_requests: []
-  } as WorkspaceEdit
-
-  if (simulate) {
-    return Promise.resolve({})
-  }
-  return saveWorkspace(workspaceName, workspaceEdit)
+export function saveMembers(workspaceName: string, memberships: Membership[]) {
+  return saveWorkspace(workspaceName, { add_memberships: memberships })
 }
 
-export function saveStores(workspaceName: string, stores: Store[], simulate = false) {
-  const workspaceEdit = {
-    add_memberships: [],
-    add_stores: stores,
-    add_buckets: [],
-    patch_bucket_access_requests: []
-  } as WorkspaceEdit
-
-  if (simulate) {
-    return Promise.resolve({})
-  }
-  return saveWorkspace(workspaceName, workspaceEdit)
+export function saveStores(workspaceName: string, stores: Store[]) {
+  return saveWorkspace(workspaceName, {
+    add_stores: stores.map(({ name, type, storage, backup_storage }) => ({ name, type, storage, backup_storage })),
+  })
 }
 
 export function saveBuckets(workspaceName: string, buckets: BucketNew[]) {
-  const workspaceEdit = {
-    add_memberships: [],
-    add_stores: [],
-    add_buckets: buckets,
-    patch_bucket_access_requests: []
-  } as WorkspaceEdit
-
-  return saveWorkspace(workspaceName, workspaceEdit)
+  return saveWorkspace(workspaceName, { add_buckets: buckets })
 }
 
-export function saveRequestedBuckets(workspaceName: string, requestedBuckets: Bucket[]) {
-  const workspaceEdit = {
-    add_memberships: [],
-    add_stores: [],
-    add_buckets: [],
-    patch_bucket_access_requests: requestedBuckets
-  } as WorkspaceEdit
-
-  return saveWorkspace(workspaceName, workspaceEdit)
+export function saveBucketAccessRequests(workspaceName: string, requests: Bucket[]) {
+  return saveWorkspace(workspaceName, { patch_bucket_access_requests: requests })
 }
 
-export function saveBucketGrants(workspaceName: string, grantedBuckets: Bucket[]) {
-  const workspaceEdit = {
-    add_memberships: [],
-    add_stores: [],
-    add_buckets: [],
-    patch_bucket_access_requests: grantedBuckets
-  } as WorkspaceEdit
-
-  return saveWorkspace(workspaceName, workspaceEdit)
+async function saveWorkspace(workspaceName: string, update: Partial<WorkspaceEdit>) {
+  const response = await axios.put<{ name: string }>(`/workspaces/${encodeURIComponent(workspaceName)}`, update)
+  return response.data
 }
 
-export function saveWorkspace(workspaceName: string, workspaceEdit: WorkspaceEdit) {
-  return new Promise<object>((resolve, reject) => {
-    axios
-      .put(`/workspaces/${encodeURIComponent(workspaceName)}`, workspaceEdit)
-      .then((response: AxiosResponse<object>) => {
-        resolve(response.data)
-      })
-      .catch((error: AxiosError) => {
-        reject(error)
-      })
+export async function createSession(workspaceName: string, session: SessionCreate) {
+  const response = await axios.post<WorkspaceSession>(`/workspaces/${encodeURIComponent(workspaceName)}/sessions`, session)
+  return response.data
+}
+
+export async function updateSessionState(workspaceName: string, sessionName: string, state: SessionState) {
+  const response = await axios.patch<WorkspaceSession>(
+    `/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`,
+    { state },
+  )
+  return response.data
+}
+
+export async function deleteSession(workspaceName: string, sessionName: string): Promise<void> {
+  await axios.delete(`/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`)
+}
+
+export async function createVClusterGroup(workspaceName: string, instance: string, group: VClusterGroupCreate): Promise<VClusterGroup> {
+  const response = await axios.post<VClusterGroup>(
+    `/workspaces/${encodeURIComponent(workspaceName)}/vclusters/${encodeURIComponent(instance)}/groups`, group,
+  )
+  return response.data
+}
+
+export async function getWorkspaceForManagement(workspaceName: string): Promise<Workspace> {
+  const response = await axios.get<Workspace>(`/workspaces/${encodeURIComponent(workspaceName)}`, {
+    params: { view: 'management', resolve_connections: 'none' },
+    headers: { Accept: 'application/json' },
   })
-}
-
-export function createSession(workspaceName: string, session: SessionCreate) {
-  return new Promise<WorkspaceSession>((resolve, reject) => {
-    axios
-      .post(`/workspaces/${encodeURIComponent(workspaceName)}/sessions`, session)
-      .then((response: AxiosResponse<WorkspaceSession>) => {
-        resolve(response.data)
-      })
-      .catch((error: AxiosError) => {
-        reject(error)
-      })
-  })
-}
-
-export function updateSessionState(workspaceName: string, sessionName: string, state: SessionState) {
-  const payload = {state} as SessionStateUpdate
-  return new Promise<WorkspaceSession>((resolve, reject) => {
-    axios
-      .patch(`/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`, payload)
-      .then((response: AxiosResponse<WorkspaceSession>) => {
-        resolve(response.data)
-      })
-      .catch((error: AxiosError) => {
-        reject(error)
-      })
-  })
-}
-
-export function deleteSession(workspaceName: string, sessionName: string) {
-  return new Promise<void>((resolve, reject) => {
-    axios
-      .delete(`/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`)
-      .then(() => {
-        resolve()
-      })
-      .catch((error: AxiosError) => {
-        reject(error)
-      })
-  })
-}
-
-export function sessionOpenUrl(workspaceName: string, sessionName: string) {
-  return `/workspaces/${encodeURIComponent(workspaceName)}/sessions/${encodeURIComponent(sessionName)}`
+  return response.data
 }

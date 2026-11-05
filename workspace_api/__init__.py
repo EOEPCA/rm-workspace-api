@@ -30,31 +30,25 @@ app.add_route("/metrics", handle_metrics)
 
 
 def get_dist_dir() -> Path | None:
-    if (p := os.getenv("UI_DIST_DIR")) and Path(p).exists():
-        return Path(p)
-
-    dist_dir = Path(__file__).resolve().parents[1] / "workspace_ui" / "dist"
-    if dist_dir.exists():
-        return dist_dir
-    return None
+    configured = os.getenv("UI_DIST_DIR")
+    dist_dir = Path(configured) if configured else Path(__file__).resolve().parents[1] / "workspace_ui" / "dist"
+    return dist_dir if (dist_dir / "ui.html").is_file() and (dist_dir / "management" / "index.html").is_file() else None
 
 
-# Conditionally mount the built Vue app only if UI_MODE is "ui"
-# and we are not using a remote frontend dev server.
 if config.UI_MODE == "ui":
     dist_dir = get_dist_dir()
 
     if config.FRONTEND_URL.startswith("/ui"):
         if dist_dir is None:
-            logging.getLogger(__name__).warning(
-                f"UI_MODE is 'ui', but the dist directory '{dist_dir}' was not found. "
-                "The UI will not be served. Did you forget to build the frontend?"
+            message = (
+                "The UI bundle is missing or incomplete. Run workspace_ui/build_dist.sh before starting with UI_MODE=ui, "
+                "or set FRONTEND_URL to the frontend development server."
             )
+            raise RuntimeError(message)
         else:
             templates = Jinja2Templates(directory=dist_dir)
             app.mount("/ui", StaticFiles(directory=dist_dir, html=True))
     else:
-        # for development server mount luigi-shell to /ui to serve luigi
         BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
         ui_luigi_dir = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "luigi-shell"))
         templates = Jinja2Templates(directory=ui_luigi_dir)
@@ -122,7 +116,7 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
         }
         return await call_next(request)
 
-    # AUTH_MODE = "gateway" means that authentication is enforced upstream
+    # The gateway verifies token signatures, issuer, and expiry.
     if config.AUTH_MODE == "gateway" and not any(request.url.path.startswith(p) for p in ignored_paths):
         auth_header = request.headers.get("Authorization")
         if not auth_header:
@@ -147,6 +141,8 @@ async def auth_middleware(request: Request, call_next: Callable[[Request], Await
         if not _token_has_audience(payload, config.AUTH_AUDIENCE):
             return JSONResponse(status_code=401, content={"detail": "Invalid token audience"})
 
+        request.state.access_token = token
+        request.state.token_claims = payload
         username = payload.get("preferred_username")
 
         workspaces: dict[str, set[UserPermission]] = {}

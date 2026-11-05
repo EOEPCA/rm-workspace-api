@@ -1,24 +1,22 @@
 import type {WorkspaceStatus} from 'src/types/workspace'
 
-export interface Endpoint {
-  id: string
-  url: string
-}
-
 export type UserPermission =
   | 'VIEW_BUCKETS'
-  | 'VIEW_BUCKET_CREDENTIALS'
+  | 'VIEW_CONNECTION_CREDENTIALS'
+  | 'VIEW_OAUTH2_CREDENTIALS'
   | 'VIEW_MEMBERS'
   | 'VIEW_RESOURCE_USAGE'
   | 'VIEW_STORES'
   | 'VIEW_SESSIONS'
+  | 'VIEW_VCLUSTERS'
   | 'ISSUE_TOKENS'
   | 'MANAGE_BUCKETS'
   | 'MANAGE_MEMBERS'
   | 'MANAGE_STORES'
   | 'MANAGE_SESSIONS'
+  | 'MANAGE_VCLUSTERS'
 
-export type StoreType = 'database' | 'vector' | 'cache' | 'document'
+export type StoreType = 'database' | 'cache' | 'document'
 export type SessionState = 'started' | 'stopped'
 
 export type BucketLifecycleRuleMode = 'Notify' | 'Delete'
@@ -37,10 +35,30 @@ export interface Membership {
   isPending?: boolean
 }
 
+export interface Connection {
+  name: string
+  type: string
+  ready: boolean
+  secret_ref: { name: string; namespace: string }
+  endpoint?: string
+  region?: string
+  instance?: string
+  group?: string
+  target_namespace?: string
+  role?: string
+  credentials?: Record<string, string>
+  resolution_error?: string
+}
+
+export interface OAuth2Connection extends Connection {
+  issuer_url: string
+}
+
 export interface Store {
   id: string  // client-side Id
   name: string
   type: StoreType
+  instance?: string
   storage?: string | undefined
   backup_storage?: string | undefined
   creation_timestamp?: string | undefined
@@ -48,7 +66,27 @@ export interface Store {
   isPending?: boolean
 }
 
+export interface VClusterGroup {
+  name: string
+  namespace: string
+  role: string
+  ready?: boolean
+}
+
+export interface VCluster {
+  name: string
+  groups: VClusterGroup[]
+}
+
+export interface VClusterGroupCreate {
+  name: string
+  namespace: string
+  role: 'view' | 'edit' | 'admin'
+}
+
 export interface WorkspaceSession {
+  phase?: string
+  message?: string
   id?: string
   name: string
   state: SessionState
@@ -60,10 +98,6 @@ export interface WorkspaceSession {
 
 export interface SessionCreate {
   name: string
-  state: SessionState
-}
-
-export interface SessionStateUpdate {
   state: SessionState
 }
 
@@ -86,6 +120,7 @@ export interface BucketLifecycleRule {
 }
 
 export interface Storage {
+  available?: boolean
   buckets?: BucketNew[]
   credentials?: Record<string, unknown>
   bucket_access_requests?: Bucket[]
@@ -112,10 +147,11 @@ export interface Datalab {
   available?: boolean
   available_store_types?: StoreType[]
   stores?: Store[]
+  vclusters?: VCluster[]
   sessions?: WorkspaceSession[]
   max_sessions?: number
-  store_credentials?: Partial<Record<StoreType, Record<string, Record<string, unknown>>>>
-  container_registry_credentials?: Record<string, unknown>
+  connections?: Connection[]
+  oauth2?: OAuth2Connection[]
 }
 
 export interface Workspace {
@@ -150,16 +186,18 @@ export interface WorkspaceEditUI {
   memberships: Membership[]
   buckets: BucketUI[]
   linked_buckets: Bucket[]
+  storage_available: boolean
   datalab_available: boolean
   available_store_types: StoreType[]
   stores: Store[]
+  vclusters: VCluster[]
   sessions: WorkspaceSession[]
   max_sessions: number
 }
 
 export interface WorkspaceEdit {
   add_memberships: Membership[]
-  add_stores: Store[]
+  add_stores: Pick<Store, 'name' | 'type' | 'storage' | 'backup_storage'>[]
   add_buckets: BucketNew[]
   patch_bucket_access_requests?: Bucket[]
 }

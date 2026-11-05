@@ -1,6 +1,5 @@
 import type {Bucket} from 'src/models/models'
 
-/** sorting */
 export function sortByGrantDesc(a: Bucket, b: Bucket) {
   return (b.grant_timestamp ?? '').localeCompare(a.grant_timestamp ?? '')
 }

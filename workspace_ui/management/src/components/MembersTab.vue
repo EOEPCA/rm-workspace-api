@@ -38,14 +38,6 @@
           hide-bottom-space
           placeholder="Member name"
         >
-          <!--
-          <template v-slot:append>
-            <q-btn dense flat icon="save" color="green"
-                   @click="addMember">
-              <q-tooltip>Save added member</q-tooltip>
-            </q-btn>
-          </template>
-          -->
         </q-input>
         <span v-else>
           {{ props.row.member }}
@@ -81,18 +73,6 @@
       </q-td>
     </template>
 
-    <!--
-    <template v-slot:bottom="">
-      <div class="row items-center q-gutter-sm">
-        <div>
-          <q-btn color="primary" no-caps label="Create Members" @click="createMembers"/>
-        </div>
-        <q-space/>
-        <div>{{ myMemberships.length }}</div>
-      </div>
-    </template>
-    -->
-
   </q-table>
 
   <q-btn color="primary" no-caps label="Save" @click="createMembers" style="margin-top: 5px" :disable="!canManageMembers || !hasChanged" />
@@ -108,18 +88,11 @@ import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {saveMembers} from 'src/services/api'
 import {useUserStore} from 'stores/userStore'
 
-/** v-model */
 const props = defineProps<{
   workspaceName: string,
   memberships: Membership[]
 }>()
 
-/*
-const emit = defineEmits<{
-  (e: 'update:memberships', v: (Membership & { id?: string; isNew?: boolean })[]): void
-  (e: 'requestFocusLast'): void
-}>()
- */
 
 const $q = useQuasar()
 const userStore = useUserStore()
@@ -143,9 +116,9 @@ const roleOptions: MembershipRole[] = ['user', 'admin']
 type MembershipKey = string
 
 function normalizeMemberships(list: Membership[]): MembershipKey[] {
-  // Create a stable, order-independent representation
+  // Sort fields so row order does not mark the form as changed.
   return list
-    .map(m => `${m.member}::${m.role}`) // key per membership
+    .map(m => `${m.member}::${m.role}`)
     .sort()
 }
 
@@ -179,10 +152,8 @@ const memberColumns: QTableColumn<Membership>[] = [
   {
     name: 'creation_timestamp',
     label: 'Created',
-//    field: 'creation_timestamp',
     field: (row) => row.creation_timestamp ? formatDate(row.creation_timestamp) : (row.isPending ? 'Pending' : ''),
     align: 'left',
-//    format: (val) => formatDate(val as string | null)
   },
   {
     name: 'actions',
@@ -242,7 +213,6 @@ function createMembers() {
           }
           member.isNew = false
         })
-        // reset initialMemberships
         initialMemberships.value = myMemberships.value.map(m => ({ ...m }))
 
         $q.notify({

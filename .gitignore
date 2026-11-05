@@ -27,12 +27,11 @@ dist/
 venv/
 .venv/
 
-# Tests
-testjob-20*
-
 # Node / Quasar
 node_modules/
 .quasar/
 dist/
 !dist/.gitkeep
 quasar.config.*.temporary.compiled*
+
+.tmp*

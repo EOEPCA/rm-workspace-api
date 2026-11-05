@@ -2,8 +2,6 @@
   <div class="q-pa-md" style="min-width: 1000px; max-width: calc(80vw); margin: 0 auto;">
     <q-card>
       <q-card-section>
-
-        <!-- Message -->
         <q-banner
           v-if="message"
           :class="isError ? 'bg-red-1 text-negative' : 'bg-green-1 text-positive'"
@@ -16,15 +14,10 @@
             <div class="col">{{ displayMessage }}</div>
           </div>
         </q-banner>
-
-        <!-- Loading -->
         <div v-if="loading" class="row justify-center q-my-md">
           <q-spinner size="28px"/>
         </div>
-
-        <!-- Form -->
         <q-form v-if="!loading && form.name">
-          <!-- Tabs header -->
           <q-tabs
             v-model="activeTab"
             class="text-primary q-mb-md"
@@ -37,23 +30,19 @@
             <q-tab v-if="canSeeBuckets" name="buckets" label="Buckets"/>
             <q-tab v-if="canSeeBuckets" name="bucketRequests" label="Requested Buckets"/>
             <q-tab v-if="canSeeStores" name="stores" label="Stores"/>
+            <q-tab v-if="canSeeVClusters" name="vclusters" label="Vclusters"/>
             <q-tab v-if="canSeeSessions" name="sessions" label="Sessions"/>
           </q-tabs>
 
           <q-separator/>
-
-          <!-- Tabs content -->
           <q-tab-panels v-model="activeTab" animated>
-            <!-- MEMBERS TAB -->
-            <q-tab-panel name="members">
+            <q-tab-panel v-if="canSeeMembers" name="members">
               <MembersTab
                 :workspace-name="form.name"
                 v-model:memberships="form.memberships"
               />
             </q-tab-panel>
-
-            <!-- BUCKETS TAB -->
-            <q-tab-panel name="buckets">
+            <q-tab-panel v-if="canSeeBuckets" name="buckets">
               <BucketsTab
                 :workspace-name="form.name"
                 v-model:buckets="form.buckets"
@@ -61,16 +50,14 @@
               />
 
             </q-tab-panel>
-
-            <!-- REQUESTED BUCKETS TAB -->
-            <q-tab-panel name="bucketRequests">
+            <q-tab-panel v-if="canSeeBuckets" name="bucketRequests">
               <BucketRequestsTab
                 :workspace-name="form.name"
                 v-model:linked-buckets="form.linked_buckets"
               />
             </q-tab-panel>
 
-            <q-tab-panel name="stores">
+            <q-tab-panel v-if="canSeeStores" name="stores">
               <StoresTab
                 :workspace-name="form.name"
                 :datalab-available="form.datalab_available"
@@ -79,7 +66,11 @@
               />
             </q-tab-panel>
 
-            <q-tab-panel name="sessions">
+            <q-tab-panel v-if="canSeeVClusters" name="vclusters">
+              <VClustersTab :workspace-name="form.name" v-model:vclusters="form.vclusters" />
+            </q-tab-panel>
+
+            <q-tab-panel v-if="canSeeSessions" name="sessions">
               <SessionsTab
                 :workspace-name="form.name"
                 :datalab-available="form.datalab_available"
@@ -106,8 +97,10 @@ import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
 import {useUserStore} from 'stores/userStore'
 import StoresTab from 'components/StoresTab.vue'
 import SessionsTab from 'components/SessionsTab.vue'
+import VClustersTab from 'components/VClustersTab.vue'
+import { getWorkspaceForManagement } from 'src/services/api'
+import { availableManagementTabs, type ManagementTab } from 'src/services/workspaceTabs'
 
-/** ---- State ---- */
 const message = ref<string>('')
 const userStore = useUserStore()
 
@@ -116,96 +109,97 @@ const form = ref<WorkspaceEditUI>({
   memberships: [],
   buckets: [],
   linked_buckets: [],
+  storage_available: false,
   datalab_available: false,
   available_store_types: [],
   stores: [],
+  vclusters: [],
   sessions: [],
   max_sessions: 3,
 })
 
-/** ---- Permission-driven computed flags ---- */
-const canSeeMembers = computed(() => userStore.canViewMembers)
-const canSeeBuckets = computed(() => userStore.canViewBuckets)
-const canSeeStores = computed(() => userStore.canViewStores && form.value.available_store_types.length > 0)
-const canSeeSessions = computed(() => userStore.canViewSessions)
+const visibleTabs = computed(() => availableManagementTabs(
+  userStore.permissions,
+  form.value.storage_available,
+  form.value.datalab_available,
+  form.value.available_store_types,
+  form.value.vclusters,
+))
+const canSeeMembers = computed(() => visibleTabs.value.includes('members'))
+const canSeeBuckets = computed(() => visibleTabs.value.includes('buckets'))
+const canSeeStores = computed(() => visibleTabs.value.includes('stores'))
+const canSeeVClusters = computed(() => visibleTabs.value.includes('vclusters'))
+const canSeeSessions = computed(() => visibleTabs.value.includes('sessions'))
+const activeTab = ref<ManagementTab | ''>('')
 
-/** Tabs */
-type ManagementTab = 'members' | 'buckets' | 'bucketRequests' | 'stores' | 'sessions'
-const activeTab = ref<ManagementTab>('members')
-
-function firstAvailableTab(): ManagementTab {
-  if (canSeeMembers.value) return 'members'
-  if (canSeeBuckets.value) return 'buckets'
-  if (canSeeStores.value) return 'stores'
-  if (canSeeSessions.value) return 'sessions'
-  return 'members'
-}
-
-function tabIsVisible(tab: ManagementTab) {
-  if (tab === 'members') return canSeeMembers.value
-  if (tab === 'buckets' || tab === 'bucketRequests') return canSeeBuckets.value
-  if (tab === 'stores') return canSeeStores.value
-  if (tab === 'sessions') return canSeeSessions.value
-  return false
-}
-
-/** ---- UI helpers ---- */
 const isError = computed(() => message.value.startsWith('Error:'))
 const displayMessage = computed(() =>
   isError.value ? message.value.substring(7) : message.value
 )
 
-const {loading} = useLuigiWorkspace({
-  onReady: (ctx) => {
-    if (ctx && ctx.workspace) {
-      const ws = ctx.workspace
-      if (ws.name) {
-        message.value = `Using pre-loaded data for workspace: ${ws.name} (${ws.version})`
-        userStore.setUser(ctx.workspace.user ?? null)
+const managementLoading = ref(false)
+const {loading: contextLoading} = useLuigiWorkspace({
+  onReady: async (ctx) => {
+    managementLoading.value = true
+    try {
+      if (ctx && ctx.workspace) {
+        const ws = await getWorkspaceForManagement(ctx.workspace.name)
+        if (ws.name) {
+          message.value = ''
+          userStore.setUser(ws.user ?? null)
 
-        form.value = {
-          name: ws.name,
-          memberships: (ws.datalab?.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
-          buckets: (ws.storage?.buckets ?? []).map(b => ({
-              bucket: b.name,
-              discoverable: b.discoverable,
-              lifecycle_rules: (b.lifecycle_rules ?? []).map(rule => ({...rule, id: crypto.randomUUID()})),
-              requests: 0,
-              grants: 0
-            } as BucketUI)) ?? [],
-          linked_buckets: ws.storage?.bucket_access_requests ?? [],
-          datalab_available: ws.datalab?.available ?? false,
-          available_store_types: ws.datalab?.available_store_types ?? [],
-          stores: (ws.datalab?.stores ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
-          sessions: (ws.datalab?.sessions ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
-          max_sessions: ws.datalab?.max_sessions ?? 3
-        }
+          form.value = {
+            name: ws.name,
+            memberships: (ws.datalab?.memberships ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+            buckets: (ws.storage?.buckets ?? []).map(b => ({
+                bucket: b.name,
+                discoverable: b.discoverable,
+                lifecycle_rules: (b.lifecycle_rules ?? []).map(rule => ({...rule, id: crypto.randomUUID()})),
+                requests: 0,
+                grants: 0
+              } as BucketUI)),
+            linked_buckets: ws.storage?.bucket_access_requests ?? [],
+            storage_available: ws.storage?.available ?? false,
+            datalab_available: ws.datalab?.available ?? false,
+            available_store_types: ws.datalab?.available_store_types ?? [],
+            stores: (ws.datalab?.stores ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+            vclusters: ws.datalab?.vclusters ?? [],
+            sessions: (ws.datalab?.sessions ?? []).map(m => ({...m, id: crypto.randomUUID(), isNew: false})),
+            max_sessions: ws.datalab?.max_sessions ?? 3
+          }
 
-        if (!tabIsVisible(activeTab.value)) {
-          activeTab.value = firstAvailableTab()
-        }
+          if (!activeTab.value || !visibleTabs.value.includes(activeTab.value)) {
+            activeTab.value = visibleTabs.value[0] ?? ''
+          }
 
-        // prepare number of requests and grants for buckets
-        form.value.linked_buckets.forEach((b: Bucket) => {
-          if (b.workspace !== ws.name) {
-            const bucket = form.value.buckets.find((ex => ex.bucket === b.bucket))
-            if (bucket) {
-              if (b.request_timestamp) {
-                bucket.requests++
-              }
-              if (b.grant_timestamp) {
-                bucket.grants++
+          // Show requests and grants on the bucket that owns them.
+          form.value.linked_buckets.forEach((b: Bucket) => {
+            if (b.workspace !== ws.name) {
+              const bucket = form.value.buckets.find((ex => ex.bucket === b.bucket))
+              if (bucket) {
+                if (b.request_timestamp) {
+                  bucket.requests++
+                }
+                if (b.grant_timestamp) {
+                  bucket.grants++
+                }
               }
             }
-          }
-        })
-      } else {
-        message.value = 'Workspace Data not provided.'
-        userStore.setUser(null)
+          })
+        } else {
+          message.value = 'Workspace data is missing.'
+          userStore.setUser(null)
+        }
       }
+    } catch (error) {
+      message.value = `Error: Could not load workspace configuration: ${error instanceof Error ? error.message : String(error)}`
+      form.value.name = ''
+    } finally {
+      managementLoading.value = false
     }
   }
 })
+const loading = computed(() => contextLoading.value || managementLoading.value)
 
 </script>
 

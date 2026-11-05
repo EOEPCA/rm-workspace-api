@@ -3,13 +3,12 @@
 
 from __future__ import annotations
 
-import base64
 import enum
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
 class MembershipRole(str, enum.Enum):
@@ -31,22 +30,24 @@ class BucketLifecycleRuleMode(str, enum.Enum):
 
 
 class UserPermission(str, enum.Enum):
-    VIEW_BUCKET_CREDENTIALS = "VIEW_BUCKET_CREDENTIALS"
+    VIEW_CONNECTION_CREDENTIALS = "VIEW_CONNECTION_CREDENTIALS"
+    VIEW_OAUTH2_CREDENTIALS = "VIEW_OAUTH2_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
     VIEW_RESOURCE_USAGE = "VIEW_RESOURCE_USAGE"
     VIEW_STORES = "VIEW_STORES"
     VIEW_SESSIONS = "VIEW_SESSIONS"
+    VIEW_VCLUSTERS = "VIEW_VCLUSTERS"
     ISSUE_TOKENS = "ISSUE_TOKENS"
     MANAGE_MEMBERS = "MANAGE_MEMBERS"
     MANAGE_BUCKETS = "MANAGE_BUCKETS"
     MANAGE_STORES = "MANAGE_STORES"
     MANAGE_SESSIONS = "MANAGE_SESSIONS"
+    MANAGE_VCLUSTERS = "MANAGE_VCLUSTERS"
 
 
 class StoreType(str, enum.Enum):
     DATABASE = "database"
-    VECTOR = "vector"
     CACHE = "cache"
     DOCUMENT = "document"
 
@@ -61,28 +62,33 @@ SESSION_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
     "ws_access": {
-        UserPermission.VIEW_BUCKET_CREDENTIALS,
+        UserPermission.VIEW_CONNECTION_CREDENTIALS,
+        UserPermission.VIEW_OAUTH2_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
         UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
+        UserPermission.VIEW_VCLUSTERS,
     },
     "ws_api": {
-        UserPermission.VIEW_BUCKET_CREDENTIALS,
+        UserPermission.VIEW_CONNECTION_CREDENTIALS,
     },
     "ws_admin": {
-        UserPermission.VIEW_BUCKET_CREDENTIALS,
+        UserPermission.VIEW_CONNECTION_CREDENTIALS,
+        UserPermission.VIEW_OAUTH2_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
         UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
+        UserPermission.VIEW_VCLUSTERS,
         UserPermission.ISSUE_TOKENS,
         UserPermission.MANAGE_MEMBERS,
         UserPermission.MANAGE_BUCKETS,
         UserPermission.MANAGE_STORES,
         UserPermission.MANAGE_SESSIONS,
+        UserPermission.MANAGE_VCLUSTERS,
     },
 }
 
@@ -189,6 +195,39 @@ class Membership(BaseModel):
         return _coerce_utc(v)
 
 
+class ConnectionSecretRef(BaseModel):
+    name: str
+    namespace: str
+
+
+class CredentialReference(BaseModel):
+    """Published Secret reference and optional resolved credentials."""
+
+    name: str
+    type: str
+    ready: bool
+    secret_ref: ConnectionSecretRef
+    credentials: dict[str, str] | None = Field(None, repr=False)
+    resolution_error: str | None = None
+
+
+class Connection(CredentialReference):
+    """Provider connection metadata and optional resolved credentials."""
+
+    endpoint: str | None = None
+    region: str | None = None
+    instance: str | None = None
+    group: str | None = None
+    target_namespace: str | None = None
+    role: str | None = None
+
+
+class OAuth2Connection(CredentialReference):
+    """OAuth2 client metadata and optional resolved credentials."""
+
+    issuer_url: str
+
+
 class Store(BaseModel):
     """A provider-datalab store belonging to a workspace."""
 
@@ -196,6 +235,7 @@ class Store(BaseModel):
 
     name: str = Field(..., description="The name of the store.")
     type: StoreType = Field(..., description="The kind of backing store.")
+    instance: str | None = Field(default=None, description="Provider instance that holds this store.", json_schema_extra={"readOnly": True})
     storage: str | None = Field(None, description="Persistent storage size as a Kubernetes quantity.")
     backup_storage: str | None = Field(None, description="Backup storage size for database stores.")
     creation_timestamp: datetime | None = Field(
@@ -223,14 +263,16 @@ class Store(BaseModel):
 
 
 class Session(BaseModel):
-    """A provider-datalab session declared for a workspace."""
+    """A session declared or published by Provider Datalab."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace session entry."})
 
     name: str = Field(..., description="The session name.")
-    state: SessionState = Field(SessionState.STOPPED, description="Desired session lifecycle state.")
+    state: SessionState = Field(SessionState.STOPPED, description="Desired state, or published state for a session without a declaration.")
     url: str | None = Field(None, description="Published URL when the session has one.")
     ready: bool = Field(False, description="Whether the provider reports a usable session URL.")
+    phase: str | None = None
+    message: str | None = None
 
     @field_validator("name", mode="before")
     @classmethod
@@ -544,27 +586,10 @@ class Credentials(BaseModel):
         return _validate_bucket_name(v)
 
 
-class ContainerRegistryCredentials(BaseModel):
-    """Credentials for authenticating against a container registry."""
-
-    model_config = ConfigDict(json_schema_extra={"description": "Container registry credentials."})
-
-    username: str = Field(..., description="Registry username.")
-    password: SecretStr = Field(..., description="Registry password.", json_schema_extra={"writeOnly": True})
-
-    @field_validator("username", mode="before")
-    @classmethod
-    def _strip_username(cls, v: Any) -> str:
-        return _strip_required_string(v)
-
-    def base64_encode_as_single_string(self) -> str:
-        pw = self.password.get_secret_value()
-        return base64.b64encode(f"{self.username}:{pw}".encode()).decode()
-
-
 class Storage(BaseModel):
     model_config = ConfigDict(json_schema_extra={"description": "Workspace storage."})
 
+    available: bool = Field(False, description="Whether this workspace has a Storage resource.")
     buckets: list[Bucket] = Field(default_factory=list, description="Owned buckets.")
     credentials: Credentials | None = Field(None, description="S3 credentials (bucket, keys, endpoint, region).")
     bucket_access_requests: list[BucketAccessRequest] = Field(
@@ -620,41 +645,70 @@ class WorkspaceResourceUsage(BaseModel):
     storage: ResourceStorageUsage = Field(..., description="Persistent storage quota and requests.")
 
 
+class VClusterGroup(BaseModel):
+    """Additional access profile declared on a virtual cluster."""
+
+    name: str
+    namespace: str
+    role: str
+    ready: bool | None = None
+
+
+class VClusterGroupCreate(BaseModel):
+    """Namespace access to add to an existing virtual cluster."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(None, min_length=1, max_length=40, pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
+    namespace: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
+    role: Literal["view", "edit", "admin"]
+
+    @field_validator("namespace")
+    @classmethod
+    def _workload_namespace(cls, value: str) -> str:
+        if value == "default" or value.startswith("kube"):
+            message = "Use a workload namespace other than default or a name starting with kube"
+            raise ValueError(message)
+        return value
+
+
+class VCluster(BaseModel):
+    """Declared virtual cluster and its additional access profiles."""
+
+    name: str
+    groups: list[VClusterGroup] = Field(default_factory=list)
+
+
 class Datalab(BaseModel):
     """Datalab for a workspace."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace datalab."})
 
     memberships: list[Membership] = Field(default_factory=list, description="Detailed membership entries.")
-    available: bool = Field(False, description="Whether the provider-datalab CRD is installed.")
+    available: bool = Field(False, description="Whether this workspace has a Datalab resource.")
     available_store_types: list[StoreType] = Field(
         default_factory=list,
         description="Store types enabled by config and supported by the Datalab CRD.",
     )
     stores: list[Store] = Field(default_factory=list, description="Detailed store entries.")
-    sessions: list[Session] = Field(default_factory=list, description="Declared datalab sessions.")
+    vclusters: list[VCluster] = Field(default_factory=list, description="Declared virtual clusters and additional access profiles.")
+    sessions: list[Session] = Field(default_factory=list, description="Declared and published Datalab sessions.")
     max_sessions: int = Field(3, ge=0, description="Maximum number of sessions that can be declared.")
-    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = Field(
-        default_factory=dict,
-        description="Credentials grouped by store type and store name.",
-    )
-    container_registry_credentials: ContainerRegistryCredentials | None = Field(
-        None,
-        description="Credentials for the workspace's container registry.",
-    )
+    connections: list[Connection] = Field(default_factory=list, description="Published workspace connections.")
+    oauth2: list[OAuth2Connection] = Field(default_factory=list, description="Published workspace OAuth2 clients.")
 
 
 class Workspace(BaseModel):
-    """Workspace view model with metadata, storage, datalab, session, and registry credentials."""
+    """Workspace metadata, storage, services, and connections."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace resource representation."})
 
     name: str = Field(..., description="Unique, system-generated name.")
     creation_timestamp: datetime | None = Field(None, description="Creation timestamp of the workspace (UTC, RFC3339).")
-    version: str | None = Field(None, description="Resource version for optimistic locking.")
+    version: str | None = Field(None, description="Resource version used for workspace metadata.")
     status: WorkspaceStatus = Field(..., description="Current lifecycle status.")
     storage: Storage = Field(
-        default_factory=lambda: Storage(buckets=[], credentials=None, bucket_access_requests=[]),
+        default_factory=lambda: Storage(available=False, buckets=[], credentials=None, bucket_access_requests=[]),
         description="Storage for buckets, credentials, access.",
     )
     datalab: Datalab = Field(
@@ -665,8 +719,6 @@ class Workspace(BaseModel):
             stores=[],
             sessions=[],
             max_sessions=3,
-            store_credentials={},
-            container_registry_credentials=None,
         ),
         description="Datalab for memberships and sessions.",
     )
@@ -723,7 +775,7 @@ class WorkspaceListItem(BaseModel):
 
 
 class WorkspaceToken(BaseModel):
-    """OAuth access token brokered for workspace-local API access."""
+    """OAuth access token for workspace services and selected virtual API profiles."""
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace OAuth access token response."})
 

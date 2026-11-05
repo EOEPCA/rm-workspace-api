@@ -1,23 +1,15 @@
-import type {QInput, QTable} from 'quasar'
+import type {QTable} from 'quasar'
 import {nextTick} from 'vue'
 
 export function formatDate(iso?: string | null): string {
   if (!iso) return '—'
-  try {
-    const d = new Date(iso)
-    return d.toLocaleString()
-  } catch {
-    return iso ?? '—'
-  }
+  return new Date(iso).toLocaleString()
 }
-/*
- Scrolls to the last row in the give Quasar table
- */
 export function scrollToAndFocusLastRow(tableRef: QTable | null) {
   if (!tableRef) {
     return
   }
-  // Wait for DOM update, then scroll to the new row
+  // Wait until Vue has added the row to the DOM.
   nextTick().then(() => {
     const tableEl = tableRef.$el as HTMLElement | undefined
     if (tableEl) {
@@ -28,18 +20,13 @@ export function scrollToAndFocusLastRow(tableRef: QTable | null) {
       }
       lastRow.scrollIntoView({behavior: 'smooth', block: 'nearest'})
 
-      // Focus the q-input inside that row (robust selector)
-      const inputEl =
-        (lastRow.querySelector<HTMLInputElement>('.q-field__native input')) ||
-        (lastRow.querySelector<HTMLInputElement>('input, textarea'))
+      const inputEl = lastRow.querySelector<HTMLInputElement>('input, textarea')
 
       if (inputEl) {
-        // Small micro-delay helps if the field is still animating
+        // Wait for the field animation before setting focus.
         requestAnimationFrame(() => {
-          inputEl.focus()
-//          inputEl.select()
           const len = inputEl.value.length
-          inputEl.setSelectionRange(len, len) // move caret to end
+          inputEl.setSelectionRange(len, len)
           inputEl.focus()
         })
       }
@@ -47,19 +34,4 @@ export function scrollToAndFocusLastRow(tableRef: QTable | null) {
   }).catch(err => {
     console.error('nextTick failed:', err)
   })
-}
-
-export async function moveCaretToEnd(inputRef: QInput | null) {
-  if (!inputRef) {
-    return
-  }
-
-  await nextTick()
-  // Access the native input element inside QInput
-  const inputEl = inputRef.getNativeElement?.()
-  if (inputEl) {
-    const len = inputEl.value.length
-    inputEl.setSelectionRange(len, len) // move caret to end
-    inputEl.focus()
-  }
 }
