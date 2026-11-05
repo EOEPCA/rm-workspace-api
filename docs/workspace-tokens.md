@@ -26,7 +26,7 @@ client-credentials grant, and its roles are not copied to the result.
 
 The relevant request from Workspace API to the identity provider is:
 
-```http
+```text
 POST /realms/workspaces/protocol/openid-connect/token
 Authorization: Basic <encoded-workspace-client-credentials>
 Content-Type: application/x-www-form-urlencoded
