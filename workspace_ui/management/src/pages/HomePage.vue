@@ -19,48 +19,14 @@
           </q-chip>
         </q-card-section>
 
-        <template v-if="canSeeResourceUsage && resourceStorage">
+        <template v-if="sessionStorageLabel !== null">
           <q-separator/>
-          <q-list separator dense role="group">
-            <q-expansion-item
-              dense
-              dense-toggle
-              expand-separator
-              toggle-aria-label=""
-            >
-              <template v-slot:header>
-                <q-item-section>
-                  <div class="entity-line">
-                    <span class="entity-name">Persistent storage</span>
-                    <span class="storage-total">{{ storageRequestedLabel }}</span>
-                    <span class="text-grey-7">({{ storageQuotaLabel }})</span>
-                  </div>
-                </q-item-section>
-              </template>
-
-              <q-markup-table
-                flat
-                dense
-                separator="horizontal"
-                class="storage-usage-table"
-                aria-label="Persistent volume claims and requested sizes"
-              >
-                <tbody>
-                  <tr
-                    v-for="pvc in resourceStorage.persistent_volume_claims"
-                    :key="pvc.name"
-                  >
-                    <td>{{ pvc.name }}</td>
-                    <td class="text-right storage-value">{{ pvc.size }}</td>
-                  </tr>
-                  <tr v-if="resourceStorage.persistent_volume_claims.length === 0">
-                    <td colspan="2" class="text-grey-7">No persistent volume claims</td>
-                  </tr>
-                </tbody>
-              </q-markup-table>
-            </q-expansion-item>
-          </q-list>
+          <q-card-section class="entity-line">
+            <span class="entity-name">Persistent session storage</span>
+            <span class="storage-total">{{ sessionStorageLabel }}</span>
+          </q-card-section>
         </template>
+
       </q-card>
       <q-card v-if="canSeeMembers && ws.datalab?.memberships?.length" class="q-mb-md">
         <q-card-section class="row items-center q-py-sm">
@@ -137,7 +103,7 @@
 import { computed, ref } from 'vue'
 import { useLuigiWorkspace } from 'src/composables/useLuigi'
 import type { Workspace } from 'src/models/models'
-import { formatStorageQuantity } from 'src/services/storageQuantity'
+import { formatStorageQuantity, sumStorageQuantities } from 'src/services/storageQuantity'
 import ConnectionList from 'src/components/ConnectionList.vue'
 import BucketCard from 'src/components/BucketCard.vue'
 import StoreCard from 'src/components/StoreCard.vue'
@@ -151,16 +117,14 @@ const userStore = useUserStore()
 
 const canSeeMembers = computed(() => userStore.canViewMembers && !!ws.value?.datalab?.available)
 const canSeeBuckets = computed(() => userStore.canViewBuckets && !!ws.value?.storage?.available)
-const canSeeResourceUsage = computed(() => userStore.canViewResourceUsage)
 const canSeeStores = computed(() => userStore.canViewStores && !!ws.value?.datalab?.available)
 const canSeeConnections = computed(() => userStore.canViewConnectionCredentials && !!ws.value?.datalab?.available)
 const canSeeOAuth2 = computed(() => userStore.canViewOAuth2Credentials && !!ws.value?.datalab?.available)
 
-const resourceStorage = computed(() => ws.value?.resource_usage?.storage)
-const storageRequestedLabel = computed(() => formatStorageQuantity(resourceStorage.value?.requested ?? '0'))
-const storageQuotaLabel = computed(() => {
-  const quota = resourceStorage.value?.quota
-  return quota ? `${formatStorageQuantity(quota)} allowed` : 'No quota set'
+const sessionStorageLabel = computed(() => {
+  if (!userStore.canViewSessions) return null
+  const total = sumStorageQuantities((ws.value?.datalab?.sessions ?? []).map(session => session.pvc_size))
+  return total === null ? null : formatStorageQuantity(total)
 })
 
 const connections = computed(() => ws.value?.datalab?.connections ?? [])
@@ -225,17 +189,6 @@ const { loading } = useLuigiWorkspace({
 .attribute-count {
   min-width: 2rem;
   justify-content: center;
-}
-
-.storage-usage-table {
-  width: 100%;
-  border-top: 1px solid currentColor;
-}
-
-.storage-value {
-  width: 10rem;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
 }
 
 .storage-total {

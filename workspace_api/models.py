@@ -34,7 +34,6 @@ class UserPermission(str, enum.Enum):
     VIEW_OAUTH2_CREDENTIALS = "VIEW_OAUTH2_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
     VIEW_BUCKETS = "VIEW_BUCKETS"
-    VIEW_RESOURCE_USAGE = "VIEW_RESOURCE_USAGE"
     VIEW_STORES = "VIEW_STORES"
     VIEW_SESSIONS = "VIEW_SESSIONS"
     VIEW_VCLUSTERS = "VIEW_VCLUSTERS"
@@ -66,7 +65,6 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_OAUTH2_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
-        UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
         UserPermission.VIEW_VCLUSTERS,
@@ -79,7 +77,6 @@ ROLE_TO_PERMISSIONS: dict[str, set[UserPermission]] = {
         UserPermission.VIEW_OAUTH2_CREDENTIALS,
         UserPermission.VIEW_MEMBERS,
         UserPermission.VIEW_BUCKETS,
-        UserPermission.VIEW_RESOURCE_USAGE,
         UserPermission.VIEW_STORES,
         UserPermission.VIEW_SESSIONS,
         UserPermission.VIEW_VCLUSTERS,
@@ -273,6 +270,7 @@ class Session(BaseModel):
     ready: bool = Field(False, description="Whether the provider reports a usable session URL.")
     phase: str | None = None
     message: str | None = None
+    pvc_size: str | None = Field(None, description="Published persistent session storage request as a Kubernetes quantity.")
 
     @field_validator("name", mode="before")
     @classmethod
@@ -615,36 +613,6 @@ class Storage(BaseModel):
         return out
 
 
-class PersistentVolumeClaimStorage(BaseModel):
-    """Storage request declared by a workspace PersistentVolumeClaim."""
-
-    name: str = Field(..., description="PersistentVolumeClaim name.")
-    size: str = Field(..., description="Requested storage as a Kubernetes quantity.")
-
-    @field_validator("name", "size", mode="before")
-    @classmethod
-    def _strip_required(cls, v: Any) -> str:
-        return _strip_required_string(v)
-
-
-class ResourceStorageUsage(BaseModel):
-    """Workspace namespace storage quota and PersistentVolumeClaim requests."""
-
-    quota: str | None = Field(None, description="Effective requests.storage quota as a Kubernetes quantity.")
-    requested: str = Field(..., description="Sum of PVC storage requests as a Kubernetes quantity.")
-    remaining: str | None = Field(None, description="Quota minus summed PVC requests as a Kubernetes quantity.")
-    persistent_volume_claims: list[PersistentVolumeClaimStorage] = Field(
-        default_factory=list,
-        description="Workspace PersistentVolumeClaims and their storage requests.",
-    )
-
-
-class WorkspaceResourceUsage(BaseModel):
-    """Kubernetes resource usage associated with a workspace."""
-
-    storage: ResourceStorageUsage = Field(..., description="Persistent storage quota and requests.")
-
-
 class VClusterGroup(BaseModel):
     """Additional access profile declared on a virtual cluster."""
 
@@ -721,10 +689,6 @@ class Workspace(BaseModel):
             max_sessions=3,
         ),
         description="Datalab for memberships and sessions.",
-    )
-    resource_usage: WorkspaceResourceUsage | None = Field(
-        None,
-        description="Kubernetes resource quota and request usage visible to the current user.",
     )
     user: UserContext = Field(
         ...,

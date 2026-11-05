@@ -421,7 +421,6 @@ def test_session_reads_use_status_and_management_keeps_declarations(client: Test
     api.get.return_value = datalab
     monkeypatch.setattr(views, "_res_optional", lambda _api, kind: api if kind == views.KIND_DATALAB else None)
     monkeypatch.setattr(views, "_available_store_types", lambda _installed: [])
-    monkeypatch.setattr(views, "_workspace_resource_usage", lambda _name: None)
     response = client.get("/workspaces/ws-alice/sessions", headers=_auth_headers())
     assert response.status_code == 200
     assert response.json() == [{"name": "default", "state": "stopped", "phase": "Stopped", "message": "Runtime stopped", "ready": False}]
@@ -433,3 +432,27 @@ def test_session_reads_use_status_and_management_keeps_declarations(client: Test
     ]
     datalab.status = {}
     assert client.get("/workspaces/ws-alice/sessions", headers=_auth_headers()).json() == []
+
+
+@pytest.mark.parametrize("size, expected", [("10Gi", "10Gi"), ("1.5Gi", "1536Mi"), ("0", "0"), (None, None), ("invalid", None)])
+def test_workspace_session_storage_uses_published_size_without_pvc_reads(client: TestClient, monkeypatch, size, expected) -> None:
+    datalab = SimpleNamespace(
+        metadata=SimpleNamespace(creationTimestamp=None),
+        spec={"sessions": [{"name": "default", "state": "stopped"}]},
+        status={"sessions": [{"name": "default", "state": "stopped", "pvcSize": size}]},
+    )
+    api = mock.Mock()
+    api.get.return_value = datalab
+    core_api = mock.Mock(side_effect=AssertionError("Session storage must come from Datalab status"))
+    monkeypatch.setattr(views, "_res_optional", lambda _api, kind: api if kind == views.KIND_DATALAB else None)
+    monkeypatch.setattr(views, "_available_store_types", lambda _installed: [])
+    monkeypatch.setattr(views.k8s_client, "CoreV1Api", core_api)
+
+    response = client.get("/workspaces/ws-alice?resolve_connections=none", headers=_auth_headers())
+
+    assert response.status_code == HTTPStatus.OK
+    session = response.json()["datalab"]["sessions"][0]
+    assert session["state"] == "stopped"
+    assert session.get("pvc_size") == expected
+    assert "resource_usage" not in response.json()
+    core_api.assert_not_called()

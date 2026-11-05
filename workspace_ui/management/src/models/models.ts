@@ -5,7 +5,6 @@ export type UserPermission =
   | 'VIEW_CONNECTION_CREDENTIALS'
   | 'VIEW_OAUTH2_CREDENTIALS'
   | 'VIEW_MEMBERS'
-  | 'VIEW_RESOURCE_USAGE'
   | 'VIEW_STORES'
   | 'VIEW_SESSIONS'
   | 'VIEW_VCLUSTERS'
@@ -87,6 +86,7 @@ export interface VClusterGroupCreate {
 export interface WorkspaceSession {
   phase?: string
   message?: string
+  pvc_size?: string
   id?: string
   name: string
   state: SessionState
@@ -126,22 +126,6 @@ export interface Storage {
   bucket_access_requests?: Bucket[]
 }
 
-export interface PersistentVolumeClaimStorage {
-  name: string
-  size: string
-}
-
-export interface ResourceStorageUsage {
-  quota?: string
-  requested: string
-  remaining?: string
-  persistent_volume_claims: PersistentVolumeClaimStorage[]
-}
-
-export interface WorkspaceResourceUsage {
-  storage: ResourceStorageUsage
-}
-
 export interface Datalab {
   memberships?: Membership[]
   available?: boolean
@@ -160,7 +144,6 @@ export interface Workspace {
   status: WorkspaceStatus
   storage?: Storage
   datalab?: Datalab
-  resource_usage?: WorkspaceResourceUsage
   user?: WorkspaceUser
 }
 

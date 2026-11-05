@@ -50,7 +50,6 @@ def providers(monkeypatch: pytest.MonkeyPatch):
         return SimpleNamespace(apis=apis, discovery=discovery)
 
     monkeypatch.setattr(views, "current_namespace", lambda: "workspace")
-    monkeypatch.setattr(views, "_workspace_resource_usage", lambda *_args: None)
     monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
     return configure
 

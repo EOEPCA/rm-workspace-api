@@ -29,3 +29,18 @@ export function formatStorageQuantity(quantity: string, locale?: string): string
 
   return `${formattedValue}${BINARY_UNITS[displayPower]}`
 }
+
+export function sumStorageQuantities(quantities: (string | undefined)[]): string | null {
+  if (!quantities.length) return null
+
+  let bytes = 0
+  for (const quantity of quantities) {
+    if (quantity === undefined) return null
+    const match = BINARY_QUANTITY_PATTERN.exec(quantity.trim())
+    if (!match) return null
+    const power = BINARY_UNITS.indexOf((match[2] ?? '') as (typeof BINARY_UNITS)[number])
+    bytes += Number(match[1]) * 1024 ** power
+    if (!Number.isFinite(bytes)) return null
+  }
+  return String(bytes)
+}

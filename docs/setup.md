@@ -53,9 +53,14 @@ The API needs these Kubernetes permissions in the namespaces it manages:
 | Storage and Datalab resources | `get`, `list`, `create`, `patch`, `delete` |
 | Referenced Secrets | `get` in each referenced namespace |
 | Provider and backing store CRDs | `get` |
-| Workspace PVCs and ResourceQuotas | `list` |
 
-PVC and quota access is optional. Without it, the UI omits storage usage.
+Session storage comes from Datalab `status.sessions[].pvcSize`, a Kubernetes
+quantity such as `10Gi`. The API exposes it as `datalab.sessions[].pvc_size`.
+
+The overview sums these values as **Persistent session storage**. This is
+requested persistent storage, including stopped sessions that retain storage.
+The figure is shown when all session sizes are valid. The provider publishes
+`0` for a known zero size and omits the field when the size is unknown.
 
 ## Development
 

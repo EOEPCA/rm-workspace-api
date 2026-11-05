@@ -35,7 +35,6 @@ def vcluster_api(monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(views, "_res_optional", lambda _api, kind: api if kind == views.KIND_DATALAB else None)
     monkeypatch.setattr(views, "_available_store_types", lambda _available: [])
-    monkeypatch.setattr(views, "_workspace_resource_usage", lambda _name: None)
     monkeypatch.setattr(views, "current_namespace", lambda: "workspace")
     return api
 

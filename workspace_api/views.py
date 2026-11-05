@@ -47,8 +47,6 @@ from .models import (
     Membership,
     MembershipRole,
     OAuth2Connection,
-    PersistentVolumeClaimStorage,
-    ResourceStorageUsage,
     Session,
     SessionCreate,
     SessionState,
@@ -66,7 +64,6 @@ from .models import (
     WorkspaceEdit,
     WorkspaceListItem,
     WorkspaceListSession,
-    WorkspaceResourceUsage,
     WorkspaceStatus,
     WorkspaceToken,
 )
@@ -415,6 +412,7 @@ def _sessions_from_datalab(datalab: Any, *, management: bool = False) -> list[Se
 
         payload = published.get(name, {})
         url = _http_url(payload.get("url"))
+        pvc_size = _parse_storage_quantity(payload.get("pvcSize"))
 
         try:
             sessions.append(
@@ -425,6 +423,7 @@ def _sessions_from_datalab(datalab: Any, *, management: bool = False) -> list[Se
                     ready=state == SessionState.STARTED and _session_runtime_ready(payload),
                     phase=_clean_str(payload.get("phase")),
                     message=_clean_str(payload.get("message")),
+                    pvc_size=_format_storage_quantity(pvc_size[1]) if pvc_size is not None else None,
                 )
             )
         except ValueError as e:
@@ -880,8 +879,8 @@ def _parse_storage_quantity(raw: Any) -> tuple[str, Decimal] | None:
     except ValueError:
         logger.warning("Ignoring invalid Kubernetes storage quantity %r.", value)
         return None
-    if parsed < 0:
-        logger.warning("Ignoring negative Kubernetes storage quantity %r.", value)
+    if not parsed.is_finite() or parsed < 0:
+        logger.warning("Ignoring invalid Kubernetes storage quantity %r.", value)
         return None
     return value, parsed
 
@@ -896,55 +895,6 @@ def _format_storage_quantity(value: Decimal) -> str:
             return f"{int(quantity)}{suffix}"
 
     return format(value.normalize(), "f")
-
-
-def _workspace_resource_usage(workspace_name: str) -> WorkspaceResourceUsage | None:
-    core_api = k8s_client.CoreV1Api()
-    try:
-        resource_quotas = core_api.list_namespaced_resource_quota(namespace=workspace_name)
-        persistent_volume_claims = core_api.list_namespaced_persistent_volume_claim(namespace=workspace_name)
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return None
-        if e.status == HTTPStatus.FORBIDDEN:
-            logger.warning(
-                "Skipping resource usage for workspace '%s': Kubernetes access forbidden.",
-                workspace_name,
-            )
-            return None
-        raise
-
-    quota_candidates: list[tuple[str, Decimal]] = []
-    for resource_quota in resource_quotas.items:
-        status_hard = getattr(getattr(resource_quota, "status", None), "hard", None) or {}
-        spec_hard = getattr(getattr(resource_quota, "spec", None), "hard", None) or {}
-        parsed_quota = _parse_storage_quantity(status_hard.get("requests.storage") or spec_hard.get("requests.storage"))
-        if parsed_quota is not None:
-            quota_candidates.append(parsed_quota)
-
-    quota, quota_value = min(quota_candidates, key=lambda candidate: candidate[1]) if quota_candidates else (None, None)
-
-    requested_value = Decimal(0)
-    pvc_storage: list[PersistentVolumeClaimStorage] = []
-    for pvc in persistent_volume_claims.items:
-        name = _clean_str(getattr(getattr(pvc, "metadata", None), "name", None))
-        requests = getattr(getattr(getattr(pvc, "spec", None), "resources", None), "requests", None) or {}
-        parsed_size = _parse_storage_quantity(requests.get("storage"))
-        if name is None or parsed_size is None:
-            continue
-        size, size_value = parsed_size
-        requested_value += size_value
-        pvc_storage.append(PersistentVolumeClaimStorage(name=name, size=size))
-
-    remaining_value = max(Decimal(0), quota_value - requested_value) if quota_value is not None else None
-    return WorkspaceResourceUsage(
-        storage=ResourceStorageUsage(
-            quota=quota,
-            requested=_format_storage_quantity(requested_value),
-            remaining=_format_storage_quantity(remaining_value) if remaining_value is not None else None,
-            persistent_volume_claims=sorted(pvc_storage, key=lambda pvc: pvc.name),
-        )
-    )
 
 
 def _declared_stores(
@@ -1122,7 +1072,6 @@ def _combine_workspace(
         connections=connections,
         oauth2=oauth2,
     )
-    resource_usage = _workspace_resource_usage(workspace_name) if UserPermission.VIEW_RESOURCE_USAGE in workspace_perms else None
 
     if UserPermission.VIEW_CONNECTION_CREDENTIALS not in workspace_perms:
         storage.credentials = None
@@ -1145,7 +1094,6 @@ def _combine_workspace(
         status=workspace_status,
         storage=storage,
         datalab=datalab,
-        resource_usage=resource_usage,
         user=UserContext(
             name=user_ctx["username"],
             permissions=sorted(workspace_perms),

@@ -104,7 +104,6 @@ def connection_workspace(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(views, "_res_optional", lambda *_args: SimpleNamespace(get=lambda **_kwargs: datalab))
     monkeypatch.setattr(views, "_available_store_types", lambda *_args: list(StoreType))
     monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
-    monkeypatch.setattr(views, "_workspace_resource_usage", lambda *_args: None)
     return SimpleNamespace(
         datalab=datalab, connections=connections, oauth2=oauth2, read_secret=read_secret, secrets=secrets, storage_read=storage_read
     )

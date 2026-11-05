@@ -12,8 +12,6 @@ from urllib.parse import parse_qs
 import pytest
 from authlib.jose import JsonWebKey, JsonWebToken
 from fastapi.testclient import TestClient
-from kubernetes import client as k8s_client  # type: ignore[import-untyped]
-from kubernetes.client.rest import ApiException  # type: ignore[import-untyped]
 
 from workspace_api import views
 
@@ -72,104 +70,6 @@ def test_get_workspace_rejects_ungranted_workspace(client: TestClient) -> None:
     response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {token}"})
 
     assert response.status_code == HTTPStatus.FORBIDDEN
-
-
-def test_get_workspace_returns_storage_quota_pvcs_sum_and_remaining(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = SimpleNamespace(
-        metadata=SimpleNamespace(creationTimestamp=None, resourceVersion="1"),
-        spec={"principal": "ws-alice", "buckets": []},
-    )
-    datalab = SimpleNamespace(
-        metadata=SimpleNamespace(creationTimestamp=None),
-        spec={"users": ["alice"], "sessions": []},
-        status={},
-    )
-    datalab_api = mock.MagicMock()
-    datalab_api.get.return_value = datalab
-    core_api = mock.MagicMock()
-    core_api.list_namespaced_resource_quota.return_value = k8s_client.V1ResourceQuotaList(
-        items=[
-            k8s_client.V1ResourceQuota(
-                metadata=k8s_client.V1ObjectMeta(name="workspace-storage"),
-                status=k8s_client.V1ResourceQuotaStatus(
-                    hard={"requests.storage": "10Gi"},
-                    used={"requests.storage": "1536Mi"},
-                ),
-            )
-        ]
-    )
-    core_api.list_namespaced_persistent_volume_claim.return_value = k8s_client.V1PersistentVolumeClaimList(
-        items=[
-            k8s_client.V1PersistentVolumeClaim(
-                metadata=k8s_client.V1ObjectMeta(name="workspace-data"),
-                spec=k8s_client.V1PersistentVolumeClaimSpec(resources=k8s_client.V1VolumeResourceRequirements(requests={"storage": "1Gi"})),
-            ),
-            k8s_client.V1PersistentVolumeClaim(
-                metadata=k8s_client.V1ObjectMeta(name="cache"),
-                spec=k8s_client.V1PersistentVolumeClaimSpec(
-                    resources=k8s_client.V1VolumeResourceRequirements(requests={"storage": "512Mi"})
-                ),
-            ),
-        ]
-    )
-
-    monkeypatch.setattr(views, "_get_cr", lambda _api, kind, *_args, **_kwargs: storage if kind == views.KIND_STORAGE else datalab)
-    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
-    monkeypatch.setattr(views, "_available_store_types", lambda _datalab_installed: [])
-    monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
-    monkeypatch.setattr(views, "fetch_secret", lambda *_args: None)
-    monkeypatch.setattr(views.k8s_client, "CoreV1Api", lambda: core_api)
-
-    response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {_dev_token()}"})
-
-    assert response.status_code == HTTPStatus.OK
-    assert response.json()["resource_usage"] == {
-        "storage": {
-            "quota": "10Gi",
-            "requested": "1536Mi",
-            "remaining": "8704Mi",
-            "persistent_volume_claims": [
-                {"name": "cache", "size": "512Mi"},
-                {"name": "workspace-data", "size": "1Gi"},
-            ],
-        }
-    }
-    core_api.list_namespaced_resource_quota.assert_called_once_with(namespace="ws-alice")
-    core_api.list_namespaced_persistent_volume_claim.assert_called_once_with(namespace="ws-alice")
-
-
-def test_get_workspace_omits_resource_usage_when_kubernetes_access_is_forbidden(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage = SimpleNamespace(
-        metadata=SimpleNamespace(creationTimestamp=None, resourceVersion="1"),
-        spec={"principal": "ws-alice", "buckets": []},
-    )
-    datalab = SimpleNamespace(
-        metadata=SimpleNamespace(creationTimestamp=None),
-        spec={"users": ["alice"], "sessions": []},
-        status={},
-    )
-    datalab_api = mock.MagicMock()
-    datalab_api.get.return_value = datalab
-    core_api = mock.MagicMock()
-    core_api.list_namespaced_resource_quota.side_effect = ApiException(status=HTTPStatus.FORBIDDEN)
-
-    monkeypatch.setattr(views, "_get_cr", lambda _api, kind, *_args, **_kwargs: storage if kind == views.KIND_STORAGE else datalab)
-    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
-    monkeypatch.setattr(views, "_available_store_types", lambda _datalab_installed: [])
-    monkeypatch.setattr(views, "_extract_relevant_bucket_access_requests", lambda *_args: [])
-    monkeypatch.setattr(views, "fetch_secret", lambda *_args: None)
-    monkeypatch.setattr(views.k8s_client, "CoreV1Api", lambda: core_api)
-
-    response = client.get("/workspaces/ws-alice", headers={"Authorization": f"Bearer {_dev_token()}"})
-
-    assert response.status_code == HTTPStatus.OK
-    assert "resource_usage" not in response.json()
 
 
 def _storage_list(*names: str) -> SimpleNamespace:
