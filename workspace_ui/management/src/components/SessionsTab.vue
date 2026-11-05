@@ -16,7 +16,7 @@
   </div>
 
   <q-banner v-if="!datalabAvailable" class="bg-orange-1 text-orange-10 q-mb-md" dense>
-    Provider Datalab is not installed for this cluster.
+    Datalab is not available for this workspace.
   </q-banner>
 
   <q-banner v-else-if="sessionLimitReached" class="bg-blue-grey-1 text-blue-grey-9 q-mb-md" dense>
@@ -63,12 +63,16 @@
         <q-badge :color="props.row.state === 'started' ? 'green' : 'grey-7'">
           {{ props.row.state }}
         </q-badge>
+        <q-badge v-if="props.row.phase" outline class="q-ml-sm">
+          {{ props.row.phase }}
+          <q-tooltip v-if="props.row.message">{{ props.row.message }}</q-tooltip>
+        </q-badge>
       </q-td>
     </template>
 
     <template v-slot:body-cell-url="props">
       <q-td :props="props">
-        <a v-if="props.row.url" :href="props.row.url" target="_blank" rel="noopener noreferrer">
+        <a v-if="props.row.ready && props.row.url" :href="props.row.url" target="_blank" rel="noopener noreferrer">
           {{ props.row.url }}
         </a>
         <span v-else class="text-grey-7">-</span>
@@ -82,9 +86,9 @@
           dense
           flat
           icon="open_in_new"
-          :href="sessionOpenUrl(workspaceName, props.row.name)"
+          :href="props.row.url"
           target="_blank"
-          :disable="props.row.state !== 'started' || isBusy(props.row)"
+          :disable="!props.row.ready || !props.row.url || isBusy(props.row)"
         >
           <q-tooltip>Open session</q-tooltip>
         </q-btn>
@@ -176,7 +180,7 @@ import {computed, reactive, ref, watch} from 'vue'
 import type {QTable, QTableColumn} from 'quasar'
 import {useQuasar} from 'quasar'
 import type {SessionState, WorkspaceSession} from 'src/models/models'
-import {createSession, deleteSession, sessionOpenUrl, updateSessionState} from 'src/services/api'
+import {createSession, deleteSession, updateSessionState} from 'src/services/api'
 import {scrollToAndFocusLastRow} from 'src/services/common'
 import {useUserStore} from 'stores/userStore'
 

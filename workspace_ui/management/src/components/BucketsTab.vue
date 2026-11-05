@@ -240,7 +240,7 @@ import {QTable, useQuasar} from 'quasar'
 import type {Bucket, BucketLifecycleRule, BucketNew, BucketUI} from 'src/models/models'
 import {formatDate, scrollToAndFocusLastRow} from 'src/services/common'
 import {sortByBucketNameAsc} from 'src/services/sorting'
-import {saveBuckets, saveRequestedBuckets} from 'src/services/api'
+import {saveBuckets, saveBucketAccessRequests} from 'src/services/api'
 import {useUserStore} from 'stores/userStore'
 
 const props = defineProps<{
@@ -270,7 +270,6 @@ const lifecycleConditionOptions = [
   {label: 'At', value: 'at'}
 ]
 
-/** local proxies for v-model */
 
 const myBuckets = ref<BucketUI[]>([])
 const initialBuckets = ref<BucketUI[]>([])
@@ -324,7 +323,6 @@ const hasChanged = computed(() => {
 const myLinkedBuckets = computed(() =>
   props.linkedBuckets
     .filter(r => r.workspace === props.workspaceName && (allAvailableBuckets.value || !!r.request_timestamp))
-    // .sort(sortByRequestThenGrantDesc)
     .sort(sortByBucketNameAsc)
 )
 
@@ -387,7 +385,7 @@ const linkedColumns: QTableColumn<Bucket>[] = [
     field: 'request_timestamp',
     align: 'left',
     sortable: true,
-    format: (val) => formatDate(val as string | null)   // (val, row) möglich, row hier nicht gebraucht
+    format: (val) => formatDate(val as string | null)
   },
   {
     name: 'granted',
@@ -602,7 +600,7 @@ function createBuckets() {
 function requestBucket(row: Bucket) {
   row.request_timestamp = new Date().toISOString()
   const requestedBuckets = [row]
-  saveRequestedBuckets(props.workspaceName, requestedBuckets)
+  saveBucketAccessRequests(props.workspaceName, requestedBuckets)
     .then(() => {
       $q.notify({
         type: 'positive',

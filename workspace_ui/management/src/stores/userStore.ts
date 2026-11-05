@@ -5,25 +5,12 @@ interface UserState {
   user: WorkspaceUser | null
 }
 
-function ensureViewPermissions(perms: UserPermission[]): UserPermission[] {
-  const set = new Set<UserPermission>(perms)
-
-  // MANAGE implies VIEW
-  if (set.has('MANAGE_BUCKETS')) set.add('VIEW_BUCKETS')
-  if (set.has('MANAGE_MEMBERS')) set.add('VIEW_MEMBERS')
-  if (set.has('MANAGE_STORES')) set.add('VIEW_STORES')
-  if (set.has('MANAGE_SESSIONS')) set.add('VIEW_SESSIONS')
-
-  return Array.from(set)
-}
-
 export const useUserStore = defineStore('user', {
   state: (): UserState => ({
     user: null,
   }),
 
   getters: {
-    // Convenience: always returns an array (never null/undefined).
     permissions(state): UserPermission[] {
       return state.user?.permissions ?? []
     },
@@ -32,22 +19,22 @@ export const useUserStore = defineStore('user', {
       return !!state.user?.name
     },
 
-    // Generic permission check
     hasPermission(): (perm: UserPermission) => boolean {
       return (perm: UserPermission) => this.permissions.includes(perm)
     },
 
-    // "Any-of" helper for sections that accept multiple permissions
     hasAnyPermission(): (perms: UserPermission[]) => boolean {
       return (perms: UserPermission[]) => perms.some(p => this.permissions.includes(p))
     },
 
-    // Opinionated, readable flags for the UI
     canViewBuckets(): boolean {
       return this.permissions.includes('VIEW_BUCKETS')
     },
-    canViewBucketCredentials(): boolean {
-      return this.permissions.includes('VIEW_BUCKET_CREDENTIALS')
+    canViewConnectionCredentials(): boolean {
+      return this.permissions.includes('VIEW_CONNECTION_CREDENTIALS')
+    },
+    canViewOAuth2Credentials(): boolean {
+      return this.permissions.includes('VIEW_OAUTH2_CREDENTIALS')
     },
     canViewMembers(): boolean {
       return this.permissions.includes('VIEW_MEMBERS')
@@ -77,17 +64,7 @@ export const useUserStore = defineStore('user', {
 
   actions: {
     setUser(user: WorkspaceUser | null) {
-      if (!user) {
-        this.user = null
-        return
-      }
-
-      const normalizedPermissions = ensureViewPermissions(user.permissions ?? [])
-
-      this.user = {
-        ...user,
-        permissions: normalizedPermissions,
-      }
+      this.user = user
     },
     clearUser() {
       this.user = null

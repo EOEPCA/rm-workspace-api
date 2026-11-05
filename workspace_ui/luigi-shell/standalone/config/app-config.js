@@ -1,102 +1,40 @@
-// Dummy configuration data for standalone frontend development
-export const workspaceData = {
-  "name": "ws-bob",
-  "creation_timestamp": "2025-06-19T15:00:36Z",
-  "version": "919190705",
-  "status": "ready",
-  "storage": {
-    "credentials": {
-      "bucketname": "ws-bob",
-      "access": "ws-bob",
-      "secret": "secret",
-      "endpoint": "https://minio.develop.eoepca.org",
-      "region": "eoepca-demo"
-    },
-    "buckets": [
-      "ws-bob",
-      "ws-bob-new",
-      "ws-eric-shared"
-    ]
-  },
-  "cluster": {
-    "kubeconfig": "**********",
-    "status": "active"
-  },
-  "members": [
-    "example-user-1",
-    "test"
-  ]
+const s3 = {
+  name: 'primary', type: 's3', ready: true,
+  secret_ref: { name: 'ws-alice-s3', namespace: 'workspace' },
+  endpoint: 'https://s3.example.org', region: 'demo',
+  credentials: { AWS_ACCESS_KEY_ID: 'demo-access-key', AWS_SECRET_ACCESS_KEY: 'demo-secret-key' },
 };
 
-export const endpointsData = [
-  {
-    "id": "vcluster",
-    "url": "ws-bob.ngx.develop.eoepca.org",
-    "creation_timestamp": "2025-06-19T15:00:37Z"
+export const workspaceData = {
+  name: 'ws-alice', version: '1', status: 'ready',
+  storage: {
+    available: true,
+    buckets: [{ name: 'ws-alice', discoverable: true, lifecycle_rules: [] }],
+    bucket_access_requests: [],
   },
-  {
-    "id": "code-server",
-    "url": "code-server-ws-bob.develop.eoepca.org",
-    "creation_timestamp": "2025-07-02T13:39:14Z"
+  datalab: {
+    available: true,
+    available_store_types: ['database', 'document', 'cache'],
+    memberships: [{ member: 'alice', role: 'owner' }],
+    stores: [{ name: 'analytics', type: 'database', instance: 'pg0', storage: '1Gi' }],
+    sessions: [{ name: 'default', state: 'started', ready: true, url: 'https://session.example.org' }],
+    max_sessions: 3,
+    connections: [s3, {
+      name: 'pg0', type: 'postgres', ready: true,
+      secret_ref: { name: 'ws-alice-postgres', namespace: 'workspace' },
+      endpoint: 'postgres.example.org:5432',
+      credentials: { user: 'demo', password: 'demo-password' },
+    }],
+    oauth2: [],
   },
-  {
-    "id": "workspace",
-    "url": "ws-bob.develop.eoepca.org",
-    "creation_timestamp": "2025-06-19T15:00:38Z"
-  }
-];
+  user: {
+    name: 'alice',
+    permissions: [
+      'VIEW_BUCKETS', 'VIEW_CONNECTION_CREDENTIALS', 'VIEW_OAUTH2_CREDENTIALS',
+      'VIEW_MEMBERS', 'VIEW_STORES', 'VIEW_SESSIONS',
+      'MANAGE_BUCKETS', 'MANAGE_MEMBERS', 'MANAGE_STORES', 'MANAGE_SESSIONS',
+    ],
+  },
+};
 
-window.membershipsData = [
-    {
-      "member": "bob",
-      "role": "owner",
-      "creation_timestamp": "2025-06-19T15:00:37Z"
-    },
-{
-  "member": "example-user-1",
-  "role": "contributor",
-  "creation_timestamp": "2025-06-19T15:00:37Z"
-},
-{
-  "member": "test",
-  "role": "contributor",
-  "creation_timestamp": "2025-06-19T15:00:37Z"
-},
-{
-  "member": "xy",
-  "role": "contributor",
-  "creation_timestamp": "2025-06-19T15:00:37Z"
-}
-];
-
-window.bucketAccessRequestsData = [
-  {
-    "workspace": "ws-bob",
-    "bucket": "ws-eric-shared",
-    "permission": "readwrite",
-    "request_timestamp": "2025-06-19T15:00:36Z",
-    "grant_timestamp": "2025-07-03T12:34:11Z"
-  },
-  {
-    "workspace": "ws-eric",
-    "bucket": "ws-bob-new",
-    "permission": "readwrite",
-    "request_timestamp": "2025-06-19T15:00:36Z",
-    "grant_timestamp": "2025-09-08T12:50:22Z"
-  },
-  {
-    "workspace": "ws-bob",
-    "bucket": "ws-eoepcauser-shared",
-    "permission": "readwrite"
-  },
-  {
-    "workspace": "ws-bob",
-    "bucket": "ws-testui-1-shared",
-    "permission": "readwrite"
-  },
-  {
-    "workspace": "ws-bob",
-    "bucket": "ws-testui-1-shared2",
-    "permission": "readwrite"
-  }
-];
+export const endpointsData = [{ id: 'Datalab (default)', url: workspaceData.datalab.sessions[0].url }];

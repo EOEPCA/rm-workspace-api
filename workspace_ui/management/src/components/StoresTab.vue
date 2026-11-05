@@ -16,7 +16,7 @@
   </div>
 
   <q-banner v-if="!datalabAvailable" class="bg-orange-1 text-orange-10 q-mb-md" dense>
-    Provider Datalab is not installed for this cluster.
+    Datalab is not available for this workspace.
   </q-banner>
 
   <q-banner v-else-if="availableStoreTypes.length === 0" class="bg-orange-1 text-orange-10 q-mb-md" dense>
@@ -70,14 +70,6 @@
           <q-tooltip v-if="rowErrors[props.row.id]?.name" anchor="bottom middle">
             {{ rowErrors[props.row.id]?.name }}
           </q-tooltip>
-          <!--
-          <template v-slot:append>
-            <q-btn dense flat icon="save" color="green"
-                   @click="addMember">
-              <q-tooltip>Save added member</q-tooltip>
-            </q-btn>
-          </template>
-          -->
         </q-input>
         <span v-else>
           {{ props.row.name }}
@@ -126,18 +118,6 @@
       </q-td>
     </template>
 
-    <!--
-    <template v-slot:bottom="">
-      <div class="row items-center q-gutter-sm">
-        <div>
-          <q-btn color="primary" no-caps label="Create Members" @click="createMembers"/>
-        </div>
-        <q-space/>
-        <div>{{ myStores.length }}</div>
-      </div>
-    </template>
-    -->
-
   </q-table>
 
   <q-btn color="primary" no-caps label="Save" @click="createStores" style="margin-top: 5px" :disable="!canManageStores || !datalabAvailable || availableStoreTypes.length === 0 || !hasChanged" />
@@ -153,7 +133,6 @@ import {scrollToAndFocusLastRow} from 'src/services/common'
 import {saveStores} from 'src/services/api'
 import {useUserStore} from 'stores/userStore'
 
-/** v-model */
 const props = defineProps<{
   workspaceName: string,
   stores: Store[]
@@ -178,7 +157,6 @@ watch(
 
 const storeTypeOptions: { label: string, value: StoreType }[] = [
   { label: 'Database (Postgres)', value: 'database' },
-  { label: 'Vector store (Qdrant)', value: 'vector' },
   { label: 'Cache (Redis)', value: 'cache' },
   { label: 'Document store (MongoDB)', value: 'document' },
 ]
@@ -196,7 +174,7 @@ function defaultStorageForType(type: StoreType) {
 }
 
 function normalizeStores(list: Store[]): string[] {
-  // Create a stable, order-independent representation
+  // Sort fields so row order does not mark the form as changed.
   return list
     .map(m => `${m.type}:${m.name}:${m.storage ?? ''}:${m.backup_storage ?? ''}`)
     .sort()
@@ -314,13 +292,6 @@ function normalizeName(v: string) {
 }
 
 
-/**
- * Validates unique store names within each store type.
- * - mode "row": validates only the given row (for blur)
- * - mode "all": validates all rows (for save)
- *
- * Returns true if validation passes for the requested scope.
- */
 function validateStoreNamesUnique(
   rows: Store[],
   opts:
@@ -343,7 +314,6 @@ function validateStoreNamesUnique(
     return true
   }
 
-  // Uniqueness check
   if (opts.mode === 'row') {
     const row = byId.get(opts.rowId)
     if (!row) return true
@@ -352,7 +322,6 @@ function validateStoreNamesUnique(
     return okLocal;
   }
 
-  // mode === "all"
   clearAllNameErrors()
 
   let okLocal = true

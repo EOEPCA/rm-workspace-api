@@ -3,6 +3,7 @@
 
 import base64
 import binascii
+import hashlib
 import html
 import json
 import logging
@@ -12,19 +13,22 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from decimal import Decimal
 from http import HTTPStatus
-from typing import Any
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import kubernetes.client
 import kubernetes.client.rest
 import requests
-from fastapi import HTTPException, Path, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from authlib.jose import JoseError, JsonWebToken
+from fastapi import HTTPException, Path, Query, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic import DynamicClient
+from kubernetes.dynamic.exceptions import ResourceNotFoundError
 from kubernetes.utils.quantity import parse_quantity
-from pydantic import SecretStr
+from pydantic import ValidationError
 from slugify import slugify
 
 from workspace_api import app, config, templates
@@ -36,11 +40,13 @@ from .models import (
     BucketLifecycleRule,
     BucketLifecycleRuleMode,
     BucketPermission,
-    ContainerRegistryCredentials,
+    Connection,
+    CredentialReference,
     Credentials,
     Datalab,
     Membership,
     MembershipRole,
+    OAuth2Connection,
     PersistentVolumeClaimStorage,
     ResourceStorageUsage,
     Session,
@@ -52,6 +58,9 @@ from .models import (
     StoreType,
     UserContext,
     UserPermission,
+    VCluster,
+    VClusterGroup,
+    VClusterGroupCreate,
     Workspace,
     WorkspaceCreate,
     WorkspaceEdit,
@@ -66,13 +75,13 @@ logger = logging.getLogger(__name__)
 
 
 def _with_prefix(name: str) -> str:
-    p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip()
+    p = (config.PREFIX_FOR_NAME or "").strip()
     p = p.rstrip("-")
     return f"{p}-{name}" if p else name
 
 
 def _provider_environment() -> str:
-    return str(getattr(config, "PROVIDER_ENVIRONMENT", "datalab") or "datalab").strip() or "datalab"
+    return str(config.PROVIDER_ENVIRONMENT or "datalab").strip() or "datalab"
 
 
 def _provider_environment_annotations(annotation_key: str) -> dict[str, str]:
@@ -83,7 +92,7 @@ DEFAULT_MAX_SESSIONS = 3
 
 
 def _max_sessions() -> int:
-    raw = getattr(config, "MAX_SESSIONS", str(DEFAULT_MAX_SESSIONS))
+    raw = config.MAX_SESSIONS
     try:
         value = int(str(raw).strip())
     except (TypeError, ValueError):
@@ -94,7 +103,7 @@ def _max_sessions() -> int:
 
 
 def _workspace_name_pattern() -> str:
-    p = (getattr(config, "PREFIX_FOR_NAME", "") or "").strip().rstrip("-")
+    p = (config.PREFIX_FOR_NAME or "").strip().rstrip("-")
     if p:
         return rf"^{re.escape(p)}-"
     return r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
@@ -135,7 +144,6 @@ STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
 DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
 STORE_TYPE_CRDS = {
     StoreType.DATABASE: "postgresclusters.postgres-operator.crunchydata.com",
-    StoreType.VECTOR: "qdrantclusters.qdrant.io",
     StoreType.CACHE: "redis.redis.redis.opstreelabs.in",
     StoreType.DOCUMENT: "mongodbcommunity.mongodbcommunity.mongodb.com",
 }
@@ -165,23 +173,31 @@ def _dyn() -> DynamicClient:
 
 
 def _res_required(api: str, kind: str) -> Any:
-    try:
-        return _dyn().resources.get(api_version=api, kind=kind)
-    except Exception as e:
+    resource = _res_optional(api, kind)
+    if resource is None:
         raise HTTPException(
             status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-            detail={
-                "error": f"Required CRD for kind {kind} ({api}) not available",
-                "exception": str(e),
-            },
-        ) from e
+            detail=f"CRD for {kind} ({api}) is not installed",
+        )
+    return resource
+
+
+def _provider_disabled(kind: str) -> bool:
+    setting = {KIND_STORAGE: "DISABLE_STORAGE", KIND_DATALAB: "DISABLE_DATALAB"}.get(kind)
+    return bool(setting and _as_bool(getattr(config, setting, "false")))
 
 
 def _res_optional(api: str, kind: str) -> Any:
+    if _provider_disabled(kind):
+        return None
     try:
         return _dyn().resources.get(api_version=api, kind=kind)
-    except Exception:
+    except ResourceNotFoundError:
         return None
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            return None
+        raise
 
 
 def fetch_secret(secret_name: str, namespace: str) -> k8s_client.V1Secret | None:
@@ -201,6 +217,9 @@ def _to_b64_json(obj: Any) -> str:
 
 
 def _crd_exists(name: str) -> bool:
+    kind = {CRD_STORAGE: KIND_STORAGE, CRD_DATALAB: KIND_DATALAB}.get(name)
+    if kind and _provider_disabled(kind):
+        return False
     api = k8s_client.ApiextensionsV1Api()
     try:
         api.read_custom_resource_definition(name)
@@ -216,38 +235,16 @@ def _crd_exists(name: str) -> bool:
     status_code=HTTPStatus.OK,
     tags=["System"],
     summary="Health and CRD availability",
-    description=(
-        "Reports service health and whether required/optional CRDs are present in the cluster.\n"
-        "- Requires: `storages.pkg.internal`\n"
-        "- Optional: `datalabs.pkg.internal`"
-    ),
-    responses={
-        200: {"description": "Service healthy; returns CRD presence flags."},
-        503: {"description": "Storage CRD missing; service not operational."},
-    },
+    description="Reports service health and enabled Storage and Datalab CRD availability. Disabled providers report false.",
 )
 async def status() -> Response:
-    storage_present = _crd_exists(CRD_STORAGE)
-    datalab_present = _crd_exists(CRD_DATALAB)
-
-    if not storage_present:
-        return JSONResponse(
-            {
-                "ok": False,
-                "error": f"Required CRD {CRD_STORAGE} not found in cluster",
-                "datalab_crd_present": datalab_present,
-            },
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-        )
-
-    payload: dict[str, Any] = {
-        "ok": True,
-        "storage_crd_present": True,
-        "datalab_crd_present": datalab_present,
-    }
-    if not datalab_present:
-        payload["warnings"] = [f"Optional CRD {CRD_DATALAB} not found; memberships will be empty."]
-    return JSONResponse(payload, status_code=HTTPStatus.OK)
+    return JSONResponse(
+        {
+            "ok": True,
+            "storage_crd_present": _crd_exists(CRD_STORAGE),
+            "datalab_crd_present": _crd_exists(CRD_DATALAB),
+        }
+    )
 
 
 def _get_cr(api_version: str, kind: str, name: str, required: bool) -> Any | None:
@@ -310,17 +307,17 @@ def _resource_name(obj: Any) -> str | None:
 
 
 def _session_name(item: Any) -> str | None:
-    if isinstance(item, str):
-        return item.strip() or None
     if isinstance(item, dict):
         return _clean_str(item.get("name"))
     return None
 
 
-def _session_state(item: Any) -> str:
+def _session_state(item: Any) -> str | None:
     if isinstance(item, dict):
-        return (_clean_str(item.get("state")) or SESSION_STATE_STARTED).lower()
-    return SESSION_STATE_STARTED
+        state = item.get("state", SESSION_STATE_STARTED)
+        if state in (SESSION_STATE_STARTED, SESSION_STATE_STOPPED):
+            return state
+    return None
 
 
 def _session_item(name: str, state: str | SessionState) -> dict[str, str]:
@@ -356,46 +353,21 @@ def _session_index(sessions: Sequence[Any], session_id: str) -> int | None:
     return None
 
 
-def _datalab_declares_session(workspace_name: str, session_id: str) -> bool:
-    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
-    if datalab_api is None:
-        return False
-
-    try:
-        datalab = datalab_api.get(name=workspace_name, namespace=current_namespace())
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return False
-        raise
-
-    spec = _to_spec_dict(datalab) or {}
-    return _find_session(_session_declarations(spec), session_id) is not None
-
-
 def _session_state_patch(sessions: Sequence[Any], session_id: str, state: str | SessionState) -> list[dict[str, Any]]:
     index = _session_index(sessions, session_id)
     if index is None:
         return []
 
-    session = sessions[index]
-    path = f"/spec/sessions/{index}"
-    if isinstance(session, dict):
-        return [
-            {
-                "op": "replace" if "state" in session else "add",
-                "path": f"{path}/state",
-                "value": getattr(state, "value", state),
-            }
-        ]
-
-    return [{"op": "replace", "path": path, "value": _session_item(session_id, state)}]
+    return [
+        {
+            "op": "replace" if "state" in sessions[index] else "add",
+            "path": f"/spec/sessions/{index}/state",
+            "value": getattr(state, "value", state),
+        }
+    ]
 
 
-def _session_start_patch(sessions: Sequence[Any], session_id: str) -> list[dict[str, Any]]:
-    return _session_state_patch(sessions, session_id, SESSION_STATE_STARTED)
-
-
-def _session_status_dict(datalab: Any) -> dict[str, Any]:
+def _datalab_status(datalab: Any) -> dict[str, Any]:
     st = getattr(datalab, "status", None)
     if st is None:
         return {}
@@ -406,34 +378,43 @@ def _session_status_dict(datalab: Any) -> dict[str, Any]:
     return {}
 
 
+def _session_status_entries(datalab: Any) -> dict[str, dict[str, Any]]:
+    sessions = _datalab_status(datalab).get("sessions") or []
+    if isinstance(sessions, list):
+        return {name: item for item in sessions if isinstance(item, dict) and (name := _session_name(item))}
+    return {}
+
+
 def _session_status_payload(datalab: Any, session_id: str) -> dict[str, Any]:
-    sessions = _session_status_dict(datalab).get("sessions") or {}
-    if not isinstance(sessions, dict):
-        return {}
-    payload = sessions.get(session_id) or {}
-    return payload if isinstance(payload, dict) else {}
+    return _session_status_entries(datalab).get(session_id, {})
 
 
-def _sessions_from_datalab(datalab: Any) -> list[Session]:
-    spec = _to_spec_dict(datalab) or {}
-    declared_sessions = _session_declarations(spec)
+def _session_runtime_ready(payload: dict[str, Any]) -> bool:
+    return bool(_http_url(payload.get("url")) and payload.get("state") == SESSION_STATE_STARTED and payload.get("phase") == "Running")
+
+
+def _sessions_from_datalab(datalab: Any, *, management: bool = False) -> list[Session]:
+    items = list(_session_declarations(_to_spec_dict(datalab) or {})) if management else []
+    published = _session_status_entries(datalab)
+    declared_names = {_session_name(item) for item in items}
+    items.extend({"name": name, "state": payload.get("state")} for name, payload in published.items() if name not in declared_names)
 
     sessions: list[Session] = []
     seen: set[str] = set()
-    for item in declared_sessions:
+    for item in items:
         name = _session_name(item)
         if not name or name in seen:
             continue
         seen.add(name)
 
         state_value = _session_state(item)
-        if state_value not in {SESSION_STATE_STARTED, SESSION_STATE_STOPPED}:
-            state_value = SESSION_STATE_STARTED
+        if state_value is None:
+            logger.warning("Skipping session '%s': invalid state.", name)
+            continue
         state = SessionState(state_value)
 
-        payload = _session_status_payload(datalab, name)
-        runtime_state = (_clean_str(payload.get("state")) or state).lower()
-        url = _clean_str(payload.get("url"))
+        payload = published.get(name, {})
+        url = _http_url(payload.get("url"))
 
         try:
             sessions.append(
@@ -441,7 +422,9 @@ def _sessions_from_datalab(datalab: Any) -> list[Session]:
                     name=name,
                     state=state,
                     url=url,
-                    ready=bool(url and runtime_state == SESSION_STATE_STARTED),
+                    ready=state == SessionState.STARTED and _session_runtime_ready(payload),
+                    phase=_clean_str(payload.get("phase")),
+                    message=_clean_str(payload.get("message")),
                 )
             )
         except ValueError as e:
@@ -450,20 +433,8 @@ def _sessions_from_datalab(datalab: Any) -> list[Session]:
     return sessions
 
 
-def _get_first(*vals: Any) -> str | None:
-    for v in vals:
-        if v is not None:
-            s = str(v).strip()
-            if s:
-                return s
-    return None
-
-
 def _bucketname_from(d: dict) -> str | None:
-    return _get_first(
-        d.get("bucketName"),
-        d.get("bucket"),
-    )
+    return _clean_str(d.get("bucketName"))
 
 
 def _bucket_lifecycle_rules_from_provider(d: dict[str, Any]) -> list[BucketLifecycleRule]:
@@ -488,7 +459,7 @@ def _bucket_lifecycle_rules_from_provider(d: dict[str, Any]) -> list[BucketLifec
                 BucketLifecycleRule(
                     target=target,
                     mode=mode,
-                    min_age=raw_rule.get("minAge") or raw_rule.get("min_age"),
+                    min_age=raw_rule.get("minAge"),
                     at=raw_rule.get("at"),
                 )
             )
@@ -527,7 +498,6 @@ def _dedup_preserve(items: list[str]) -> list[str]:
 def _store_field_for_type(store_type: StoreType) -> str:
     return {
         StoreType.DATABASE: "databases",
-        StoreType.VECTOR: "vectorStores",
         StoreType.CACHE: "cacheStores",
         StoreType.DOCUMENT: "documentStores",
     }[store_type]
@@ -536,48 +506,25 @@ def _store_field_for_type(store_type: StoreType) -> str:
 def _default_storage_for_type(store_type: StoreType) -> str:
     return {
         StoreType.DATABASE: "1Gi",
-        StoreType.VECTOR: "1Gi",
         StoreType.CACHE: "1Gi",
         StoreType.DOCUMENT: "10Gi",
     }[store_type]
 
 
-def _store_type_from_config(raw: str) -> StoreType | None:
-    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "database": StoreType.DATABASE,
-        "databases": StoreType.DATABASE,
-        "postgres": StoreType.DATABASE,
-        "postgresql": StoreType.DATABASE,
-        "vector": StoreType.VECTOR,
-        "vector_store": StoreType.VECTOR,
-        "vectorstores": StoreType.VECTOR,
-        "qdrant": StoreType.VECTOR,
-        "cache": StoreType.CACHE,
-        "caches": StoreType.CACHE,
-        "cache_store": StoreType.CACHE,
-        "cachestores": StoreType.CACHE,
-        "redis": StoreType.CACHE,
-        "document": StoreType.DOCUMENT,
-        "documents": StoreType.DOCUMENT,
-        "document_store": StoreType.DOCUMENT,
-        "documentstores": StoreType.DOCUMENT,
-        "mongodb": StoreType.DOCUMENT,
-        "mongo": StoreType.DOCUMENT,
-    }
-    return aliases.get(normalized)
-
-
 def _disabled_store_types() -> set[StoreType]:
-    if _as_bool(getattr(config, "DISABLE_STORES", "false")):
+    if _as_bool(config.DISABLE_STORES):
         return set(StoreType)
 
-    raw = str(getattr(config, "DISABLED_STORE_TYPES", "") or "")
-    parts = [part.strip() for part in raw.replace(";", ",").split(",")]
-    if any(part.lower() in {"*", "all", "true", "yes", "1"} for part in parts):
-        return set(StoreType)
-
-    return {store_type for part in parts if (store_type := _store_type_from_config(part)) is not None}
+    disabled = set()
+    for part in config.DISABLED_STORE_TYPES.split(","):
+        name = part.strip()
+        if not name:
+            continue
+        try:
+            disabled.add(StoreType(name))
+        except ValueError:
+            logger.warning("Unknown store type in DISABLED_STORE_TYPES: %r", name)
+    return disabled
 
 
 def _get_nested(mapping: dict[str, Any], *keys: str) -> Any:
@@ -611,8 +558,6 @@ def _datalab_crd_store_fields() -> set[str]:
 
     api_version = API_DATALAB.rsplit("/", 1)[-1]
     selected = next((v for v in versions if isinstance(v, dict) and v.get("name") == api_version), None)
-    if selected is None:
-        selected = next((v for v in versions if isinstance(v, dict) and v.get("served")), None)
     if selected is None:
         return set()
 
@@ -664,6 +609,7 @@ def _stores_from_map(
             Store(
                 name=store_name,
                 type=store_type,
+                instance=store_name,
                 storage=storage,
                 backup_storage=None,
                 creation_timestamp=creation_timestamp,
@@ -694,24 +640,18 @@ def _extract_relevant_bucket_access_requests(
     current_principal: str,
     current_workspace_name: str,
 ) -> list[BucketAccessRequest]:
+    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
     try:
-        storage_api = _res_required(API_STORAGE, KIND_STORAGE)
         storages = storage_api.get(namespace=current_namespace())
-        storage_items = getattr(storages, "items", []) or []
-    except Exception as e:
-        logger.warning("Failed listing storages: %s", e)
-        storage_items = []
-
-    def _spec_dict(obj: Any) -> dict:
-        if hasattr(obj, "spec") and hasattr(obj.spec, "to_dict"):
-            return obj.spec.to_dict() or {}
-        return (getattr(obj, "spec", {}) or {}) if isinstance(getattr(obj, "spec", {}), dict) else {}
+    except ApiException as e:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail="Listing bucket access requests failed") from e
+    storage_items = getattr(storages, "items", []) or []
 
     out: list[BucketAccessRequest] = []
 
     for obj in storage_items:
         workspace_name = (getattr(obj.metadata, "name", None) or "").strip()
-        spec = _spec_dict(obj)
+        spec = _to_spec_dict(obj)
         if not isinstance(spec, dict):
             continue
 
@@ -759,7 +699,7 @@ def _extract_relevant_bucket_access_requests(
 
     existing_buckets_names = {bar.bucket for bar in out}
     for obj in storage_items:
-        spec = _spec_dict(obj)
+        spec = _to_spec_dict(obj)
         if not isinstance(spec, dict):
             continue
 
@@ -787,7 +727,7 @@ def _extract_relevant_bucket_access_requests(
 
     for obj in storage_items:
         workspace_name = (getattr(obj.metadata, "name", None) or "").strip()
-        spec = _spec_dict(obj)
+        spec = _to_spec_dict(obj)
         if not isinstance(spec, dict):
             continue
 
@@ -802,7 +742,7 @@ def _extract_relevant_bucket_access_requests(
                 if not grantee or not bucket_name:
                     continue
 
-                granted_at = g.get("grantedAt") or g.get("granted_at")
+                granted_at = g.get("grantedAt")
                 if not granted_at:
                     logger.warning(
                         "Skipping grant for grantee %s on bucket %s: missing grantedAt",
@@ -824,15 +764,6 @@ def _extract_relevant_bucket_access_requests(
     return out
 
 
-def _b64decode_secret_data(data: dict[str, str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, v in (data or {}).items():
-        if v is None:
-            continue
-        out[k] = base64.b64decode(v).decode("utf-8")
-    return out
-
-
 def _clean_str(v: object) -> str | None:
     if v is None:
         return None
@@ -842,182 +773,92 @@ def _clean_str(v: object) -> str | None:
     return None
 
 
-def _compact_credentials(values: dict[str, str | None]) -> dict[str, str]:
-    return {key: value for key, value in values.items() if value}
+def _http_url(value: object) -> str | None:
+    url = _clean_str(value)
+    if url:
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme in {"http", "https"} and parsed.hostname and not parsed.username and not parsed.password:
+                return url
+        except ValueError:
+            return None
+    return None
 
 
-def _put_store_credentials(
-    store_credentials: dict[StoreType, dict[str, dict[str, Any]]],
-    store_type: StoreType,
-    store_name: str | None,
-    values: dict[str, Any],
-) -> None:
-    name = (store_name or "default").strip() or "default"
-    credentials = {key: value for key, value in values.items() if value}
-    if not credentials:
-        return
-
-    store_credentials.setdefault(store_type, {}).setdefault(name, {}).update(credentials)
+def _matches_connection_selector(connection: CredentialReference, selectors: Sequence[str]) -> bool:
+    return any(
+        selector in {"*", "*:*", f"{connection.type}:{connection.name}", f"{connection.type}:*", f"*:{connection.name}"}
+        for selector in selectors
+    )
 
 
-def _store_name_from_secret_part(raw: str) -> str:
-    return raw.strip().lower().replace("_", "-")
-
-
-def _secret_store_key(prefix: str, store_name: str, suffix: str) -> str:
-    normalized_store = re.sub(r"[^A-Za-z0-9]+", "_", store_name).strip("_").upper()
-    return f"{prefix}_{normalized_store}_{suffix}"
-
-
-def _pg_secret_key(cluster_name: str, suffix: str) -> str:
-    return _secret_store_key("POSTGRES", cluster_name, suffix)
-
-
-def _pg_db_secret_key(cluster_name: str, database_name: str, suffix: str) -> str:
-    normalized_cluster = re.sub(r"[^A-Za-z0-9]+", "_", cluster_name).strip("_").upper()
-    normalized_database = re.sub(r"[^A-Za-z0-9]+", "_", database_name).strip("_").upper()
-    return f"POSTGRES_{normalized_cluster}_{normalized_database}_{suffix}"
-
-
-def _pg_secret_value(envs: Mapping[str, str], cluster_name: str, suffix: str) -> str | None:
-    return _clean_str(envs.get(_pg_secret_key(cluster_name, suffix)))
-
-
-def _pg_db_secret_value(envs: Mapping[str, str], cluster_name: str, database_name: str, suffix: str) -> str | None:
-    return _clean_str(envs.get(_pg_db_secret_key(cluster_name, database_name, suffix)))
-
-
-def _store_credentials_from_envs(
-    envs: dict[str, str],
-    database_hosts: Mapping[str, Sequence[str]] | None = None,
-) -> dict[StoreType, dict[str, dict[str, Any]]]:
-    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
-
-    for cluster_name, host_database_names_raw in (database_hosts or {}).items():
-        host_database_names = [name for name in host_database_names_raw if name]
-        if not host_database_names:
+def _oauth2_from_datalab(datalab: Any, workspace_name: str, *, resolve: Sequence[str]) -> list[OAuth2Connection]:
+    connections = []
+    for entry in _datalab_status(datalab).get("oauth2") or []:
+        if not isinstance(entry, dict):
             continue
-
-        host = _pg_secret_value(envs, cluster_name, "HOST")
-        port = _pg_secret_value(envs, cluster_name, "PORT")
-        username = _pg_secret_value(envs, cluster_name, "USER")
-        password = _pg_secret_value(envs, cluster_name, "PASSWORD")
-        host_external = _pg_secret_value(envs, cluster_name, "HOST_EXTERNAL")
-        urls = {name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL"))}
-        external_urls = {
-            name: url for name in host_database_names if (url := _pg_db_secret_value(envs, cluster_name, name, "URL_EXTERNAL"))
-        }
-
-        if host or username or password or urls or external_urls:
-            _put_store_credentials(
-                store_credentials,
-                StoreType.DATABASE,
-                cluster_name,
+        try:
+            connection = OAuth2Connection.model_validate(
                 {
-                    "host": host,
-                    "port": port,
-                    "username": username,
-                    "password": password,
-                    "host_external": host_external,
-                    "databases": ",".join(host_database_names),
-                    "urls": urls,
-                    "external_urls": external_urls,
-                },
+                    **{key: entry[key] for key in ("name", "type", "ready") if key in entry},
+                    "issuer_url": entry.get("issuerUrl"),
+                    "secret_ref": entry.get("secretRef"),
+                }
             )
-
-    for key, value in envs.items():
-        cleaned_value = _clean_str(value)
-        if not cleaned_value:
+        except ValidationError:
+            logger.warning("Ignoring invalid OAuth2 metadata for workspace '%s'.", workspace_name)
             continue
+        if _matches_connection_selector(connection, resolve):
+            _resolve_connection(connection)
+        connections.append(connection)
+    return connections
 
-        if match := re.fullmatch(r"MONGO_(.+?)_(AUTH_SOURCE|HOST|PORT|DATABASE|USER|PASSWORD|URI)", key):
-            fields = {
-                "HOST": "host",
-                "PORT": "port",
-                "DATABASE": "database",
-                "AUTH_SOURCE": "auth_source",
-                "USER": "username",
-                "PASSWORD": "password",
-                "URI": "uri",
-            }
-            _put_store_credentials(
-                store_credentials,
-                StoreType.DOCUMENT,
-                _store_name_from_secret_part(match.group(1)),
-                {fields[match.group(2)]: cleaned_value},
-            )
+
+def _connections_from_datalab(
+    datalab: Any, workspace_name: str, *, resolve: Sequence[str], oauth2_refs: set[tuple[str, str]]
+) -> list[Connection]:
+    entries = _datalab_status(datalab).get("connections") or []
+    connections = []
+    for entry in entries:
+        if not isinstance(entry, dict):
             continue
-
-        if match := re.fullmatch(r"REDIS_(.+?)_(HOST|PORT|USER|DATABASE|PASSWORD|URL)", key):
-            fields = {
-                "HOST": "host",
-                "PORT": "port",
-                "USER": "username",
-                "DATABASE": "database",
-                "PASSWORD": "password",
-                "URL": "url",
-            }
-            _put_store_credentials(
-                store_credentials,
-                StoreType.CACHE,
-                _store_name_from_secret_part(match.group(1)),
-                {fields[match.group(2)]: cleaned_value},
+        try:
+            connection = Connection.model_validate(
+                {
+                    **{
+                        key: entry[key]
+                        for key in ("name", "type", "ready", "endpoint", "region", "instance", "group", "role")
+                        if key in entry
+                    },
+                    "secret_ref": entry.get("secretRef"),
+                    "target_namespace": entry.get("targetNamespace"),
+                }
             )
+        except ValidationError:
+            logger.warning("Ignoring invalid connection metadata for workspace '%s'.", workspace_name)
             continue
+        if _matches_connection_selector(connection, resolve):
+            if (connection.secret_ref.namespace, connection.secret_ref.name) in oauth2_refs:
+                connection.resolution_error = "oauth2_reference"
+            else:
+                _resolve_connection(connection)
+        connections.append(connection)
+    return connections
 
-        if match := re.fullmatch(r"QDRANT_(.+?)_(READ_API_KEY|GRPC_PORT|API_KEY|HOST|PORT|URL)", key):
-            fields = {
-                "HOST": "host",
-                "PORT": "port",
-                "GRPC_PORT": "grpc_port",
-                "URL": "url",
-                "READ_API_KEY": "read_api_key",
-                "API_KEY": "api_key",
-            }
-            _put_store_credentials(
-                store_credentials,
-                StoreType.VECTOR,
-                _store_name_from_secret_part(match.group(1)),
-                {fields[match.group(2)]: cleaned_value},
-            )
-            continue
 
-        if match := re.fullmatch(r"QDRANT_(.+)_READ_API_KEY", key):
-            _put_store_credentials(
-                store_credentials,
-                StoreType.VECTOR,
-                _store_name_from_secret_part(match.group(1)),
-                {"read_api_key": cleaned_value},
-            )
-            continue
-
-        if match := re.fullmatch(r"QDRANT_(.+)_API_KEY", key):
-            _put_store_credentials(
-                store_credentials,
-                StoreType.VECTOR,
-                _store_name_from_secret_part(match.group(1)),
-                {"api_key": cleaned_value},
-            )
-            continue
-
-        if match := re.fullmatch(r"REDIS_(.+)_PASSWORD", key):
-            _put_store_credentials(
-                store_credentials,
-                StoreType.CACHE,
-                _store_name_from_secret_part(match.group(1)),
-                {"password": cleaned_value},
-            )
-            continue
-
-        if match := re.fullmatch(r"MONGO_(.+)_PASSWORD", key):
-            _put_store_credentials(
-                store_credentials,
-                StoreType.DOCUMENT,
-                _store_name_from_secret_part(match.group(1)),
-                {"password": cleaned_value},
-            )
-
-    return store_credentials
+def _resolve_connection(connection: CredentialReference) -> None:
+    ref = connection.secret_ref
+    if not connection.ready:
+        connection.resolution_error = "not_ready"
+        return
+    secret = fetch_secret(ref.name, ref.namespace)
+    if secret is None or not secret.data:
+        connection.resolution_error = "secret_not_found"
+        return
+    try:
+        connection.credentials = {key: base64.b64decode(value, validate=True).decode("utf-8") for key, value in secret.data.items()}
+    except (ValueError, TypeError, UnicodeDecodeError):
+        connection.resolution_error = "invalid_secret"
 
 
 _BINARY_STORAGE_UNITS = (
@@ -1106,29 +947,65 @@ def _workspace_resource_usage(workspace_name: str) -> WorkspaceResourceUsage | N
     )
 
 
-def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
-    storage_cr = _get_cr(API_STORAGE, KIND_STORAGE, workspace_name, required=True)
-    if not storage_cr:
-        raise HTTPException(
-            status_code=HTTPStatus.NOT_FOUND,
-            detail={
-                "error": f"Storage '{workspace_name}' not found",
-                "crd": CRD_STORAGE,
-            },
-        )
+def _declared_stores(
+    datalab_spec: dict[str, Any], available_store_types: Sequence[StoreType], dl_created_at: datetime | None
+) -> list[Store]:
+    stores: list[Store] = []
+
+    db_hosts = (datalab_spec or {}).get("databases") or {}
+
+    if not isinstance(db_hosts, dict):
+        db_hosts = {}
+
+    seen_db: set[tuple[str, str]] = set()
+
+    if StoreType.DATABASE in available_store_types:
+        for host, host_cfg in db_hosts.items():
+            if not isinstance(host_cfg, dict):
+                continue
+            names = host_cfg.get("names") or []
+            if not isinstance(names, list):
+                continue
+            for n in names:
+                name = str(n or "").strip()
+                if not name or (host, name) in seen_db:
+                    continue
+                seen_db.add((host, name))
+                stores.append(
+                    Store(
+                        name=name,
+                        type=StoreType.DATABASE,
+                        instance=host,
+                        storage=_clean_str(host_cfg.get("storage")),
+                        backup_storage=_clean_str(host_cfg.get("backupStorage")),
+                        creation_timestamp=dl_created_at,
+                    )
+                )
+
+    if StoreType.CACHE in available_store_types:
+        stores.extend(_stores_from_map(datalab_spec, "cacheStores", StoreType.CACHE, dl_created_at))
+    if StoreType.DOCUMENT in available_store_types:
+        stores.extend(_stores_from_map(datalab_spec, "documentStores", StoreType.DOCUMENT, dl_created_at))
+
+    return stores
+
+
+def _combine_workspace(
+    request: Request,
+    workspace_name: str,
+    *,
+    resolve_connections: Sequence[str] = ("s3:primary",),
+    resolve_oauth2: Sequence[str] = (),
+    management: bool = False,
+) -> Workspace:
+    storage_cr = _get_cr(API_STORAGE, KIND_STORAGE, workspace_name, required=False)
+    datalab_cr = _get_cr(API_DATALAB, KIND_DATALAB, workspace_name, required=False)
+    if storage_cr is None and datalab_cr is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Workspace not found")
 
     user_ctx = request.state.user
     workspace_perms = _workspace_permissions(request, workspace_name)
-
-    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
-    available_store_types = _available_store_types(datalab_api is not None)
-    datalab_cr = None
-    if datalab_api is not None:
-        try:
-            datalab_cr = datalab_api.get(name=workspace_name, namespace=current_namespace())
-        except ApiException as e:
-            if e.status != HTTPStatus.NOT_FOUND:
-                raise
+    available_store_types = _available_store_types(datalab_cr is not None)
 
     storage_spec = _to_spec_dict(storage_cr) or {}
     datalab_spec = _to_spec_dict(datalab_cr) or {}
@@ -1150,8 +1027,10 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
         if _as_bool((it or {}).get("discoverable")):
             discoverable_buckets.append(bname)
 
-    relevant_bucket_access_requests = _extract_relevant_bucket_access_requests(
-        _dedup_preserve(discoverable_buckets), principal, workspace_name
+    relevant_bucket_access_requests = (
+        _extract_relevant_bucket_access_requests(_dedup_preserve(discoverable_buckets), principal, workspace_name)
+        if storage_cr is not None and UserPermission.VIEW_BUCKETS in workspace_perms
+        else []
     )
 
     users = (datalab_spec or {}).get("users") or []
@@ -1188,105 +1067,38 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             )
         )
 
-    stores: list[Store] = []
+    sessions = _sessions_from_datalab(datalab_cr, management=management) if datalab_cr is not None else []
 
-    db_hosts = (datalab_spec or {}).get("databases") or {}
-
-    if not isinstance(db_hosts, dict):
-        db_hosts = {}
-
-    seen_db: set[str] = set()
-    database_hosts: dict[str, list[str]] = {}
-
-    if StoreType.DATABASE in available_store_types:
-        for host_name, host_cfg in db_hosts.items():
-            if not isinstance(host_cfg, dict):
-                continue
-            names = host_cfg.get("names") or []
-            if not isinstance(names, list):
-                continue
-            host_key = str(host_name or "").strip() or "pg0"
-            database_hosts.setdefault(host_key, [])
-            for n in names:
-                name = str(n or "").strip()
-                if not name or name in seen_db:
-                    continue
-                seen_db.add(name)
-                database_hosts[host_key].append(name)
-                stores.append(
-                    Store(
-                        name=name,
-                        type=StoreType.DATABASE,
-                        storage=_clean_str(host_cfg.get("storage")),
-                        backup_storage=_clean_str(host_cfg.get("backupStorage")),
-                        creation_timestamp=dl_created_at,
-                    )
-                )
-
-    if StoreType.VECTOR in available_store_types:
-        stores.extend(_stores_from_map(datalab_spec, "vectorStores", StoreType.VECTOR, dl_created_at))
-    if StoreType.CACHE in available_store_types:
-        stores.extend(_stores_from_map(datalab_spec, "cacheStores", StoreType.CACHE, dl_created_at))
-    if StoreType.DOCUMENT in available_store_types:
-        stores.extend(_stores_from_map(datalab_spec, "documentStores", StoreType.DOCUMENT, dl_created_at))
-
-    sessions = _sessions_from_datalab(datalab_cr) if datalab_cr is not None else []
-
+    oauth2 = _oauth2_from_datalab(datalab_cr, workspace_name, resolve=resolve_oauth2)
+    connections = _connections_from_datalab(
+        datalab_cr,
+        workspace_name,
+        resolve=resolve_connections,
+        oauth2_refs={(connection.secret_ref.namespace, connection.secret_ref.name) for connection in oauth2},
+    )
     credentials: Credentials | None = None
-    store_credentials: dict[StoreType, dict[str, dict[str, Any]]] = {}
-    container_registry_credentials: ContainerRegistryCredentials | None = None
-
-    secret = None
-    secret = fetch_secret(f"{workspace_name}-datalab", current_namespace())
-    if not secret:
-        secret = fetch_secret(f"{workspace_name}", current_namespace())
-    if secret and getattr(secret, "data", None):
-        try:
-            envs = _b64decode_secret_data(secret.data)
-
-            bucketname = _clean_str(envs.get("BUCKET"))
-            access = _clean_str(envs.get("AWS_ACCESS_KEY_ID") or envs.get("access") or envs.get("attribute.access"))
-            secret_key = _clean_str(envs.get("AWS_SECRET_ACCESS_KEY") or envs.get("secret") or envs.get("attribute.secret"))
-            endpoint = _clean_str(
-                envs.get("AWS_ENDPOINT_URL") or envs.get("endpoint") or envs.get("attribute.endpoint") or getattr(config, "ENDPOINT", None)
-            )
-            region = _clean_str(
-                envs.get("AWS_REGION") or envs.get("region") or envs.get("attribute.region") or getattr(config, "REGION", None)
+    primary = next((connection for connection in connections if connection.type == "s3" and connection.name == "primary"), None)
+    if primary and primary.credentials and primary.endpoint and primary.region and all_buckets:
+        access = _clean_str(primary.credentials.get("AWS_ACCESS_KEY_ID"))
+        secret_key = _clean_str(primary.credentials.get("AWS_SECRET_ACCESS_KEY"))
+        if access and secret_key:
+            credentials = Credentials(
+                bucketname=all_buckets[0],
+                access=access,
+                secret=secret_key,
+                endpoint=primary.endpoint,
+                region=primary.region,
             )
 
-            resolved_bucketname = all_buckets[0] if buckets else bucketname
-
-            if resolved_bucketname and access and secret_key and endpoint:
-                credentials = Credentials(
-                    bucketname=resolved_bucketname,
-                    access=access,
-                    secret=secret_key,
-                    endpoint=endpoint,
-                    region=region or "",
-                )
-
-            store_credentials = _store_credentials_from_envs(envs, database_hosts)
-
-            reg_user = _clean_str(envs.get("CONTAINER_REGISTRY_USERNAME"))
-            reg_pass = _clean_str(envs.get("CONTAINER_REGISTRY_PASSWORD"))
-            if reg_user and reg_pass:
-                container_registry_credentials = ContainerRegistryCredentials(
-                    username=reg_user,
-                    password=SecretStr(reg_pass),
-                )
-
-        except (KeyError, TypeError, binascii.Error, UnicodeDecodeError) as e:
-            logger.warning(
-                "Error decoding credentials secret '%s': %s",
-                getattr(getattr(secret, "metadata", None), "name", "<unknown>"),
-                e,
-            )
-
-    creation_timestamp = getattr(storage_cr.metadata, "creationTimestamp", None)
-    version = storage_cr.metadata.resourceVersion
-    workspace_status = WorkspaceStatus.READY if credentials else WorkspaceStatus.PROVISIONING
+    metadata = getattr(storage_cr if storage_cr is not None else datalab_cr, "metadata", None)
+    creation_timestamp = getattr(metadata, "creationTimestamp", None)
+    version = getattr(metadata, "resourceVersion", None)
+    resources = [resource for resource in (storage_cr, datalab_cr) if resource is not None]
+    ready = all(_resource_ready(resource) for resource in resources) and all(connection.ready for connection in [*connections, *oauth2])
+    workspace_status = WorkspaceStatus.READY if ready else WorkspaceStatus.PROVISIONING
 
     storage = Storage(
+        available=storage_cr is not None,
         buckets=[
             Bucket(
                 name=b,
@@ -1296,39 +1108,35 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
             )
             for b in all_buckets
         ],
-        credentials=credentials,
+        credentials=credentials if storage_cr is not None else None,
         bucket_access_requests=relevant_bucket_access_requests,
     )
     datalab = Datalab(
         memberships=memberships,
-        available=datalab_api is not None,
+        available=datalab_cr is not None,
         available_store_types=available_store_types,
-        stores=stores,
+        stores=_declared_stores(datalab_spec, available_store_types, dl_created_at) if management else _published_stores(connections),
+        vclusters=_vclusters_from_datalab(datalab_cr, management=management),
         sessions=sessions,
         max_sessions=_max_sessions(),
-        store_credentials=store_credentials,
-        container_registry_credentials=container_registry_credentials,
+        connections=connections,
+        oauth2=oauth2,
     )
     resource_usage = _workspace_resource_usage(workspace_name) if UserPermission.VIEW_RESOURCE_USAGE in workspace_perms else None
 
-    permission_guards = {
-        UserPermission.VIEW_BUCKET_CREDENTIALS: lambda: setattr(storage, "credentials", None),
-        UserPermission.VIEW_BUCKETS: lambda: (
-            setattr(storage, "buckets", []),  # type: ignore[func-returns-value]
-            setattr(storage, "bucket_access_requests", []),  # type: ignore[func-returns-value]
-        ),
-        UserPermission.VIEW_MEMBERS: lambda: setattr(datalab, "memberships", []),
-        UserPermission.VIEW_STORES: lambda: (
-            setattr(datalab, "stores", []),  # type: ignore[func-returns-value]
-            setattr(datalab, "store_credentials", {}),  # type: ignore[func-returns-value]
-            setattr(datalab, "container_registry_credentials", None),  # type: ignore[func-returns-value]
-        ),
-        UserPermission.VIEW_SESSIONS: lambda: setattr(datalab, "sessions", []),
-    }
-
-    for permission, guard in permission_guards.items():
-        if permission not in workspace_perms:
-            guard()
+    if UserPermission.VIEW_CONNECTION_CREDENTIALS not in workspace_perms:
+        storage.credentials = None
+    if UserPermission.VIEW_BUCKETS not in workspace_perms:
+        storage.buckets = []
+        storage.bucket_access_requests = []
+    if UserPermission.VIEW_MEMBERS not in workspace_perms:
+        datalab.memberships = []
+    if UserPermission.VIEW_STORES not in workspace_perms:
+        datalab.stores = []
+    if UserPermission.VIEW_VCLUSTERS not in workspace_perms:
+        datalab.vclusters = []
+    if UserPermission.VIEW_SESSIONS not in workspace_perms:
+        datalab.sessions = []
 
     workspace = Workspace(
         name=workspace_name,
@@ -1358,7 +1166,7 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
     tags=["Workspaces"],
     summary="Create a new workspace",
     description=(
-        "Creates a Storage resource and, if available, a Datalab resource for the given owner. "
+        "Creates a workspace with the installed Storage and Datalab providers. "
         "Datalab sessions are created based on the configured session mode."
     ),
     responses={
@@ -1370,58 +1178,61 @@ def _combine_workspace(request: Request, workspace_name: str) -> Workspace:
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
     workspace_name = _with_prefix(slugify(data.preferred_name, max_length=32) or str(uuid.uuid4()))[:63]
 
-    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
+    storage_api = _res_optional(API_STORAGE, KIND_STORAGE)
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if storage_api is None and datalab_api is None:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail="No workspace provider is installed")
 
-    try:
-        storage_api.get(name=workspace_name, namespace=current_namespace())
+    for api in (storage_api, datalab_api):
+        if api is None:
+            continue
+        try:
+            api.get(name=workspace_name, namespace=current_namespace())
+        except ApiException as e:
+            if e.status == HTTPStatus.NOT_FOUND:
+                continue
+            raise
         raise HTTPException(
             status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
             detail={"error": "Workspace with this name already exists"},
         )
-    except ApiException as e:
-        if e.status != HTTPStatus.NOT_FOUND:
-            raise
 
-    try:
-        storage_api.create(
-            {
-                "apiVersion": API_STORAGE,
-                "kind": KIND_STORAGE,
-                "metadata": {
-                    "name": workspace_name,
-                    "annotations": _provider_environment_annotations(STORAGE_ENVIRONMENT_ANNOTATION),
+    if storage_api is not None:
+        try:
+            storage_api.create(
+                {
+                    "apiVersion": API_STORAGE,
+                    "kind": KIND_STORAGE,
+                    "metadata": {
+                        "name": workspace_name,
+                        "annotations": _provider_environment_annotations(STORAGE_ENVIRONMENT_ANNOTATION),
+                    },
+                    "spec": {
+                        "principal": workspace_name,
+                        "buckets": [{"bucketName": workspace_name, "discoverable": True}],
+                    },
                 },
-                "spec": {
-                    "principal": workspace_name,
-                    "buckets": [{"bucketName": workspace_name, "discoverable": True}],
+                namespace=current_namespace(),
+            )
+        except ApiException as e:
+            raise HTTPException(
+                status_code=HTTPStatus.BAD_GATEWAY,
+                detail={
+                    "error": f"Failed to create Storage '{workspace_name}'",
+                    "exception": str(e),
                 },
-            },
-            namespace=current_namespace(),
-        )
-    except ApiException as e:
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_GATEWAY,
-            detail={
-                "error": f"Failed to create Storage '{workspace_name}'",
-                "exception": str(e),
-            },
-        ) from e
+            ) from e
 
     if datalab_api is not None:
-        session_mode = str(getattr(config, "SESSION_MODE", "on")).strip().lower()
-        use_vcluster = _as_bool(getattr(config, "USE_VCLUSTER", "false"))
-        enable_registry = not _as_bool(getattr(config, "DISABLE_DOCKER_REGISTRY", "false"))
+        session_mode = str(config.SESSION_MODE).strip().lower()
         sessions = _initial_sessions_for_mode(session_mode)[: _max_sessions()]
         datalab_spec: dict[str, Any] = {
             "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
-            "secretName": workspace_name,
-            "vcluster": use_vcluster,
         }
+        if _as_bool(config.USE_VCLUSTER):
+            datalab_spec["vclusters"] = {"vc0": {}}
         if sessions:
             datalab_spec["sessions"] = sessions
-        if enable_registry:
-            datalab_spec["registry"] = {"enabled": True}
 
         try:
             datalab_api.create(
@@ -1464,7 +1275,7 @@ def make_external_url(request: Request, path: str) -> str:
 
 
 def _broker_timeout_seconds() -> float:
-    raw = getattr(config, "TOKEN_BROKER_TIMEOUT_SECONDS", "10")
+    raw = config.TOKEN_BROKER_TIMEOUT_SECONDS
     try:
         return max(1.0, float(str(raw).strip()))
     except (TypeError, ValueError):
@@ -1491,31 +1302,27 @@ def _payload_has_audience(payload: dict[str, Any], expected_audience: str) -> bo
     return False
 
 
-def _secret_config_value(decoded: Mapping[str, str], keys: Sequence[str]) -> str | None:
-    for key in keys:
-        value = _clean_str(decoded.get(key))
-        if value:
-            return value
-    return None
+def _workspace_oauth_client(workspace_name: str, datalab: Any) -> OAuth2Connection:
+    if datalab is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Workspace not found")
+    clients = [
+        client
+        for client in _oauth2_from_datalab(datalab, workspace_name, resolve=())
+        if client.type == "client" and client.name == workspace_name
+    ]
+    if not clients:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": "workspace_oauth_client_not_found"})
+    if len(clients) != 1:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "workspace_oauth_client_ambiguous"})
+    client = clients[0]
+    if not client.ready:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail={"error": "workspace_oauth_client_not_ready"})
+    return client
 
 
-def _json_secret_config_value(decoded: Mapping[str, str], keys: Sequence[str]) -> str | None:
-    for value in decoded.values():
-        try:
-            obj = json.loads(value)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if not isinstance(obj, dict):
-            continue
-        found = _secret_config_value({str(k): str(v) for k, v in obj.items() if v is not None}, keys)
-        if found:
-            return found
-    return None
-
-
-def _workspace_oauth_client_credentials(workspace_name: str) -> tuple[str, str]:
-    secret_name = f"{workspace_name}-oauth-client"
-    secret = fetch_secret(secret_name, current_namespace())
+def _workspace_oauth_client_credentials(client: OAuth2Connection) -> tuple[str, str]:
+    secret_name = client.secret_ref.name
+    secret = fetch_secret(secret_name, client.secret_ref.namespace)
     if not secret or not getattr(secret, "data", None):
         raise HTTPException(
             status_code=HTTPStatus.NOT_FOUND,
@@ -1523,25 +1330,19 @@ def _workspace_oauth_client_credentials(workspace_name: str) -> tuple[str, str]:
         )
 
     try:
-        decoded = _b64decode_secret_data(secret.data)
-    except (KeyError, TypeError, binascii.Error, UnicodeDecodeError) as e:
+        client_secret = base64.b64decode(secret.data["clientSecret"], validate=True).decode("utf-8").strip()
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError) as e:
         raise HTTPException(
             status_code=HTTPStatus.BAD_GATEWAY,
             detail={"error": "oauth_client_secret_invalid", "secret": secret_name},
         ) from e
 
-    client_id_keys = ("clientID", "client_id", "CLIENT_ID")
-    client_secret_keys = ("clientSecret", "client_secret", "CLIENT_SECRET")
-    client_id = _secret_config_value(decoded, client_id_keys) or _json_secret_config_value(decoded, client_id_keys)
-    client_secret = _secret_config_value(decoded, client_secret_keys) or _json_secret_config_value(decoded, client_secret_keys)
-
-    if not client_id or not client_secret:
+    if not client_secret:
         raise HTTPException(
             status_code=HTTPStatus.BAD_GATEWAY,
-            detail={"error": "oauth_client_secret_missing_fields", "secret": secret_name},
+            detail={"error": "oauth_client_secret_invalid", "secret": secret_name},
         )
-
-    return client_id, client_secret
+    return client.name, client_secret
 
 
 def _require_workspace_token_broker_role(request: Request, workspace_name: str) -> None:
@@ -1551,24 +1352,37 @@ def _require_workspace_token_broker_role(request: Request, workspace_name: str) 
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
 
 
-def _require_configured_token_endpoint() -> str:
-    token_endpoint = _clean_str(getattr(config, "TOKEN_BROKER_TOKEN_ENDPOINT", None))
-    if not token_endpoint:
+def _discover_oauth_metadata(issuer: str) -> dict[str, Any]:
+    issuer_url = _http_url(issuer)
+    if not issuer_url or urlsplit(issuer_url).scheme != "https" or urlsplit(issuer_url).query or urlsplit(issuer_url).fragment:
         raise HTTPException(
-            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
-            detail={"error": "token_broker_not_configured", "config": "TOKEN_BROKER_TOKEN_ENDPOINT"},
+            status_code=HTTPStatus.BAD_GATEWAY,
+            detail={"error": "oauth_issuer_invalid"},
         )
+    try:
+        response = requests.get(
+            f"{issuer_url.rstrip('/')}/.well-known/openid-configuration",
+            headers={"Accept": "application/json"},
+            timeout=_broker_timeout_seconds(),
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        metadata = response.json() if response.status_code == HTTPStatus.OK else None
+    except requests.RequestException as e:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_discovery_failed"}) from e
+    except ValueError as e:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_discovery_invalid"}) from e
+    if not isinstance(metadata, dict) or metadata.get("issuer") != issuer_url:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_discovery_invalid"})
+    token_endpoint = _http_url(metadata.get("token_endpoint"))
+    if not token_endpoint or urlsplit(token_endpoint).scheme != "https" or urlsplit(token_endpoint).fragment:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_discovery_invalid"})
+    return metadata
 
-    return token_endpoint
 
-
-def _request_workspace_token(client_id: str, client_secret: str) -> dict[str, Any]:
-    token_endpoint = _require_configured_token_endpoint()
-    data = {
-        "grant_type": "client_credentials",
-        "audience": config.AUTH_AUDIENCE,
-    }
-
+def _request_workspace_token(
+    token_endpoint: str, client_id: str, client_secret: str, data: Mapping[str, str | list[str]]
+) -> dict[str, Any]:
     try:
         response = requests.post(
             token_endpoint,
@@ -1576,6 +1390,7 @@ def _request_workspace_token(client_id: str, client_secret: str) -> dict[str, An
             auth=(client_id, client_secret),
             headers={"Accept": "application/json"},
             timeout=_broker_timeout_seconds(),
+            allow_redirects=False,
         )
     except requests.RequestException as e:
         logger.warning("Workspace token request failed: %s", e)
@@ -1608,6 +1423,140 @@ def _request_workspace_token(client_id: str, client_secret: str) -> dict[str, An
     return payload
 
 
+def _workspace_exchange_scopes(datalab: Any, workspace_name: str, scope: str) -> dict[str, str]:
+    instances = (_to_spec_dict(datalab) or {}).get("vclusters") or {}
+    allowed = {}
+    declared = {}
+    for instance, settings in instances.items():
+        for group in settings.get("groups") or []:
+            name = group.get("name")
+            if name and name != "cluster-admin":
+                profile_scope = f"{workspace_name}:vclusters_{instance}_{name}"
+                allowed[profile_scope] = f"vcluster_{instance}_{name}"
+                declared[profile_scope] = group
+    requested = sorted(set(scope.split()))
+    if not requested or any(name not in allowed for name in requested):
+        raise HTTPException(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            detail={"error": "invalid_scope", "message": "Request only configured additional vcluster profile scopes"},
+        )
+    published = {
+        f"{workspace_name}:vclusters_{entry.get('instance')}_{entry.get('group')}": entry
+        for entry in _datalab_status(datalab).get("connections") or []
+        if isinstance(entry, dict) and entry.get("type") == "vcluster"
+    }
+    for name in requested:
+        entry = published.get(name, {})
+        group = declared[name]
+        if (
+            entry.get("ready") is not True
+            or entry.get("targetNamespace") != group.get("namespace")
+            or entry.get("role") != group.get("role")
+        ):
+            raise HTTPException(
+                status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+                detail={"error": "vcluster_profile_not_ready", "scope": name},
+            )
+    return {name: allowed[name] for name in requested}
+
+
+def _workspace_exchange_subject(request: Request, client: OAuth2Connection, roles: set[str]) -> str:
+    claims = getattr(request.state, "token_claims", {})
+    resource_access = claims.get("resource_access") or {}
+    workspace_access = resource_access.get(client.name, {}) if isinstance(resource_access, dict) else {}
+    caller_roles = workspace_access.get("roles", []) if isinstance(workspace_access, dict) else []
+    subject = claims.get("sub")
+    if (
+        not isinstance(subject, str)
+        or not subject.strip()
+        or claims.get("iss") != client.issuer_url
+        or not (_payload_has_audience(claims, client.name) or claims.get("azp") == client.name)
+        or not isinstance(caller_roles, list)
+        or any(not isinstance(role, str) for role in caller_roles)
+        or not roles.issubset(caller_roles)
+    ):
+        raise HTTPException(
+            status_code=HTTPStatus.FORBIDDEN,
+            detail={
+                "error": "exchange_not_permitted",
+                "message": "Caller must hold the requested workspace roles and a matching user token",
+            },
+        )
+    return subject
+
+
+def _workspace_signing_keys(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    uri = _http_url(metadata.get("jwks_uri"))
+    if not uri or urlsplit(uri).scheme != "https" or urlsplit(uri).fragment:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_jwks_uri_invalid"})
+    try:
+        response = requests.get(uri, timeout=_broker_timeout_seconds(), allow_redirects=False, headers={"Accept": "application/json"})
+        response.raise_for_status()
+        keys = response.json() if response.status_code == HTTPStatus.OK else None
+    except (requests.RequestException, ValueError) as e:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_jwks_failed"}) from e
+    if not isinstance(keys, dict) or not isinstance(keys.get("keys"), list) or not keys["keys"]:
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "oauth_jwks_invalid"})
+    return keys
+
+
+def _token_has_only_workspace_roles(payload: Mapping[str, Any], workspace_name: str, expected: set[str]) -> bool:
+    resources = payload.get("resource_access")
+    if not isinstance(resources, dict) or workspace_name not in resources:
+        return False
+    for name, access in resources.items():
+        roles = access.get("roles") if isinstance(access, dict) else None
+        if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
+            return False
+        if set(roles) != (expected if name == workspace_name else set()):
+            return False
+    realm = payload.get("realm_access", {})
+    authorization = payload.get("authorization", {})
+    return isinstance(realm, dict) and not realm.get("roles") and isinstance(authorization, dict) and not authorization.get("permissions")
+
+
+def _validate_exchanged_workspace_token(
+    token: WorkspaceToken, client: OAuth2Connection, keys: dict[str, Any], subject: str, scopes: Mapping[str, str]
+) -> None:
+    invalid_token = HTTPException(
+        status_code=HTTPStatus.BAD_GATEWAY,
+        detail={
+            "error": "token_validation_failed",
+            "message": "Exchanged access token does not match the requested identity and permissions",
+        },
+    )
+    verifier = JsonWebToken(["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"])
+    try:
+        claims = verifier.decode(
+            token.access_token,
+            keys,
+            claims_options={
+                "iss": {"essential": True, "value": client.issuer_url},
+                "sub": {"essential": True, "value": subject},
+                "aud": {"essential": True},
+                "exp": {"essential": True},
+            },
+        )
+        claims.validate()
+    except (JoseError, ValueError, TypeError, KeyError) as e:
+        raise invalid_token from e
+    audiences = claims["aud"]
+    if isinstance(audiences, str):
+        audiences = [audiences]
+    allowed_scopes = set(scopes) | {"openid", "basic", "profile", "email"}
+    if (
+        not isinstance(audiences, list)
+        or any(not isinstance(audience, str) for audience in audiences)
+        or set(audiences) != {config.AUTH_AUDIENCE, client.name}
+        or not _token_has_only_workspace_roles(claims, client.name, {"ws_api", *scopes.values()})
+        or any(
+            not isinstance(value, str) or not set(scopes).issubset(value.split()) or not set(value.split()).issubset(allowed_scopes)
+            for value in (claims.get("scope"), token.scope)
+        )
+    ):
+        raise invalid_token
+
+
 def _validate_brokered_workspace_token(token_response: Mapping[str, Any], workspace_name: str) -> WorkspaceToken:
     access_token = _clean_str(token_response.get("access_token"))
     if not access_token:
@@ -1633,18 +1582,19 @@ def _validate_brokered_workspace_token(token_response: Mapping[str, Any], worksp
             detail={"error": "token_validation_failed", "message": "access token is missing the workspace ws_api role"},
         )
 
-    token = WorkspaceToken(
-        access_token=access_token,
-        token_type=_clean_str(token_response.get("token_type")) or "Bearer",
-        expires_in=token_response.get("expires_in"),
-        scope=token_response.get("scope"),
-    )
-
-    if token.token_type.lower() != "bearer":
+    token_type = _clean_str(token_response.get("token_type"))
+    if not token_type or token_type.lower() != "bearer":
         raise HTTPException(
             status_code=HTTPStatus.BAD_GATEWAY,
             detail={"error": "token_validation_failed", "message": "access token response is not a bearer token"},
         )
+
+    token = WorkspaceToken(
+        access_token=access_token,
+        token_type=token_type,
+        expires_in=token_response.get("expires_in"),
+        scope=token_response.get("scope"),
+    )
 
     return token
 
@@ -1656,23 +1606,49 @@ def _validate_brokered_workspace_token(token_response: Mapping[str, Any], worksp
     tags=["Workspaces"],
     summary="Broker a workspace OAuth access token",
     description=(
-        "Admin-only broker endpoint that exchanges the workspace OAuth client secret for a short-lived access token "
-        "intended for Workspace API machine access."
+        "Admin-only token endpoint. Omit scope for a workspace service-account token. "
+        "Supply configured profile scopes to exchange the caller's token for restricted workspace and vcluster access."
     ),
     responses={
         200: {"description": "Workspace access token returned."},
         403: {"description": "Forbidden."},
-        404: {"description": "Workspace OAuth client secret not found."},
+        404: {"description": "Workspace, published OAuth2 client, or referenced Secret not found."},
+        422: {"description": "Invalid or unconfigured profile scope."},
         502: {"description": "Authorization server or token validation failure."},
-        503: {"description": "Token broker is not configured."},
+        503: {"description": "Datalab provider unavailable or the OAuth2 client is not ready."},
     },
 )
-async def get_workspace_token(request: Request, workspace_name: str = workspace_path_type) -> Response:
+async def get_workspace_token(
+    request: Request,
+    workspace_name: str = workspace_path_type,
+    scope: Annotated[
+        str | None, Query(max_length=2048, description="Space-separated workspace-qualified additional vcluster profile scopes.")
+    ] = None,
+) -> Response:
     _require_workspace_token_broker_role(request, workspace_name)
-    _require_configured_token_endpoint()
-    client_id, client_secret = _workspace_oauth_client_credentials(workspace_name)
-    token_response = _request_workspace_token(client_id, client_secret)
+    datalab = _get_cr(API_DATALAB, KIND_DATALAB, workspace_name, required=True)
+    client = _workspace_oauth_client(workspace_name, datalab)
+    scopes = _workspace_exchange_scopes(datalab, workspace_name, scope) if scope is not None else {}
+    subject = _workspace_exchange_subject(request, client, {"ws_api", *scopes.values()}) if scopes else None
+    metadata = _discover_oauth_metadata(client.issuer_url)
+    keys = _workspace_signing_keys(metadata) if scopes else {}
+    client_id, client_secret = _workspace_oauth_client_credentials(client)
+    data: dict[str, str | list[str]] = {"grant_type": "client_credentials", "audience": config.AUTH_AUDIENCE}
+    if scopes:
+        data = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+            "subject_token": request.state.access_token,
+            "subject_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+            "scope": " ".join(scopes),
+            "audience": sorted({config.AUTH_AUDIENCE, workspace_name}),
+        }
+    token_response = _request_workspace_token(metadata["token_endpoint"], client_id, client_secret, data)
     token = _validate_brokered_workspace_token(token_response, workspace_name)
+    if subject is not None:
+        _validate_exchanged_workspace_token(token, client, keys, subject, scopes)
+    elif not _token_has_only_workspace_roles(_decode_jwt_payload(token.access_token) or {}, workspace_name, {"ws_api"}):
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail={"error": "token_validation_failed"})
     return JSONResponse(
         token.model_dump(mode="json"),
         status_code=HTTPStatus.OK,
@@ -1696,34 +1672,22 @@ async def get_workspace_token(request: Request, workspace_name: str = workspace_
     },
 )
 async def list_workspaces(request: Request) -> Response:
-    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
-
-    try:
-        storages = storage_api.get(namespace=current_namespace())
-    except ApiException as e:
-        msg = "Listing workspaces failed"
-        logger.warning("%s: %s", msg, e)
-        raise HTTPException(
-            status_code=HTTPStatus.BAD_GATEWAY,
-            detail={"error": msg, "exception": str(e)},
-        ) from e
-
-    workspace_names = sorted(
-        {
-            name
-            for item in (getattr(storages, "items", []) or [])
-            if (name := _resource_name(item)) and _workspace_permissions(request, name)
-        }
-    )
-
+    workspace_names: set[str] = set()
     datalabs_by_name: dict[str, Any] = {}
-    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
-    if datalab_api is not None:
+    for api_version, kind in ((API_STORAGE, KIND_STORAGE), (API_DATALAB, KIND_DATALAB)):
+        api = _res_optional(api_version, kind)
+        if api is None:
+            continue
         try:
-            datalabs = datalab_api.get(namespace=current_namespace())
-            datalabs_by_name = {name: item for item in (getattr(datalabs, "items", []) or []) if (name := _resource_name(item))}
-        except Exception as e:
-            logger.warning("Listing Datalab sessions for workspace list failed: %s", e)
+            resources = api.get(namespace=current_namespace())
+        except ApiException as e:
+            raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail="Listing workspaces failed") from e
+        for item in getattr(resources, "items", []) or []:
+            name = _resource_name(item)
+            if name and _workspace_permissions(request, name):
+                workspace_names.add(name)
+                if kind == KIND_DATALAB:
+                    datalabs_by_name[name] = item
 
     workspaces = [
         WorkspaceListItem(
@@ -1732,15 +1696,15 @@ async def list_workspaces(request: Request) -> Response:
             sessions=[
                 WorkspaceListSession(
                     name=session.name,
-                    url=make_external_url(request, f"/workspaces/{name}/sessions/{session.name}"),
+                    url=session.url,
                 )
                 for session in _sessions_from_datalab(datalabs_by_name[name])
-                if UserPermission.VIEW_SESSIONS in _workspace_permissions(request, name) and session.state == SessionState.STARTED
+                if UserPermission.VIEW_SESSIONS in _workspace_permissions(request, name) and session.ready and session.url
             ]
             if name in datalabs_by_name
             else [],
         )
-        for name in workspace_names
+        for name in sorted(workspace_names)
     ]
 
     accept_header = request.headers.get("accept", "").lower()
@@ -1753,7 +1717,10 @@ async def list_workspaces(request: Request) -> Response:
         )
         rows = "".join(
             "<li>"
-            f"<a class='workspace-link' href='{html.escape(workspace.url, quote=True)}'>"
+            f"<a class='workspace-link' href='{html.escape(workspace.url, quote=True)}"
+            "?resolve_connections=*"
+            + ("&amp;resolve_oauth2=*" if UserPermission.VIEW_OAUTH2_CREDENTIALS in _workspace_permissions(request, workspace.name) else "")
+            + "'>"
             f"<span>{html.escape(workspace.name)}</span>{open_icon}"
             "</a>"
             + (
@@ -1812,8 +1779,13 @@ async def list_workspaces(request: Request) -> Response:
     tags=["Workspaces"],
     summary="Get a workspace",
     description=(
-        "Returns a consolidated view of a workspace, including storage, memberships, "
-        "status, and optional container registry credentials. If `Accept: text/html` and UI mode is enabled, "
+        "Returns workspace storage, memberships, "
+        "status, and connection metadata. Repeat `resolve_connections=type:name` to select credentials. "
+        "The default is `s3:primary`. `*` and `*:*` select all connections. Unmatched values resolve nothing. "
+        "Repeat `resolve_oauth2=type:name` to select OAuth2 credentials, for example `client:ws-alice` or `client:*`. "
+        "OAuth2 resolution is disabled by default and requires ws_access or ws_admin permissions. "
+        "Connection selectors never resolve OAuth2 entries. Only ready entries are resolved. "
+        "If `Accept: text/html` and UI mode is enabled, "
         "returns an HTML page embedding the workspace data."
     ),
     responses={
@@ -1822,27 +1794,42 @@ async def list_workspaces(request: Request) -> Response:
         404: {"description": "Workspace not found."},
     },
 )
-async def get_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
+async def get_workspace(
+    request: Request,
+    workspace_name: str = workspace_path_type,
+    view: Annotated[
+        Literal["status", "management"], Query(description="Published status, or declarations for management forms.")
+    ] = "status",
+    resolve_connections: Annotated[
+        list[str] | None,
+        Query(description="Repeat type:name selectors. Default: s3:primary. * and *:* select all. Unmatched values resolve nothing."),
+    ] = None,
+    resolve_oauth2: Annotated[
+        list[str] | None,
+        Query(description="Repeat type:name selectors, such as client:ws-alice or client:*. * and *:* select all. Disabled by default."),
+    ] = None,
+) -> Response:
     if not _workspace_permissions(request, workspace_name):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
 
-    ws = _combine_workspace(request, workspace_name)
+    selectors = resolve_connections if resolve_connections is not None else ["s3:primary"]
+    if selectors:
+        _require_workspace_permission(request, workspace_name, UserPermission.VIEW_CONNECTION_CREDENTIALS)
+    if resolve_oauth2:
+        _require_workspace_permission(request, workspace_name, UserPermission.VIEW_OAUTH2_CREDENTIALS)
+    ws = _combine_workspace(
+        request, workspace_name, resolve_connections=selectors, resolve_oauth2=resolve_oauth2 or (), management=view == "management"
+    )
 
     accept_header = request.headers.get("accept", "").lower()
-    if (
-        "text/html" in accept_header
-        and templates is not None
-        and (getattr(config, "UI_MODE", "no") == "ui" or request.query_params.get("devmode") == "true")
-    ):
+    if "text/html" in accept_header and templates is not None and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true"):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
 
         endpoints = []
         for session in ws.datalab.sessions:
-            if session.state != SessionState.STARTED:
+            if not session.ready or not session.url:
                 continue
-            datalab_path = f"/workspaces/{workspace_name}/sessions/{session.name}"
-            datalab_url = make_external_url(request, datalab_path)
-            endpoints.append({"id": f"Datalab ({session.name})", "url": datalab_url})
+            endpoints.append({"id": f"Datalab ({session.name})", "url": session.url})
 
         endpoints_data = _to_b64_json(endpoints)
 
@@ -1853,61 +1840,18 @@ async def get_workspace(request: Request, workspace_name: str = workspace_path_t
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
                 "endpoints_data": endpoints_data,
-                "frontend_url": getattr(config, "FRONTEND_URL", "/ui/management"),
+                "frontend_url": config.FRONTEND_URL,
             },
+            headers={"Cache-Control": "no-store"},
         )
-    return JSONResponse(ws.model_dump(mode="json", exclude_none=True), status_code=HTTPStatus.OK)
+    return JSONResponse(
+        ws.model_dump(mode="json", exclude_none=True),
+        status_code=HTTPStatus.OK,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
-@app.put(
-    "/workspaces/{workspace_name}",
-    status_code=HTTPStatus.ACCEPTED,
-    tags=["Workspaces"],
-    summary="Update a workspace",
-    description=(
-        "Patches workspace Storage (buckets and access requests/grants). "
-        "If the Datalab CRD is present, can also add members to the Datalab."
-    ),
-    responses={
-        202: {"description": "Update accepted and applied."},
-        403: {"description": "Forbidden."},
-        404: {"description": "Workspace not found."},
-        502: {"description": "Backend error while patching cluster resources."},
-    },
-)
-async def update_workspace(request: Request, workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
-    user_ctx = request.state.user
-
-    workspace_perms = set()
-    if "*" in user_ctx["workspaces"]:
-        workspace_perms |= user_ctx["workspaces"]["*"]
-    if workspace_name in user_ctx["workspaces"]:
-        workspace_perms |= user_ctx["workspaces"][workspace_name]
-
-    required_perms: set[UserPermission] = set()
-
-    if update.add_buckets:
-        required_perms.add(UserPermission.MANAGE_BUCKETS)
-
-    if update.add_memberships:
-        required_perms.add(UserPermission.MANAGE_MEMBERS)
-
-    if update.add_stores:
-        required_perms.add(UserPermission.MANAGE_STORES)
-
-    missing = required_perms - workspace_perms
-    if missing:
-        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
-
-    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
-
-    try:
-        storage_obj = storage_api.get(name=workspace_name, namespace=current_namespace())
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
-        raise
-
+def _patch_workspace_storage(storage_api: Any, storage_obj: Any, workspace_name: str, update: WorkspaceEdit) -> None:
     storage_spec = _to_spec_dict(storage_obj) or {}
 
     buckets = storage_spec.get("buckets") or []
@@ -2043,8 +1987,56 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
         logger.warning("Patching Storage '%s' failed: %s", workspace_name, e)
         raise
 
-    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
-    available_store_types = _available_store_types(datalab_api is not None)
+
+@app.put(
+    "/workspaces/{workspace_name}",
+    status_code=HTTPStatus.ACCEPTED,
+    tags=["Workspaces"],
+    summary="Update a workspace",
+    description=(
+        "Updates buckets and access requests on Storage, or members and stores on Datalab. Each change needs only its target resource."
+    ),
+    responses={
+        202: {"description": "Update accepted and applied."},
+        403: {"description": "Forbidden."},
+        404: {"description": "Workspace not found."},
+        502: {"description": "Backend error while patching cluster resources."},
+    },
+)
+async def update_workspace(request: Request, workspace_name: str, update: WorkspaceEdit) -> dict[str, str]:
+    workspace_perms = _workspace_permissions(request, workspace_name)
+    if not workspace_perms:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+    required_perms: set[UserPermission] = set()
+
+    if update.add_buckets or update.patch_bucket_access_requests:
+        required_perms.add(UserPermission.MANAGE_BUCKETS)
+
+    if update.add_memberships:
+        required_perms.add(UserPermission.MANAGE_MEMBERS)
+
+    if update.add_stores:
+        required_perms.add(UserPermission.MANAGE_STORES)
+
+    missing = required_perms - workspace_perms
+    if missing:
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+    storage_api = None
+    storage_obj = None
+    if update.add_buckets or update.patch_bucket_access_requests:
+        storage_api = _res_required(API_STORAGE, KIND_STORAGE)
+
+        try:
+            storage_obj = storage_api.get(name=workspace_name, namespace=current_namespace())
+        except ApiException as e:
+            if e.status == HTTPStatus.NOT_FOUND:
+                raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
+            raise
+
+    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB) if update.add_memberships or update.add_stores else None
+    available_store_types = _available_store_types(datalab_api is not None) if update.add_stores else []
 
     add_memberships = update.add_memberships or []
     add_stores = list(update.add_stores or [])
@@ -2068,21 +2060,13 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
             },
         )
 
-    if add_memberships or add_stores:
+    if datalab_api is not None and (add_memberships or add_stores):
         try:
             datalab_obj = datalab_api.get(name=workspace_name, namespace=current_namespace())
         except ApiException as e:
             if e.status == HTTPStatus.NOT_FOUND:
-                logger.warning(
-                    "Datalab resource '%s' not found; skipping datalab updates.",
-                    workspace_name,
-                )
-            else:
-                logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
-            return {"name": workspace_name}
-        except Exception as e:
-            logger.warning("Reading Datalab '%s' failed: %s", workspace_name, e)
-            return {"name": workspace_name}
+                raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Datalab resource not found") from e
+            raise
 
         datalab_spec = _to_spec_dict(datalab_obj) or {}
 
@@ -2169,7 +2153,7 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
             databases_spec[host] = host_obj
             datalab_patch_spec["databases"] = databases_spec
 
-        for store_type in (StoreType.VECTOR, StoreType.CACHE, StoreType.DOCUMENT):
+        for store_type in (StoreType.CACHE, StoreType.DOCUMENT):
             typed_stores = [store for store in add_stores if store.type == store_type]
             if not typed_stores:
                 continue
@@ -2206,6 +2190,9 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
                 logger.warning("Patching Datalab '%s' failed: %s", workspace_name, e)
                 raise
 
+    if storage_api is not None:
+        _patch_workspace_storage(storage_api, storage_obj, workspace_name, update)
+
     return {"name": workspace_name}
 
 
@@ -2214,54 +2201,146 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     status_code=HTTPStatus.NO_CONTENT,
     tags=["Workspaces"],
     summary="Delete a workspace",
-    description=("Deletes the Storage resource and, if present, the associated Datalab resource."),
+    description="Deletes the workspace Storage and Datalab resources that exist.",
     responses={
         204: {"description": "Workspace deleted."},
         404: {"description": "Workspace not found."},
     },
 )
 async def delete_workspace(workspace_name: str = workspace_path_type) -> Response:
-    storage_api = _res_required(API_STORAGE, KIND_STORAGE)
-    datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
-
-    try:
-        storage_api.delete(name=workspace_name, namespace=current_namespace())
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            raise HTTPException(status_code=HTTPStatus.NOT_FOUND) from e
-        raise
-
-    if datalab_api is not None:
+    found = False
+    for api_version, kind in ((API_STORAGE, KIND_STORAGE), (API_DATALAB, KIND_DATALAB)):
+        api = _res_optional(api_version, kind)
+        if api is None:
+            continue
         try:
-            datalab_api.delete(name=workspace_name, namespace=current_namespace())
+            api.delete(name=workspace_name, namespace=current_namespace())
+            found = True
         except ApiException as e:
             if e.status != HTTPStatus.NOT_FOUND:
                 raise
+    if not found:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Workspace not found")
 
     return Response(status_code=HTTPStatus.NO_CONTENT)
 
 
-POLL_INTERVAL_SECONDS = 10
-MIN_DISPLAY_SECONDS = 3
-SESSION_PROBE_TIMEOUT_SECONDS = 5
+def _resource_ready(resource: Any) -> bool:
+    conditions = _datalab_status(resource).get("conditions") or []
+    return any(item.get("type") == "Ready" and item.get("status") == "True" for item in conditions) and not any(
+        item.get("type") == "Synced" and item.get("status") == "False" for item in conditions
+    )
 
 
-def _session_probe_url(workspace_name: str, session_id: str) -> str:
-    return f"http://{workspace_name}-{session_id}.{workspace_name}.svc.cluster.local/"
+def _published_stores(connections: Sequence[Connection]) -> list[Store]:
+    types = {"postgres": StoreType.DATABASE, "mongo": StoreType.DOCUMENT, "redis": StoreType.CACHE}
+    return [
+        Store(
+            name=connection.name,
+            instance=connection.name,
+            type=types[connection.type],
+            storage=None,
+            backup_storage=None,
+            creation_timestamp=None,
+        )
+        for connection in connections
+        if connection.type in types
+    ]
 
 
-def _session_url_ready(url: str) -> bool:
+def _vclusters_from_datalab(datalab: Any, *, management: bool = False) -> list[VCluster]:
+    if not management:
+        published_clusters: dict[str, VCluster] = {}
+        for entry in _datalab_status(datalab).get("connections") or []:
+            if not isinstance(entry, dict) or entry.get("type") != "vcluster" or not entry.get("instance"):
+                continue
+            try:
+                group = VClusterGroup.model_validate(
+                    {
+                        "name": entry.get("group"),
+                        "namespace": entry.get("targetNamespace"),
+                        "role": entry.get("role"),
+                        "ready": entry.get("ready", False),
+                    }
+                )
+            except ValidationError:
+                continue
+            cluster = published_clusters.setdefault(entry["instance"], VCluster(name=entry["instance"]))
+            if group.name != "cluster-admin":
+                cluster.groups.append(group)
+        return [published_clusters[name] for name in sorted(published_clusters)]
+    instances = (_to_spec_dict(datalab) or {}).get("vclusters") or {}
+    return [
+        VCluster(
+            name=name,
+            groups=[VClusterGroup.model_validate(group) for group in settings.get("groups") or [] if group.get("name") != "cluster-admin"],
+        )
+        for name, settings in sorted(instances.items())
+    ]
+
+
+def _get_datalab_vclusters(workspace_name: str) -> tuple[Any, dict[str, Any]]:
+    api = _res_optional(API_DATALAB, KIND_DATALAB)
+    if api is None:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail={"error": "provider_datalab_not_installed"})
     try:
-        response = requests.head(url, allow_redirects=False, timeout=SESSION_PROBE_TIMEOUT_SECONDS)
-    except requests.RequestException as e:
-        logger.info("Session URL '%s' is not reachable yet: %s", url, e)
-        return False
+        datalab = api.get(name=workspace_name, namespace=current_namespace())
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Workspace not found") from e
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail="Could not read virtual clusters") from e
+    return api, _to_spec_dict(datalab) or {}
 
-    if 500 <= response.status_code < 600:
-        logger.info("Session URL '%s' is not ready yet: status %s", url, response.status_code)
-        return False
 
-    return True
+@app.post(
+    "/workspaces/{workspace_name}/vclusters/{instance}/groups",
+    status_code=HTTPStatus.CREATED,
+    response_model=VClusterGroup,
+    response_model_exclude_none=True,
+    tags=["Virtual clusters"],
+    summary="Add a namespace access group to a virtual cluster",
+)
+async def create_vcluster_group(
+    request: Request,
+    data: VClusterGroupCreate,
+    workspace_name: str = workspace_path_type,
+    instance: str = Path(pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$", max_length=63),
+) -> VClusterGroup:
+    _require_workspace_permission(request, workspace_name, UserPermission.MANAGE_VCLUSTERS)
+    api, spec = _get_datalab_vclusters(workspace_name)
+    settings = (spec.get("vclusters") or {}).get(instance)
+    if settings is None:
+        raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Virtual cluster not found")
+    groups = settings.get("groups") or []
+    name = data.name or f"{data.namespace}-{data.role}"
+    if len(name) > 40:
+        name = f"{name[:31]}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
+    if name == "cluster-admin" or any(group.get("name") == name for group in groups):
+        raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="Group name already exists or is reserved")
+    if len(groups) >= 20:
+        raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail="A virtual cluster permits at most 20 declared groups")
+    group = VClusterGroup(name=name, namespace=data.namespace, role=data.role)
+    path = f"/spec/vclusters/{instance}"
+    try:
+        api.patch(
+            name=workspace_name,
+            namespace=current_namespace(),
+            body=[
+                {"op": "test", "path": path, "value": settings},
+                {"op": "add", "path": f"{path}/groups", "value": [*groups, group.model_dump(exclude_none=True)]},
+            ],
+            content_type="application/json-patch+json",
+        )
+    except ApiException as e:
+        if e.status in (HTTPStatus.CONFLICT, HTTPStatus.UNPROCESSABLE_ENTITY):
+            raise HTTPException(
+                status_code=HTTPStatus.CONFLICT, detail="Virtual cluster configuration changed; reload and try again"
+            ) from e
+        raise HTTPException(status_code=HTTPStatus.BAD_GATEWAY, detail="Could not add virtual cluster group") from e
+    return group
+
+
+POLL_INTERVAL_SECONDS = 10
 
 
 def _get_datalab_for_sessions(workspace_name: str) -> tuple[Any, Any, dict[str, Any], list[Any]]:
@@ -2411,11 +2490,12 @@ async def update_workspace_session_state(
 
     _patch_datalab_sessions(datalab_api, workspace_name, patch_body)
     payload = _session_status_payload(datalab, session_id)
+    url = _http_url(payload.get("url")) if data.state == SessionState.STARTED else None
     return Session(
         name=session_id,
         state=data.state,
-        url=_clean_str(payload.get("url")) if data.state == SessionState.STARTED else None,
-        ready=bool(data.state == SessionState.STARTED and _clean_str(payload.get("url"))),
+        url=url,
+        ready=bool(url and _session_runtime_ready(payload)),
     )
 
 
@@ -2453,10 +2533,11 @@ async def delete_workspace_session(
     "/workspaces/{workspace_name}/sessions/{session_id}",
     status_code=HTTPStatus.OK,
     tags=["Sessions"],
-    summary="Enable a session; JSON status or simple HTML waiter",
-    description="On-demand session enablement. HTML: probe and wait. Non-HTML: 200 URL or 202 with Retry-After.",
+    summary="Enable a session and read its published URL",
+    description="On-demand session enablement. Readiness and destination come from Datalab status. Pending sessions return 202.",
     responses={
-        200: {"description": "Ready: JSON with URL or minimal HTML waiter showing link and countdown."},
+        200: {"description": "Ready: JSON with the published URL."},
+        307: {"description": "Browser redirect to the published URL."},
         202: {"description": 'Starting: JSON {"status":"starting"} with Retry-After: 10.'},
         404: {"description": "Workspace/session not found or enabling unavailable."},
         502: {"description": "Backend failure while enabling session."},
@@ -2484,13 +2565,14 @@ async def get_workspace_session(
     spec = _to_spec_dict(dl) or {}
     spec_sessions = _session_declarations(spec)
     spec_session = _find_session(spec_sessions, str(session_id))
+    session = next((session for session in _sessions_from_datalab(dl) if session.name == session_id), None)
 
-    if spec_session is None:
-        msg = f"Session enabling unavailable: session '{session_id}' is not declared"
+    if session is None and (spec_session is None or _session_state(spec_session) is None):
+        msg = f"Session enabling unavailable: session '{session_id}' is not declared or published"
         logger.info(msg)
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail={"error": msg})
-    if _session_state(spec_session) != SESSION_STATE_STARTED:
-        patch_body = _session_start_patch(spec_sessions, str(session_id))
+    if spec_session is not None and _session_state(spec_session) != SESSION_STATE_STARTED:
+        patch_body = _session_state_patch(spec_sessions, str(session_id), SessionState.STARTED)
         logger.info(
             "Starting stopped session '%s' for workspace '%s'.",
             session_id,
@@ -2511,73 +2593,21 @@ async def get_workspace_session(
                 detail={"error": msg, "exception": str(e)},
             ) from e
 
-    st = getattr(dl, "status", None)
-    if st is None:
-        st_dict: dict[str, Any] = {}
-    elif isinstance(st, dict):
-        st_dict = st
-    elif hasattr(st, "to_dict"):
-        st_dict = st.to_dict()  # type: ignore[no-any-return]
-    else:
-        st_dict = {}
-    payload = (st_dict.get("sessions") or {}).get(str(session_id)) or {}
-    url = payload.get("url") if isinstance(payload, dict) else None
+    url = session.url if session is not None else None
+    ready = session is not None and session.ready and (spec_session is None or _session_state(spec_session) == SESSION_STATE_STARTED)
 
     accept_header = request.headers.get("accept", "").lower()
     if "text/html" in accept_header:
-        html = (
-            "<!doctype html><meta charset='utf-8'>"
-            "<title>Preparing session…</title>"
-            "<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;}"
-            "p{padding:1em 2em;border-radius:4px;background:#eee;}"
-            "small{display:block;margin-top:.75em;color:#555;word-break:break-all;}</style>"
-            "<p><span id='msg'>Preparing session, please wait…</span><small id='checked-url'></small></p>"
-            "<script>"
-            f"const waitBefore={MIN_DISPLAY_SECONDS};"
-            "const pollInterval=10000;"
-            "function isHttp(u){try{const x=new URL(u);return x.protocol==='http:'||x.protocol==='https:';}catch{return false;}}"
-            "function api(){const b=location.href.split('#')[0];const s=b.includes('?')?'&':'?';return b+s+'format=json&ts='+Date.now();}"
-            "function showUrl(label,url){"
-            "  const el=document.getElementById('checked-url');"
-            "  const link=document.createElement('a');"
-            "  link.href=url;"
-            "  link.textContent=url;"
-            "  el.textContent=label+' ';"
-            "  el.appendChild(link);"
-            "}"
-            "function redirect(url) {"
-            "  const msg=document.getElementById('msg');"
-            "  const link=document.createElement('a');"
-            "  link.href=url;"
-            "  link.textContent=url;"
-            "  showUrl('Session URL:', url);"
-            "  msg.textContent='Session ready. Redirecting to ';"
-            "  msg.appendChild(link);"
-            "  msg.append('...');"
-            "  setTimeout(() => location.replace(url), waitBefore * 1000);"
-            "}"
-            "function check() {"
-            "  const apiUrl=api();"
-            "  showUrl('Checking:', apiUrl);"
-            "  fetch(apiUrl,{headers:{'Accept':'application/json','Cache-Control':'no-store'},cache:'no-store'})"
-            "    .then(r => r.json().then(d => ({status:r.status,d})))"
-            "    .then(x => {"
-            "       const d=x.d;"
-            "       if(x.status === 200 && d && d.url && isHttp(d.url)) { redirect(d.url); }"
-            "       if(d && d.url && isHttp(d.url)) { showUrl('Session URL:', d.url); }"
-            "       throw new Error('status:'+x.status);"
-            "    })"
-            "    .catch(e => {"
-            "       document.getElementById('msg').textContent='Session not ready yet. Retrying...';"
-            "       setTimeout(check, pollInterval);"
-            "    });"
-            "}"
-            "check();"
-            "</script>"
+        if ready and url:
+            return RedirectResponse(url, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(
+            "<!doctype html><meta charset='utf-8'><title>Session unavailable</title>"
+            "<p>The session is not ready. Return to Sessions and refresh to check its published URL.</p>",
+            status_code=HTTPStatus.ACCEPTED,
+            headers={"Cache-Control": "no-store", "Retry-After": str(POLL_INTERVAL_SECONDS)},
         )
-        return HTMLResponse(html, status_code=HTTPStatus.OK, headers={"Cache-Control": "no-store"})
 
-    if url and _session_url_ready(_session_probe_url(workspace_name, str(session_id))):
+    if ready:
         return JSONResponse(
             {"url": url},
             status_code=HTTPStatus.OK,

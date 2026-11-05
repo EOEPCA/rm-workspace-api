@@ -5,7 +5,7 @@
     <base href="{{ base_path.rstrip('/') }}/">
     <meta
       name="viewport"
-      content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1, minimum-scale=1"
+      content="width=device-width, initial-scale=1"
     />
     <link rel="icon" href="/ui/icons/favicon.ico" type="image/x-icon">
     <link
@@ -17,7 +17,6 @@
     <noscript>You need to enable JavaScript to run this app.</noscript>
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
     <script>
-      const request = '{{ request | safe }}';
       const workspaceData = '{{ workspace_data | safe }}';
       const endpointsData = '{{ endpoints_data | safe }}';
       const frontendUrl = '{{ frontend_url | safe }}';
@@ -33,82 +32,96 @@
         return null;
       }
 
-      function hasAnyManagePermission(permissions) {
-        if (!Array.isArray(permissions)) {
-          return false;
+      async function initialize() {
+        let workspace = decodeData(workspaceData);
+        if (!workspace?.name || !workspace?.user) {
+          document.body.textContent = 'Workspace data is missing. Reload the page to try again.';
+          return;
         }
-
-        return permissions.some(p => typeof p === 'string' && p.startsWith('MANAGE_'));
-      }
-
-      const workspace = decodeData(workspaceData);
-      console.log(workspace)
-      const endpoints = Array.isArray(decodeData(endpointsData)) ? decodeData(endpointsData) : [];
-      const user = workspace?.user || { name: 'unknown'};
-      const isAdmin = hasAnyManagePermission(user?.permissions)
-      let children = []
-      if (isAdmin) {
-        children.push(
-                {
-                  pathSegment: 'management',
-                  label: 'Management',
-                  icon: 'action-settings',
-                  viewUrl: frontendUrl + '#/management'
-                })
-      }
-
-      endpoints.forEach(endpoint => {
-        if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
-          let targetUrl = endpoint.url;
-          if (targetUrl && !targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
-            targetUrl = 'https://' + targetUrl;
-          } else if (!targetUrl) {
-            targetUrl = '#';
+        const apiUrl = new URL(window.location.href);
+        const permissions = workspace?.user?.permissions || [];
+        let resolveDetails = false;
+        for (const [parameter, permission] of [
+          ['resolve_connections', 'VIEW_CONNECTION_CREDENTIALS'],
+          ['resolve_oauth2', 'VIEW_OAUTH2_CREDENTIALS'],
+        ]) {
+          if (permissions.includes(permission) && !apiUrl.searchParams.has(parameter)) {
+            apiUrl.searchParams.set(parameter, '*');
+            resolveDetails = true;
           }
-
-          children.push({
-            category: { label: 'Links', icon: 'link' },
-            label: endpoint.id,
-            externalLink: { url: targetUrl }
-          });
         }
-      });
+        if (resolveDetails) {
+          apiUrl.hash = '';
+          try {
+            const response = await fetch(apiUrl, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+            if (!response.ok) throw new Error('Workspace details request failed');
+            workspace = await response.json();
+          } catch {
+            document.body.textContent = 'Could not load workspace details. Reload the page to try again.';
+            return;
+          }
+        }
+        const endpoints = decodeData(endpointsData);
+        const user = workspace.user;
+        const canManageWorkspace = user.permissions.some(permission => permission.startsWith('MANAGE_'));
+        const children = [];
+        if (canManageWorkspace) {
+          children.push(
+                  {
+                    pathSegment: 'management',
+                    label: 'Management',
+                    icon: 'action-settings',
+                    viewUrl: frontendUrl + '#/management'
+                  })
+        }
 
-      const luigiConfig = {
-        navigation: {
-          profile: {
-            staticUserInfoFn: () => ({
-              name: user.name,
-              // email: 'email'
-            })
-          },
-          nodes: () => [
-            {
-              pathSegment: 'home',
-              label: workspace.name,
-              icon: 'home',
-              viewUrl: frontendUrl + '/',
-              children: children,
-              context: {
-                workspace: workspace
+        endpoints.forEach(endpoint => {
+          if (endpoint && typeof endpoint.id === 'string' && typeof endpoint.url === 'string') {
+            children.push({
+              category: { label: 'Links', icon: 'link' },
+              label: endpoint.id,
+              externalLink: { url: endpoint.url }
+            });
+          }
+        });
+
+        const luigiConfig = {
+          navigation: {
+            profile: {
+              staticUserInfoFn: () => ({
+                name: user.name,
+              })
+            },
+            nodes: () => [
+              {
+                pathSegment: 'home',
+                label: workspace.name,
+                icon: 'home',
+                viewUrl: frontendUrl + '/',
+                children: children,
+                context: {
+                  workspace: workspace
+                }
               }
-            }
-          ]
-        },
-        routing: {
-          useHashRouting: true
-        },
-        settings: {
-          header: {
-            title: `Workspace: ${workspace.name} /  User: ${user.name}`,
-            logo: '/ui/logo.svg'
+            ]
           },
-          hideNavigation: false,
-          responsiveNavigation: 'semiCollapsible'
-        }
-      };
+          routing: {
+            useHashRouting: true
+          },
+          settings: {
+            customSandboxRules: ['allow-downloads'],
+            header: {
+              title: `Workspace: ${workspace.name} /  User: ${user.name}`,
+              logo: '/ui/logo.svg'
+            },
+            hideNavigation: false,
+            responsiveNavigation: 'semiCollapsible'
+          }
+        };
 
-      Luigi.setConfig(luigiConfig);
+        Luigi.setConfig(luigiConfig);
+      }
+      initialize();
     </script>
   </body>
 </html>

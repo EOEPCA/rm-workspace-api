@@ -60,7 +60,7 @@ import {QTable} from 'quasar'
 import type { Bucket } from 'src/models/models'
 import {formatDate} from 'src/services/common'
 import {sortByRequestThenGrantDesc} from 'src/services/sorting'
-import {saveBucketGrants} from 'src/services/api'
+import {saveBucketAccessRequests} from 'src/services/api'
 import {useUserStore} from 'stores/userStore'
 
 const props = defineProps<{
@@ -71,19 +71,7 @@ const props = defineProps<{
 const $q = useQuasar()
 const userStore = useUserStore()
 
-/*
-const emit = defineEmits<{
-  (e: 'update:linked-buckets', v: Bucket[]): void
-}>()
 
- */
-
-/*
-const linkedBuckets = computed({
-  get: () => props.linkedBuckets,
-  set: (v) => emit('update:linked-buckets', v)
-})
- */
 
 const requestedBuckets = computed(() =>
   props.linkedBuckets
@@ -108,7 +96,7 @@ const requestedBucketsColumns: QTableColumn<Bucket>[] = [
     field: 'request_timestamp',
     align: 'left',
     sortable: true,
-    format: (val) => formatDate(val as string | null)   // (val, row) möglich, row hier nicht gebraucht
+    format: (val) => formatDate(val as string | null)
   },
   {
     name: 'granted',
@@ -149,7 +137,7 @@ function grantBucket(row: Bucket) {
   row.isPending = true
 
   const bucketGrants = [row]
-  saveBucketGrants(props.workspaceName, bucketGrants)
+  saveBucketAccessRequests(props.workspaceName, bucketGrants)
     .then(() => {
         $q.notify({
           type: 'positive',
@@ -179,7 +167,7 @@ function revokeBucket(row: Bucket) {
   row.isPending = true
 
   const bucketGrants = [row]
-  saveBucketGrants(props.workspaceName, bucketGrants)
+  saveBucketAccessRequests(props.workspaceName, bucketGrants)
     .then(() => {
         row.request_timestamp = new Date().toISOString()
         $q.notify({
@@ -209,7 +197,7 @@ function denyBucket(row: Bucket) {
   row.isPending = true
 
   const bucketGrants = [row]
-  saveBucketGrants(props.workspaceName, bucketGrants)
+  saveBucketAccessRequests(props.workspaceName, bucketGrants)
     .then(() => {
         row.request_timestamp = new Date().toISOString()
         $q.notify({
