@@ -50,7 +50,7 @@ def test_create_workspace_sends_started_session_object(client: TestClient, monke
 
     response = client.post(
         "/workspaces",
-        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        json={"preferred_name": "team-blue", "default_owner": "alice"},
         headers=_auth_headers(),
     )
 
@@ -83,7 +83,7 @@ def test_create_workspace_sends_stopped_default_session_in_auto_mode(client: Tes
 
     response = client.post(
         "/workspaces",
-        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        json={"preferred_name": "team-blue", "default_owner": "alice"},
         headers=_auth_headers(),
     )
 
@@ -106,7 +106,7 @@ def test_create_workspace_does_not_touch_sessions_in_off_mode(client: TestClient
 
     response = client.post(
         "/workspaces",
-        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        json={"preferred_name": "team-blue", "default_owner": "alice"},
         headers=_auth_headers(),
     )
 
@@ -130,7 +130,7 @@ def test_create_workspace_respects_zero_session_limit(client: TestClient, monkey
 
     response = client.post(
         "/workspaces",
-        json={"preferred_name": "Team Blue", "default_owner": "alice"},
+        json={"preferred_name": "team-blue", "default_owner": "alice"},
         headers=_auth_headers(),
     )
 

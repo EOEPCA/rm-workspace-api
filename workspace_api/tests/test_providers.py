@@ -12,7 +12,7 @@ from kubernetes.dynamic.exceptions import ResourceNotFoundError
 from workspace_api import config, views
 from workspace_api.models import StoreType
 from workspace_api.tests.test_views import _dev_token
-from workspace_api.views import _crd_exists, _res_optional
+from workspace_api.views import _res_optional
 
 
 @pytest.fixture
@@ -43,9 +43,6 @@ def providers(monkeypatch: pytest.MonkeyPatch):
             apis[kind] = api
         discovery = mock.Mock(side_effect=lambda _api, kind: apis[kind])
         monkeypatch.setattr(views, "_res_optional", discovery)
-        monkeypatch.setattr(
-            views, "_crd_exists", lambda name: apis[views.KIND_STORAGE if name == views.CRD_STORAGE else views.KIND_DATALAB] is not None
-        )
         monkeypatch.setattr(views, "_available_store_types", lambda installed: [StoreType.DATABASE] if installed else [])
         return SimpleNamespace(apis=apis, discovery=discovery)
 
@@ -64,7 +61,7 @@ def test_workspace_works_with_one_resource(client: TestClient, providers, storag
     providers(storage, datalab)
     response = client.get("/status", headers=headers())
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "storage_crd_present": storage != "absent", "datalab_crd_present": datalab != "absent"}
+    assert response.json() == {"ok": True, "storage_enabled": True, "datalab_enabled": True}
 
     response = client.get("/workspaces/ws-alice", headers=headers())
     assert response.status_code == 200
@@ -177,7 +174,6 @@ def test_disabled_providers_skip_cluster_access(
     monkeypatch.setattr(config, "DISABLE_STORAGE", str(disable_storage).lower())
     monkeypatch.setattr(config, "DISABLE_DATALAB", str(disable_datalab).lower())
     monkeypatch.setattr(views, "_res_optional", _res_optional)
-    monkeypatch.setattr(views, "_crd_exists", _crd_exists)
     discovery = mock.Mock()
     discovery.resources.get.side_effect = lambda *, kind, **_kwargs: setup.apis[kind]
     monkeypatch.setattr(views, "_dyn", lambda: discovery)
@@ -187,8 +183,8 @@ def test_disabled_providers_skip_cluster_access(
     response = client.get("/status", headers=headers())
     assert response.json() == {
         "ok": True,
-        "storage_crd_present": not disable_storage,
-        "datalab_crd_present": not disable_datalab,
+        "storage_enabled": not disable_storage,
+        "datalab_enabled": not disable_datalab,
     }
     both_disabled = disable_storage and disable_datalab
     response = client.get("/workspaces/ws-alice", headers=headers())
@@ -215,14 +211,14 @@ def test_disabled_providers_skip_cluster_access(
     response = client.post("/workspaces", json={"preferred_name": "alice", "default_owner": "alice"}, headers=headers())
     assert response.status_code == (503 if both_disabled else 201)
 
-    for kind, disabled, crd in (
-        (views.KIND_STORAGE, disable_storage, views.CRD_STORAGE),
-        (views.KIND_DATALAB, disable_datalab, views.CRD_DATALAB),
+    crd_api.read_custom_resource_definition.assert_not_called()
+    for kind, disabled in (
+        (views.KIND_STORAGE, disable_storage),
+        (views.KIND_DATALAB, disable_datalab),
     ):
         if disabled:
             assert setup.apis[kind].mock_calls == []
             assert all(call.kwargs["kind"] != kind for call in discovery.resources.get.call_args_list)
-            assert mock.call(crd) not in crd_api.read_custom_resource_definition.call_args_list
         else:
             setup.apis[kind].create.assert_called_once()
 

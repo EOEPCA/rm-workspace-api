@@ -43,7 +43,8 @@
           outlined
           dense
           hide-bottom-space
-          placeholder="session-name"
+          placeholder="Session name"
+          maxlength="30"
           :error="!!rowErrors[props.row.id]?.name"
           @update:model-value="() => clearNameError(props.row.id)"
           @blur="() => validateSessionNames(mySessions, {mode: 'row', rowId: props.row.id})"
@@ -176,6 +177,8 @@
 </template>
 
 <script setup lang="ts">
+import { apiErrorMessage } from 'src/services/apiErrors'
+import { resourceNameError } from 'src/services/resourceNames'
 import {computed, reactive, ref, watch} from 'vue'
 import type {QTable, QTableColumn} from 'quasar'
 import {useQuasar} from 'quasar'
@@ -255,7 +258,6 @@ const initialPagination = {
   rowsPerPage: 0
 }
 
-const sessionNamePattern = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/
 const canManageSessions = computed(() => userStore.canManageSessions)
 const hasNewSessions = computed(() => mySessions.value.some(session => session.isNew))
 const normalizedMaxSessions = computed(() => Math.max(0, props.maxSessions ?? 3))
@@ -264,7 +266,7 @@ const exceedsSessionLimit = computed(() => mySessions.value.length > normalizedM
 const removeConfirmationMatches = computed(() => removeConfirmationName.value === pendingRemovalSession.value?.name)
 
 function normalizeName(v: string) {
-  return (v ?? '').trim().toLowerCase()
+  return (v ?? '').trim()
 }
 
 function clearNameError(rowId: string) {
@@ -293,8 +295,9 @@ function validateOne(row: SessionRow, rows: SessionRow[]) {
     setNameError(row.id, 'Session name is required.')
     return false
   }
-  if (!sessionNamePattern.test(name)) {
-    setNameError(row.id, 'Use lowercase letters, numbers, and hyphens.')
+  const error = row.isNew ? resourceNameError(name) : ''
+  if (error) {
+    setNameError(row.id, error)
     return false
   }
   if (rows.some(r => r.id !== row.id && normalizeName(r.name) === name)) {
@@ -386,7 +389,7 @@ function createSessions() {
       })
     })
     .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error creating sessions: ${msg}`
@@ -416,7 +419,7 @@ function setState(row: SessionRow, state: SessionState) {
       })
     })
     .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error updating session: ${msg}`
@@ -473,7 +476,7 @@ function confirmRemoveSession() {
       })
     })
     .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error removing session: ${msg}`

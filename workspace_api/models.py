@@ -56,6 +56,9 @@ class SessionState(str, enum.Enum):
     STOPPED = "stopped"
 
 
+RESOURCE_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+RESOURCE_NAME_ERROR = "Use 1-30 lowercase letters, digits, or hyphens; start and end with a letter or digit."
+
 SESSION_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 
@@ -151,6 +154,12 @@ def _validate_bucket_name(v: str) -> str:
 
 def _validate_bucket_list(values: list[str]) -> list[str]:
     return [_validate_bucket_name(b) for b in values]
+
+
+def validate_resource_name(value: str) -> str:
+    if not 1 <= len(value) <= 30 or not re.fullmatch(RESOURCE_NAME_PATTERN, value):
+        raise ValueError(RESOURCE_NAME_ERROR)
+    return value
 
 
 def _validate_session_name(v: str) -> str:
@@ -270,7 +279,7 @@ class Session(BaseModel):
     ready: bool = Field(False, description="Whether the provider reports a usable session URL.")
     phase: str | None = None
     message: str | None = None
-    pvc_size: str | None = Field(None, description="Published persistent session storage request as a Kubernetes quantity.")
+    pvc_size: str | None = Field(default=None, description="Published persistent session storage request as a Kubernetes quantity.")
 
     @field_validator("name", mode="before")
     @classmethod
@@ -291,13 +300,13 @@ class SessionCreate(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={"description": "Session create request."})
 
-    name: str = Field(..., description="The session name.")
+    name: str = Field(..., min_length=1, max_length=30, pattern=RESOURCE_NAME_PATTERN, description="The session name.")
     state: SessionState = Field(SessionState.STOPPED, description="Initial session state.")
 
     @field_validator("name", mode="before")
     @classmethod
     def _strip_name(cls, v: Any) -> str:
-        return _validate_session_name(v)
+        return validate_resource_name(_strip_required_string(v))
 
 
 class SessionStateUpdate(BaseModel):
@@ -486,8 +495,13 @@ class WorkspaceCreate(BaseModel):
 
     model_config = ConfigDict(json_schema_extra={"description": "Workspace creation request."})
 
-    preferred_name: str = Field("", description="User-provided preferred name; will be slugified and prefixed.")
+    preferred_name: str = Field("", description="Preferred resource name before the configured prefix.")
     default_owner: str = Field("", description="Default owner username for the workspace.")
+
+    @field_validator("preferred_name")
+    @classmethod
+    def _preferred_name(cls, value: str) -> str:
+        return validate_resource_name(value) if value else value
 
 
 class WorkspaceEdit(BaseModel):
@@ -530,6 +544,7 @@ class WorkspaceEdit(BaseModel):
         seen: set[str] = set()
         out: list[Bucket] = []
         for b in v or []:
+            validate_resource_name(b.name)
             if b.name in seen:
                 continue
             seen.add(b.name)
@@ -542,6 +557,7 @@ class WorkspaceEdit(BaseModel):
         seen: set[tuple[StoreType, str]] = set()
         out: list[Store] = []
         for s in v or []:
+            validate_resource_name(s.name)
             key = (s.type, s.name)
             if key in seen:
                 continue
@@ -627,8 +643,8 @@ class VClusterGroupCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = Field(None, min_length=1, max_length=40, pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
-    namespace: str = Field(..., min_length=1, max_length=63, pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$")
+    name: str | None = Field(None, min_length=1, max_length=30, pattern=RESOURCE_NAME_PATTERN)
+    namespace: str = Field(..., min_length=1, max_length=30, pattern=RESOURCE_NAME_PATTERN)
     role: Literal["view", "edit", "admin"]
 
     @field_validator("namespace")
@@ -656,7 +672,7 @@ class Datalab(BaseModel):
     available: bool = Field(False, description="Whether this workspace has a Datalab resource.")
     available_store_types: list[StoreType] = Field(
         default_factory=list,
-        description="Store types enabled by config and supported by the Datalab CRD.",
+        description="Store types enabled by configuration.",
     )
     stores: list[Store] = Field(default_factory=list, description="Detailed store entries.")
     vclusters: list[VCluster] = Field(default_factory=list, description="Declared virtual clusters and additional access profiles.")

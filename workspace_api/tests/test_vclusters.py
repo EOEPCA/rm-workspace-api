@@ -77,9 +77,7 @@ def test_add_group_preserves_existing_profiles_bindings_and_cluster_settings(cli
     assert vcluster_api.get.return_value.spec == original
 
 
-@pytest.mark.parametrize(
-    "namespace", ["kube-system", "kubefoo", "default", "*", "Upper", "a.b", "a_1", "-demo", "demo-", "1demo", "a" * 64]
-)
+@pytest.mark.parametrize("namespace", ["kube-system", "kubefoo", "default", "*", "Upper", "a.b", "a_1", "-demo", "demo-", "a" * 31])
 def test_group_creation_rejects_invalid_or_reserved_namespaces(client: TestClient, vcluster_api, namespace: str) -> None:
     response = client.post("/workspaces/ws-alice/vclusters/vc0/groups", json={"namespace": namespace, "role": "edit"}, headers=_headers())
     assert response.status_code == 422
@@ -104,10 +102,10 @@ def test_only_workspace_admins_can_add_groups(client: TestClient, vcluster_api, 
 
 
 def test_group_creation_handles_empty_group_list_and_long_namespace(client: TestClient, vcluster_api) -> None:
-    response = client.post("/workspaces/ws-alice/vclusters/vc1/groups", json={"namespace": "a" * 63, "role": "edit"}, headers=_headers())
+    response = client.post("/workspaces/ws-alice/vclusters/vc1/groups", json={"namespace": "a" * 30, "role": "edit"}, headers=_headers())
     assert response.status_code == 201
-    assert len(response.json()["name"]) <= 40
-    assert response.json()["namespace"] == "a" * 63
+    assert len(response.json()["name"]) <= 30
+    assert response.json()["namespace"] == "a" * 30
     assert vcluster_api.patch.call_args.kwargs["body"][1]["path"] == "/spec/vclusters/vc1/groups"
 
 

@@ -34,6 +34,7 @@ from slugify import slugify
 from workspace_api import app, config, templates
 
 from .models import (
+    RESOURCE_NAME_PATTERN,
     SESSION_NAME_PATTERN,
     Bucket,
     BucketAccessRequest,
@@ -66,6 +67,7 @@ from .models import (
     WorkspaceListSession,
     WorkspaceStatus,
     WorkspaceToken,
+    validate_resource_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +104,7 @@ def _max_sessions() -> int:
 def _workspace_name_pattern() -> str:
     p = (config.PREFIX_FOR_NAME or "").strip().rstrip("-")
     if p:
-        return rf"^{re.escape(p)}-"
+        return rf"^{re.escape(p)}-[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     return r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
 
 
@@ -139,15 +141,11 @@ SESSION_STATE_STARTED = SessionState.STARTED.value
 SESSION_STATE_STOPPED = SessionState.STOPPED.value
 STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
 DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
-STORE_TYPE_CRDS = {
-    StoreType.DATABASE: "postgresclusters.postgres-operator.crunchydata.com",
-    StoreType.CACHE: "redis.redis.redis.opstreelabs.in",
-    StoreType.DOCUMENT: "mongodbcommunity.mongodbcommunity.mongodb.com",
-}
 
 
 @app.on_event("startup")
 async def load_k8s_config() -> None:
+    _configured_store_types()
     try:
         k8s_config.load_kube_config()
     except k8s_config.ConfigException:
@@ -213,33 +211,13 @@ def _to_b64_json(obj: Any) -> str:
     return base64.b64encode(json.dumps(obj).encode("utf-8")).decode("utf-8")
 
 
-def _crd_exists(name: str) -> bool:
-    kind = {CRD_STORAGE: KIND_STORAGE, CRD_DATALAB: KIND_DATALAB}.get(name)
-    if kind and _provider_disabled(kind):
-        return False
-    api = k8s_client.ApiextensionsV1Api()
-    try:
-        api.read_custom_resource_definition(name)
-        return True  # noqa: TRY300
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return False
-        raise
-
-
-@app.get(
-    "/status",
-    status_code=HTTPStatus.OK,
-    tags=["System"],
-    summary="Health and CRD availability",
-    description="Reports service health and enabled Storage and Datalab CRD availability. Disabled providers report false.",
-)
+@app.get("/status", status_code=HTTPStatus.OK, tags=["System"], summary="Health and provider configuration")
 async def status() -> Response:
     return JSONResponse(
         {
             "ok": True,
-            "storage_crd_present": _crd_exists(CRD_STORAGE),
-            "datalab_crd_present": _crd_exists(CRD_DATALAB),
+            "storage_enabled": not _provider_disabled(KIND_STORAGE),
+            "datalab_enabled": not _provider_disabled(KIND_DATALAB),
         }
     )
 
@@ -510,80 +488,26 @@ def _default_storage_for_type(store_type: StoreType) -> str:
     }[store_type]
 
 
-def _disabled_store_types() -> set[StoreType]:
-    if _as_bool(config.DISABLE_STORES):
-        return set(StoreType)
-
-    disabled = set()
-    for part in config.DISABLED_STORE_TYPES.split(","):
-        name = part.strip()
-        if not name:
+def _configured_store_types() -> list[StoreType]:
+    supported = {
+        "postgres": StoreType.DATABASE,
+        "redis": StoreType.CACHE,
+        "mongo": StoreType.DOCUMENT,
+    }
+    enabled = set()
+    for raw_entry in config.STORES.split(","):
+        entry = raw_entry.strip().lower()
+        if not entry:
             continue
-        try:
-            disabled.add(StoreType(name))
-        except ValueError:
-            logger.warning("Unknown store type in DISABLED_STORE_TYPES: %r", name)
-    return disabled
-
-
-def _get_nested(mapping: dict[str, Any], *keys: str) -> Any:
-    current: Any = mapping
-    for key in keys:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(key)
-    return current
-
-
-def _schema_value(mapping: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if name in mapping:
-            return mapping[name]
-    return None
-
-
-def _datalab_crd_store_fields() -> set[str]:
-    try:
-        crd = k8s_client.ApiextensionsV1Api().read_custom_resource_definition(CRD_DATALAB)
-    except ApiException as e:
-        if e.status == HTTPStatus.NOT_FOUND:
-            return set()
-        raise
-
-    crd_dict = crd.to_dict() if hasattr(crd, "to_dict") else crd
-    versions = _get_nested(crd_dict, "spec", "versions") or []
-    if not isinstance(versions, list):
-        return set()
-
-    api_version = API_DATALAB.rsplit("/", 1)[-1]
-    selected = next((v for v in versions if isinstance(v, dict) and v.get("name") == api_version), None)
-    if selected is None:
-        return set()
-
-    schema = _schema_value(selected.get("schema") or {}, "openAPIV3Schema", "open_apiv3_schema") or {}
-    spec_properties = _get_nested(schema, "properties", "spec", "properties") or {}
-    if not isinstance(spec_properties, dict):
-        return set()
-
-    return {field for field in (_store_field_for_type(store_type) for store_type in StoreType) if field in spec_properties}
-
-
-def _store_type_crd_present(store_type: StoreType) -> bool:
-    crd_name = STORE_TYPE_CRDS.get(store_type)
-    return bool(crd_name and _crd_exists(crd_name))
+        if entry not in supported:
+            message = "STORES must contain postgres, redis, or mongo."
+            raise ValueError(message)
+        enabled.add(supported[entry])
+    return [store_type for store_type in StoreType if store_type in enabled]
 
 
 def _available_store_types(datalab_installed: bool) -> list[StoreType]:
-    if not datalab_installed:
-        return []
-
-    supported_fields = _datalab_crd_store_fields()
-    disabled = _disabled_store_types()
-    return [
-        store_type
-        for store_type in StoreType
-        if store_type not in disabled and _store_field_for_type(store_type) in supported_fields and _store_type_crd_present(store_type)
-    ]
+    return _configured_store_types() if datalab_installed else []
 
 
 def _stores_from_map(
@@ -850,7 +774,12 @@ def _resolve_connection(connection: CredentialReference) -> None:
     if not connection.ready:
         connection.resolution_error = "not_ready"
         return
-    secret = fetch_secret(ref.name, ref.namespace)
+    try:
+        secret = fetch_secret(ref.name, ref.namespace)
+    except Exception:
+        logger.warning("Could not read connection Secret %s/%s.", ref.namespace, ref.name)
+        connection.resolution_error = "secret_unavailable"
+        return
     if secret is None or not secret.data:
         connection.resolution_error = "secret_not_found"
         return
@@ -1124,7 +1053,11 @@ def _combine_workspace(
     },
 )
 async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
-    workspace_name = _with_prefix(slugify(data.preferred_name, max_length=32) or str(uuid.uuid4()))[:63]
+    workspace_name = _with_prefix(data.preferred_name or uuid.uuid4().hex[:12])
+    try:
+        validate_resource_name(workspace_name)
+    except ValueError as e:
+        raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=str(e)) from e
 
     storage_api = _res_optional(API_STORAGE, KIND_STORAGE)
     datalab_api = _res_optional(API_DATALAB, KIND_DATALAB)
@@ -2252,7 +2185,7 @@ async def create_vcluster_group(
     request: Request,
     data: VClusterGroupCreate,
     workspace_name: str = workspace_path_type,
-    instance: str = Path(pattern=r"^[a-z]([a-z0-9-]*[a-z0-9])?$", max_length=63),
+    instance: str = Path(pattern=RESOURCE_NAME_PATTERN, max_length=30),
 ) -> VClusterGroup:
     _require_workspace_permission(request, workspace_name, UserPermission.MANAGE_VCLUSTERS)
     api, spec = _get_datalab_vclusters(workspace_name)
@@ -2261,8 +2194,8 @@ async def create_vcluster_group(
         raise HTTPException(status_code=HTTPStatus.NOT_FOUND, detail="Virtual cluster not found")
     groups = settings.get("groups") or []
     name = data.name or f"{data.namespace}-{data.role}"
-    if len(name) > 40:
-        name = f"{name[:31]}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
+    if len(name) > 30:
+        name = f"{name[:21].rstrip('-')}-{hashlib.sha256(name.encode()).hexdigest()[:8]}"
     if name == "cluster-admin" or any(group.get("name") == name for group in groups):
         raise HTTPException(status_code=HTTPStatus.CONFLICT, detail="Group name already exists or is reserved")
     if len(groups) >= 20:

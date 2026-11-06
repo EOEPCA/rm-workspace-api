@@ -1,52 +1,30 @@
 # Copyright 2026, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
-from unittest import mock
-
 import pytest
 
 from workspace_api import config, views
 from workspace_api.models import Store, StoreType, WorkspaceEdit
-from workspace_api.views import (
-    _available_store_types,
+from workspace_api.views import _available_store_types
+
+
+@pytest.mark.parametrize(
+    "stores, datalab, expected",
+    [
+        ("mongo", True, [StoreType.DOCUMENT]),
+        ("postgres,redis,mongo", True, list(StoreType)),
+        ("", True, []),
+        ("postgres", False, []),
+    ],
 )
+def test_store_types_follow_configuration_without_crd_access(monkeypatch, stores, datalab, expected):
+    monkeypatch.setattr(config, "STORES", stores)
 
+    def forbidden() -> None:
+        pytest.fail("CRD definitions must not be read")
 
-def test_available_store_types_exclude_configured_types(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "DISABLE_STORES", "false")
-    monkeypatch.setattr(config, "DISABLED_STORE_TYPES", "database,cache")
-    monkeypatch.setattr(
-        "workspace_api.views._datalab_crd_store_fields",
-        lambda: {"databases", "documentStores", "cacheStores"},
-    )
-    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda _store_type: True)
-
-    assert _available_store_types(datalab_installed=True) == [StoreType.DOCUMENT]
-
-
-def test_available_store_types_require_backing_crds(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "DISABLE_STORES", "false")
-    monkeypatch.setattr(config, "DISABLED_STORE_TYPES", "")
-    monkeypatch.setattr(
-        "workspace_api.views._datalab_crd_store_fields",
-        lambda: {"databases", "vectorStores", "cacheStores", "documentStores"},
-    )
-    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda store_type: store_type is StoreType.DATABASE)
-
-    assert _available_store_types(datalab_installed=True) == [StoreType.DATABASE]
-
-
-def test_available_store_types_can_disable_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(config, "DISABLE_STORES", "true")
-    monkeypatch.setattr(config, "DISABLED_STORE_TYPES", "")
-    monkeypatch.setattr(
-        "workspace_api.views._datalab_crd_store_fields",
-        lambda: {"databases", "vectorStores", "cacheStores", "documentStores"},
-    )
-    monkeypatch.setattr("workspace_api.views._store_type_crd_present", lambda _store_type: True)
-
-    assert _available_store_types(datalab_installed=True) == []
+    monkeypatch.setattr(views.k8s_client, "ApiextensionsV1Api", forbidden)
+    assert _available_store_types(datalab) == expected
 
 
 def test_workspace_edit_deduplicates_stores_by_type_and_name() -> None:
@@ -64,21 +42,13 @@ def test_workspace_edit_deduplicates_stores_by_type_and_name() -> None:
     ]
 
 
-def test_store_types_do_not_use_another_crd_version(monkeypatch: pytest.MonkeyPatch) -> None:
-    crd = {
-        "spec": {
-            "versions": [
-                {
-                    "name": "v1beta1",
-                    "served": True,
-                    "schema": {"openAPIV3Schema": {"properties": {"spec": {"properties": {"databases": {}}}}}},
-                }
-            ]
-        }
-    }
-    monkeypatch.setattr(views.k8s_client, "ApiextensionsV1Api", lambda: SimpleNamespace(read_custom_resource_definition=lambda _name: crd))
-    backing = mock.Mock(return_value=True)
-    monkeypatch.setattr(views, "_store_type_crd_present", backing)
+@pytest.mark.parametrize("stores", ["database", "databases/mysql", "cacheStores/mongo"])
+def test_invalid_store_configuration_reports_error(monkeypatch, stores):
+    monkeypatch.setattr(config, "STORES", stores)
+    with pytest.raises(ValueError, match="STORES must contain"):
+        _available_store_types(True)
 
-    assert _available_store_types(datalab_installed=True) == []
-    backing.assert_not_called()
+
+def test_store_configuration_accepts_case_and_duplicates(monkeypatch):
+    monkeypatch.setattr(config, "STORES", " Mongo,mongo,REDIS ")
+    assert _available_store_types(True) == [StoreType.CACHE, StoreType.DOCUMENT]

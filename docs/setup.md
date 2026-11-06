@@ -8,19 +8,28 @@ Either provider can be used alone. The API manages their `Storage` and `Datalab`
 Kubernetes resources.
 
 Set `DISABLE_STORAGE=true` or `DISABLE_DATALAB=true` to disable a provider.
-These settings take priority over cluster discovery. The API hides its
-features and keeps existing cluster resources. Creation and deletion use the
+The API hides disabled features and keeps existing cluster resources.
+It does not read CRD definitions. Creation and deletion use the
 enabled providers. Creating a workspace returns 503 when neither is available;
 reading a missing workspace returns 404.
 
-`GET /status` reports health and provider availability. A missing or disabled
-provider does not make the API unhealthy. The UI hides features whose
-provider or workspace resource is unavailable. Store types appear only when
-enabled in configuration and supported by the provider schema and backing
-operator.
+`GET /status` reports health and the `storage_enabled` and `datalab_enabled`
+configuration flags. A missing or disabled provider does not make the API
+unhealthy. The UI hides features whose provider or workspace resource is
+unavailable. Store types appear when enabled in configuration. Install the corresponding
+provider and backing operators before use. Missing resource APIs return errors;
+missing backing operators can prevent provider reconciliation.
 
-For `DISABLED_STORE_TYPES`, use `database`, `cache`, or `document`,
-separated by commas. Use `DISABLE_STORES=true` to disable all stores.
+Set `STORES` to a comma-separated list of `postgres`, `redis`, and `mongo`. The default enables all three.
+Store names are case-insensitive. An empty value disables all stores.
+An entry outside these three names stops startup with a configuration error.
+This check does not verify the installed CRDs.
+
+New resource names use 1-30 lowercase letters, digits, or hyphens and start
+and end with a letter or digit. Bucket names also require at least three characters.
+
+If a connection Secret cannot be read or decoded, the API returns its metadata
+with a resolution error and continues with the other connections.
 
 ### Browser sessions
 
@@ -52,7 +61,6 @@ The API needs these Kubernetes permissions in the namespaces it manages:
 | --- | --- |
 | Storage and Datalab resources | `get`, `list`, `create`, `patch`, `delete` |
 | Referenced Secrets | `get` in each referenced namespace |
-| Provider and backing store CRDs | `get` |
 
 Session storage comes from Datalab `status.sessions[].pvcSize`, a Kubernetes
 quantity such as `10Gi`. The API exposes it as `datalab.sessions[].pvc_size`.
@@ -117,8 +125,7 @@ provider installation.
 | `USE_VCLUSTER` | `false` | Add a virtual cluster named `vc0` to new workspaces. |
 | `SESSION_MODE` | `on` | Initial default session: `on`, `auto`, or `off`. |
 | `MAX_SESSIONS` | `3` | Limit on declared sessions per workspace. |
-| `DISABLE_STORES` | `false` | Hide and reject all store types. |
-| `DISABLED_STORE_TYPES` | Empty | Comma-separated names: `database`, `cache`, `document`. |
+| `STORES` | `postgres,redis,mongo` | Enabled store names. Empty disables all stores. |
 | `UI_MODE` | `no` | Set to `ui` to serve the UI. |
 | `FRONTEND_URL` | `/ui/management` | Built UI path or development server URL. |
 | `AUTH_MODE` | `gateway` | Use gateway tokens; `no` disables authentication. |

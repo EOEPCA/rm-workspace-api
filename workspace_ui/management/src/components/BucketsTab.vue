@@ -40,9 +40,10 @@
           dense
           hide-bottom-space
           placeholder="Bucket name"
-          :rules="[val => !!val || 'Name is required',
-            val => val.startsWith(workspaceName) || 'Name must start with ' + workspaceName,
-            val => (val !== workspaceName && val != workspaceName + '-') || 'Name must be different from ' + workspaceName]"
+          maxlength="30"
+          :rules="[val => resourceNameError(val) || true,
+            val => val.length >= 3 || 'Use at least 3 characters',
+            val => !myBuckets.some(bucket => bucket !== props.row && bucket.bucket === val) || 'Bucket name must be unique.']"
         >
         </q-input>
         <span v-else>
@@ -234,6 +235,8 @@
 </template>
 
 <script setup lang="ts">
+import { apiErrorMessage } from 'src/services/apiErrors'
+import { resourceNameError } from 'src/services/resourceNames'
 import {computed, ref, watch} from 'vue'
 import type {QTableColumn} from 'quasar'
 import {QTable, useQuasar} from 'quasar'
@@ -522,7 +525,7 @@ function addBucket() {
   const idxNew = myBuckets.value.findIndex((b) => !b.bucket || b.isNew)
   if (idxNew < 0) {
     myBuckets.value.push({
-      bucket: props.workspaceName + '-',
+      bucket: '',
       discoverable: false,
       lifecycle_rules: [],
       requests: 0,
@@ -552,6 +555,14 @@ function createBuckets() {
     return
   }
 
+  const invalid = myBuckets.value.find(bucket => bucket.isNew && (
+    resourceNameError(bucket.bucket) || bucket.bucket.length < 3
+    || myBuckets.value.some(other => other !== bucket && other.bucket === bucket.bucket)
+  ))
+  if (invalid) {
+    $q.notify({type: 'negative', message: resourceNameError(invalid.bucket) || 'Invalid bucket name.'})
+    return
+  }
   newBucket.value?.validate?.()
   if (newBucket.value?.hasError) {
     return
@@ -589,7 +600,7 @@ function createBuckets() {
       })
     })
     .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error creating Buckets: ${msg}`
@@ -609,7 +620,7 @@ function requestBucket(row: Bucket) {
     })
     .catch((err) => {
       row.request_timestamp = undefined
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error requesting Bucket access: ${msg}`

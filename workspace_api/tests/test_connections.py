@@ -444,3 +444,46 @@ def test_dashboard_stores_use_only_published_instances(client: TestClient, conne
     connection_workspace.connections.clear()
     response = client.get("/workspaces/ws-alice?resolve_connections=none", headers=headers("ws_access"))
     assert response.json()["datalab"]["stores"] == []
+
+
+@pytest.mark.parametrize("failure", [None, 403, 404, 500, "transport", "invalid"])
+def test_unreadable_connection_secret_does_not_stop_other_reads(client, connection_workspace, failure):
+    def read_secret(name, _namespace) -> SimpleNamespace | None:
+        if name == "ws-alice-pg0":
+            if failure == "transport":
+                message = "connection closed"
+                raise OSError(message)
+            if failure == "invalid":
+                return SimpleNamespace(data={"password": "!invalid!"})
+            if failure is not None:
+                raise ApiException(status=failure)
+            return None
+        return connection_workspace.secrets.get(name)
+
+    connection_workspace.read_secret.side_effect = read_secret
+    response = client.get("/workspaces/ws-alice", params={"resolve_connections": "*"}, headers=headers("ws_admin"))
+    assert response.status_code == 200
+    entries = response.json()["datalab"]["connections"]
+    failed = next(entry for entry in entries if entry["name"] == "pg0")
+    assert failed.get("credentials") is None
+    assert failed["resolution_error"]
+    later = next(entry for entry in entries if entry["name"] == "mongo-docs")
+    assert later["credentials"] == {"password": "test-value"}
+
+
+@pytest.mark.parametrize("failure", [None, 403, 404, 500])
+def test_unreadable_oauth_secret_does_not_stop_other_reads(client, connection_workspace, failure):
+    def read_secret(name, _namespace) -> SimpleNamespace | None:
+        if name == "ws-alice-oauth-client":
+            if failure is not None:
+                raise ApiException(status=failure)
+            return None
+        return connection_workspace.secrets.get(name)
+
+    connection_workspace.read_secret.side_effect = read_secret
+    response = client.get("/workspaces/ws-alice", params={"resolve_oauth2": "*"}, headers=headers("ws_admin"))
+    assert response.status_code == 200
+    entries = response.json()["datalab"]["oauth2"]
+    assert entries[0].get("credentials") is None
+    assert entries[0]["resolution_error"]
+    assert entries[1]["credentials"]["clientID"] == "catalog-integration"

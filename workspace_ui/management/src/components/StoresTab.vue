@@ -63,6 +63,7 @@
           dense
           hide-bottom-space
           placeholder="Store name"
+          maxlength="30"
           :error="!!rowErrors[props.row.id]?.name"
           @update:model-value="() => clearNameError(props.row.id)"
           @blur="() => validateStoreNamesUnique(myStores, { mode: 'row', rowId: props.row.id })"
@@ -125,6 +126,8 @@
 </template>
 
 <script setup lang="ts">
+import { apiErrorMessage } from 'src/services/apiErrors'
+import { resourceNameError } from 'src/services/resourceNames'
 import {computed, reactive, ref, watch} from 'vue'
 import type {QTable, QTableColumn} from 'quasar'
 import {useQuasar} from 'quasar'
@@ -288,7 +291,7 @@ const hasAnyNameErrors = computed(() =>
 )
 
 function normalizeName(v: string) {
-  return (v ?? '').trim().toLowerCase()
+  return (v ?? '').trim()
 }
 
 
@@ -304,7 +307,11 @@ function validateStoreNamesUnique(
     clearNameError(row.id)
 
     const key = normalizeName(row.name)
-    if (!key) return true
+    const error = row.isNew ? resourceNameError(key) : ''
+    if (error) {
+      setNameError(row.id, error)
+      return false
+    }
 
     const duplicate = rows.some(r => r.id !== row.id && r.type === row.type && normalizeName(r.name) === key)
     if (duplicate) {
@@ -376,7 +383,7 @@ function createStores() {
       }
     )
     .catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = apiErrorMessage(err)
       $q.notify({
         type: 'negative',
         message: `Error creating stores: ${msg}`

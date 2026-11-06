@@ -22,11 +22,11 @@
         <q-card-section class="text-h6">Add access profile for {{ instance }}</q-card-section>
         <q-card-section class="q-gutter-md">
           <q-input
-            v-model="profileName" label="Name" outlined dense autofocus maxlength="40"
+            v-model="profileName" label="Name" outlined dense autofocus maxlength="30"
             :disable="saving" :rules="[value => nameError(value) || true]"
           />
           <q-input
-            v-model="namespace" label="Namespace" outlined dense
+            v-model="namespace" label="Namespace" outlined dense maxlength="30"
             :disable="saving" :rules="[value => namespaceError(value) || true]"
           />
           <q-select v-model="role" :options="roleOptions" label="Role" outlined dense :disable="saving" />
@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { apiErrorMessage } from 'src/services/apiErrors'
 import { computed, ref } from 'vue'
 import { useQuasar, type QTableColumn } from 'quasar'
 import type { VCluster, VClusterGroup } from 'src/models/models'
@@ -90,7 +91,7 @@ async function addAccessProfile() {
     dialogOpen.value = false
     $q.notify({ type: 'positive', message: 'Access profile request submitted.' })
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = apiErrorMessage(error)
     $q.notify({ type: 'negative', message: `Could not add access profile: ${message}` })
   } finally {
     saving.value = false
