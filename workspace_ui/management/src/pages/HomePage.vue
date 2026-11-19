@@ -101,7 +101,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useLuigiWorkspace } from 'src/composables/useLuigi'
+import { useLuigiContext } from 'src/composables/useLuigi'
 import type { Workspace } from 'src/models/models'
 import { formatStorageQuantity, sumStorageQuantities } from 'src/services/storageQuantity'
 import ConnectionList from 'src/components/ConnectionList.vue'
@@ -143,7 +143,7 @@ const serviceConnections = computed(() => {
   }))
 })
 
-const { loading } = useLuigiWorkspace({
+const { loading } = useLuigiContext({
   onReady: (ctx) => {
     if (!ctx || !ctx.workspace) {
       errorMessage.value = 'Workspace data is missing.'

@@ -5,7 +5,7 @@ import vm from 'node:vm'
 
 const shell = readFileSync(new URL('../../luigi-shell/ui.html', import.meta.url), 'utf8')
 
-async function openShell(permissions: string[], query = '', loadFails = false) {
+async function openShell(permissions: string[], query = '', loadFails = false, overview?: object) {
   const workspace = { name: 'ws-alice', user: { name: 'alice', permissions }, datalab: { connections: [], oauth2: [] } }
   const resolved = {
     ...workspace,
@@ -15,6 +15,7 @@ async function openShell(permissions: string[], query = '', loadFails = false) {
     },
   }
   const source = shell
+    .replace('{{ overview_data | default("") | safe }}', overview ? Buffer.from(JSON.stringify(overview)).toString('base64') : '')
     .replace('{{ workspace_data | safe }}', Buffer.from(JSON.stringify(workspace)).toString('base64'))
     .replace('{{ endpoints_data | safe }}', Buffer.from('[]').toString('base64'))
     .replace('{{ frontend_url | safe }}', '/ui/management')
@@ -24,6 +25,8 @@ async function openShell(permissions: string[], query = '', loadFails = false) {
   const body = { textContent: '' }
   let context: typeof workspace | undefined
   let sandboxRules: string[] = []
+  let overviewContext: unknown
+  let viewUrl = ''
   await vm.runInNewContext(source, {
     URL,
     atob,
@@ -35,15 +38,18 @@ async function openShell(permissions: string[], query = '', loadFails = false) {
     },
     Luigi: {
       setConfig: (config: {
-        navigation: { nodes: () => { context: { workspace: typeof workspace } }[] }
+        navigation: { nodes: () => { viewUrl: string; context: { workspace?: typeof workspace; workspaceOverview?: unknown } }[] }
         settings: { customSandboxRules?: string[] }
       }) => {
-        context = config.navigation.nodes()[0]?.context.workspace
+        const node = config.navigation.nodes()[0]
+        context = node?.context.workspace
+        overviewContext = node?.context.workspaceOverview
+        viewUrl = node?.viewUrl ?? ''
         sandboxRules = config.settings.customSandboxRules ?? []
       },
     },
   })
-  return { requests, context, sandboxRules, message: body.textContent }
+  return { requests, context, overviewContext, viewUrl, sandboxRules, message: body.textContent }
 }
 
 const humanPermissions = ['VIEW_CONNECTION_CREDENTIALS', 'VIEW_OAUTH2_CREDENTIALS']
@@ -120,4 +126,15 @@ test('dashboard stops when credential loading fails', async () => {
   assert.equal(requests.length, 1)
   assert.equal(context, undefined)
   assert.equal(message, 'Could not load workspace details. Reload the page to try again.')
+})
+
+test('the overview opens the Quasar list without workspace or credential requests', async () => {
+  const overview = { username: 'alice', is_admin: true, workspaces: [] }
+  const page = await openShell([], '', false, overview)
+  assert.equal(page.requests.length, 0)
+  assert.equal(page.context, undefined)
+  assert.equal(page.message, '')
+  assert.equal(page.viewUrl, '/ui/management#/workspaces')
+  assert.ok(page.sandboxRules.includes('allow-top-navigation-by-user-activation'))
+  assert.equal(JSON.stringify(page.overviewContext), JSON.stringify(overview))
 })

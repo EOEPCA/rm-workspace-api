@@ -4,7 +4,6 @@
 import base64
 import binascii
 import hashlib
-import html
 import json
 import logging
 import re
@@ -45,6 +44,7 @@ from .models import (
     CredentialReference,
     Credentials,
     Datalab,
+    Endpoint,
     Membership,
     MembershipRole,
     OAuth2Connection,
@@ -65,6 +65,8 @@ from .models import (
     WorkspaceEdit,
     WorkspaceListItem,
     WorkspaceListSession,
+    WorkspaceProviderOptions,
+    WorkspaceProviderSelection,
     WorkspaceStatus,
     WorkspaceToken,
     validate_resource_name,
@@ -77,14 +79,6 @@ def _with_prefix(name: str) -> str:
     p = (config.PREFIX_FOR_NAME or "").strip()
     p = p.rstrip("-")
     return f"{p}-{name}" if p else name
-
-
-def _provider_environment() -> str:
-    return str(config.PROVIDER_ENVIRONMENT or "datalab").strip() or "datalab"
-
-
-def _provider_environment_annotations(annotation_key: str) -> dict[str, str]:
-    return {annotation_key: _provider_environment()}
 
 
 DEFAULT_MAX_SESSIONS = 3
@@ -132,6 +126,10 @@ workspace_path_type = Path(..., pattern=WORKSPACE_NAME_PATTERN)
 
 API_STORAGE = "pkg.internal/v1beta1"
 API_DATALAB = "pkg.internal/v1beta2"
+API_ENVIRONMENT = "apiextensions.crossplane.io/v1beta1"
+API_COMPOSITION = "apiextensions.crossplane.io/v1"
+KIND_ENVIRONMENT = "EnvironmentConfig"
+KIND_COMPOSITION = "Composition"
 KIND_STORAGE = "Storage"
 KIND_DATALAB = "Datalab"
 CRD_STORAGE = "storages.pkg.internal"
@@ -139,8 +137,10 @@ CRD_DATALAB = "datalabs.pkg.internal"
 DEFAULT_SESSION_NAME = "default"
 SESSION_STATE_STARTED = SessionState.STARTED.value
 SESSION_STATE_STOPPED = SessionState.STOPPED.value
-STORAGE_ENVIRONMENT_ANNOTATION = "storages.pkg.internal/environment"
-DATALAB_ENVIRONMENT_ANNOTATION = "datalabs.pkg.internal/environment"
+STORAGE_ENVIRONMENT_LABEL = "storages.pkg.internal/name"
+DATALAB_ENVIRONMENT_LABEL = "datalabs.pkg.internal/name"
+STORAGE_BACKEND_LABEL = "storages.pkg.internal/backend"
+DATALAB_BACKEND_LABEL = "datalabs.pkg.internal/backend"
 
 
 @app.on_event("startup")
@@ -268,6 +268,127 @@ def _workspace_permissions(request: Request, workspace_name: str) -> set[UserPer
 def _require_workspace_permission(request: Request, workspace_name: str, permission: UserPermission) -> None:
     if permission not in _workspace_permissions(request, workspace_name):
         raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Forbidden")
+
+
+def _require_admin(request: Request) -> None:
+    if not request.state.user.get("is_admin"):
+        raise HTTPException(status_code=HTTPStatus.FORBIDDEN, detail="Workspace API administrator role required")
+
+
+WorkspaceProvider = Literal["storage", "datalab"]
+PROVIDER_RESOURCES = {"storage": (API_STORAGE, KIND_STORAGE), "datalab": (API_DATALAB, KIND_DATALAB)}
+PROVIDER_ENVIRONMENT_LABELS = {"storage": STORAGE_ENVIRONMENT_LABEL, "datalab": DATALAB_ENVIRONMENT_LABEL}
+
+
+def _configuration_get(api: Any, name: str, kind: str) -> dict[str, Any]:
+    try:
+        resource = api.get(name=name)
+    except ApiException as e:
+        if e.status == HTTPStatus.NOT_FOUND:
+            raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=f"{kind} '{name}' does not exist") from e
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=f"Cannot read {kind} resources") from e
+    return resource.to_dict() if hasattr(resource, "to_dict") else resource
+
+
+def _configuration_api(api_version: str, kind: str) -> Any:
+    try:
+        return _res_required(api_version, kind)
+    except ApiException as e:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=f"Cannot access {kind} resources") from e
+
+
+def _configuration_list(api_version: str, kind: str, **kwargs: Any) -> list[Any]:
+    api = _configuration_api(api_version, kind)
+    try:
+        return list(api.get(**kwargs).items)
+    except ApiException as e:
+        raise HTTPException(status_code=HTTPStatus.SERVICE_UNAVAILABLE, detail=f"Cannot list {kind} resources") from e
+
+
+def _composition_matches(composition: dict[str, Any], provider: WorkspaceProvider) -> bool:
+    api_version, kind = PROVIDER_RESOURCES[provider]
+    target = (composition.get("spec") or {}).get("compositeTypeRef") or {}
+    return target == {"apiVersion": api_version, "kind": kind}
+
+
+def _provider_composition(name: str, provider: WorkspaceProvider) -> dict[str, Any]:
+    composition = _configuration_get(_configuration_api(API_COMPOSITION, KIND_COMPOSITION), name, KIND_COMPOSITION)
+    if not _composition_matches(composition, provider):
+        raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=f"Composition '{name}' does not target {provider}")
+    return composition
+
+
+def _resolve_provider_selection(
+    selection: WorkspaceProviderSelection | None, provider: WorkspaceProvider
+) -> tuple[WorkspaceProviderSelection, dict[str, Any]]:
+    if selection is None:
+        raise HTTPException(status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail=f"Select a {provider} composition")
+    composition = _provider_composition(selection.composition, provider)
+    if selection.environment_name is not None:
+        if selection.environment_name == selection.composition:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY, detail="Omit the override to use the composition's default config"
+            )
+        environment = _configuration_get(
+            _configuration_api(API_ENVIRONMENT, KIND_ENVIRONMENT), selection.environment_name, KIND_ENVIRONMENT
+        )
+        labels = (environment.get("metadata") or {}).get("labels") or {}
+        if PROVIDER_ENVIRONMENT_LABELS[provider] not in labels:
+            raise HTTPException(
+                status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+                detail=f"EnvironmentConfig is not labeled for {provider}",
+            )
+    return selection, composition
+
+
+def _provider_create_body(
+    name: str, provider: WorkspaceProvider, selection: WorkspaceProviderSelection, composition: dict[str, Any]
+) -> dict[str, Any]:
+    api_version, kind = PROVIDER_RESOURCES[provider]
+    spec: dict[str, Any] = {"crossplane": {"compositionRef": {"name": selection.composition}}}
+    metadata: dict[str, Any] = {"name": name}
+    backend = ((composition.get("metadata") or {}).get("labels") or {}).get("provider")
+    if backend:
+        metadata["labels"] = {(STORAGE_BACKEND_LABEL if provider == "storage" else DATALAB_BACKEND_LABEL): backend}
+        if provider == "storage":
+            # The installed CloudFerro scripts check this selector even with a ref.
+            spec["crossplane"]["compositionSelector"] = {"matchLabels": {"provider": backend}}
+    if selection.environment_name is not None:
+        spec["environmentName"] = selection.environment_name
+    return {"apiVersion": api_version, "kind": kind, "metadata": metadata, "spec": spec}
+
+
+@app.get(
+    "/compositions",
+    response_model=WorkspaceProviderOptions,
+    tags=["Workspaces"],
+    summary="List provider compositions",
+)
+async def list_compositions(request: Request, provider: WorkspaceProvider) -> WorkspaceProviderOptions:
+    _require_admin(request)
+    if _res_optional(*PROVIDER_RESOURCES[provider]) is None:
+        return WorkspaceProviderOptions(available=False)
+    resources = _configuration_list(API_COMPOSITION, KIND_COMPOSITION)
+    compositions = [item.to_dict() if hasattr(item, "to_dict") else item for item in resources]
+    return WorkspaceProviderOptions(
+        available=True,
+        compositions=sorted(item["metadata"]["name"] for item in compositions if _composition_matches(item, provider)),
+    )
+
+
+@app.get(
+    "/environments",
+    response_model=list[str],
+    tags=["Workspaces"],
+    summary="List configuration overrides for a provider composition",
+)
+async def list_environments(request: Request, provider: WorkspaceProvider, composition: str) -> list[str]:
+    _require_admin(request)
+    if _res_optional(*PROVIDER_RESOURCES[provider]) is None:
+        return []
+    _provider_composition(composition, provider)
+    resources = _configuration_list(API_ENVIRONMENT, KIND_ENVIRONMENT, label_selector=PROVIDER_ENVIRONMENT_LABELS[provider])
+    return sorted(name for item in resources if (name := _resource_name(item)) and name != composition)
 
 
 def _resource_name(obj: Any) -> str | None:
@@ -708,6 +829,19 @@ def _http_url(value: object) -> str | None:
     return None
 
 
+def _endpoints_from_datalab(datalab: Any) -> list[Endpoint]:
+    entries = _datalab_status(datalab).get("endpoints")
+    if not isinstance(entries, list):
+        return []
+    endpoints = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not (name := _clean_str(entry.get("name"))):
+            continue
+        url = _http_url(entry.get("url"))
+        endpoints.append(Endpoint(name=name, url=url, ready=entry.get("ready") is True and url is not None))
+    return endpoints
+
+
 def _matches_connection_selector(connection: CredentialReference, selectors: Sequence[str]) -> bool:
     return any(
         selector in {"*", "*:*", f"{connection.type}:{connection.name}", f"{connection.type}:*", f"*:{connection.name}"}
@@ -998,6 +1132,7 @@ def _combine_workspace(
         vclusters=_vclusters_from_datalab(datalab_cr, management=management),
         sessions=sessions,
         max_sessions=_max_sessions(),
+        endpoints=_endpoints_from_datalab(datalab_cr),
         connections=connections,
         oauth2=oauth2,
     )
@@ -1043,16 +1178,20 @@ def _combine_workspace(
     tags=["Workspaces"],
     summary="Create a new workspace",
     description=(
-        "Creates a workspace with the installed Storage and Datalab providers. "
+        "Workspace API administrators can create a workspace with the installed Storage and Datalab providers. "
+        "Select a composition and an optional EnvironmentConfig override for each provider. "
         "Datalab sessions are created based on the configured session mode."
     ),
     responses={
         201: {"description": "Workspace created."},
+        403: {"description": "Workspace API administrator role required."},
         422: {"description": "Workspace with this name already exists or invalid input."},
         502: {"description": "Backend error while creating cluster resources."},
+        503: {"description": "Workspace providers or environment configuration are unavailable."},
     },
 )
-async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
+async def create_workspace(request: Request, data: WorkspaceCreate) -> dict[str, str]:
+    _require_admin(request)
     workspace_name = _with_prefix(data.preferred_name or uuid.uuid4().hex[:12])
     try:
         validate_resource_name(workspace_name)
@@ -1078,23 +1217,20 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
             detail={"error": "Workspace with this name already exists"},
         )
 
+    provider_apis: dict[WorkspaceProvider, Any] = {"storage": storage_api, "datalab": datalab_api}
+    selections = {
+        provider: _resolve_provider_selection(getattr(data, provider), provider)
+        for provider, api in provider_apis.items()
+        if api is not None
+    }
+
     if storage_api is not None:
+        selection, composition = selections["storage"]
+        body = _provider_create_body(workspace_name, "storage", selection, composition)
+        body["spec"].update({"principal": workspace_name, "buckets": [{"bucketName": workspace_name, "discoverable": True}]})
         try:
-            storage_api.create(
-                {
-                    "apiVersion": API_STORAGE,
-                    "kind": KIND_STORAGE,
-                    "metadata": {
-                        "name": workspace_name,
-                        "annotations": _provider_environment_annotations(STORAGE_ENVIRONMENT_ANNOTATION),
-                    },
-                    "spec": {
-                        "principal": workspace_name,
-                        "buckets": [{"bucketName": workspace_name, "discoverable": True}],
-                    },
-                },
-                namespace=current_namespace(),
-            )
+            # This client needs raw query parameters for strict field validation.
+            storage_api.create(body, namespace=current_namespace(), query_params=[("fieldValidation", "Strict")])
         except ApiException as e:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_GATEWAY,
@@ -1105,29 +1241,19 @@ async def create_workspace(data: WorkspaceCreate) -> dict[str, str]:
             ) from e
 
     if datalab_api is not None:
+        selection, composition = selections["datalab"]
+        body = _provider_create_body(workspace_name, "datalab", selection, composition)
         session_mode = str(config.SESSION_MODE).strip().lower()
         sessions = _initial_sessions_for_mode(session_mode)[: _max_sessions()]
-        datalab_spec: dict[str, Any] = {
-            "users": [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())],
-        }
+        datalab_spec = body["spec"]
+        datalab_spec["users"] = [slugify(data.default_owner, max_length=32) or str(uuid.uuid4())]
         if _as_bool(config.USE_VCLUSTER):
             datalab_spec["vclusters"] = {"vc0": {}}
         if sessions:
             datalab_spec["sessions"] = sessions
 
         try:
-            datalab_api.create(
-                {
-                    "apiVersion": API_DATALAB,
-                    "kind": KIND_DATALAB,
-                    "metadata": {
-                        "name": workspace_name,
-                        "annotations": _provider_environment_annotations(DATALAB_ENVIRONMENT_ANNOTATION),
-                    },
-                    "spec": datalab_spec,
-                },
-                namespace=current_namespace(),
-            )
+            datalab_api.create(body, namespace=current_namespace(), query_params=[("fieldValidation", "Strict")])
         except ApiException as e:
             raise HTTPException(
                 status_code=HTTPStatus.BAD_GATEWAY,
@@ -1589,67 +1715,34 @@ async def list_workspaces(request: Request) -> Response:
     ]
 
     accept_header = request.headers.get("accept", "").lower()
-    if "text/html" in accept_header:
-        open_icon = (
-            "<svg class='open-icon' viewBox='0 0 24 24' aria-hidden='true' focusable='false'>"
-            "<path d='M14 3h7v7h-2V6.41l-9.83 9.83-1.41-1.41L17.59 5H14V3z'/>"
-            "<path d='M5 5h7v2H7v12h12v-5h2v7H5V5z'/>"
-            "</svg>"
+    if "text/html" in accept_header and templates is not None and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true"):
+        overview = {
+            "is_admin": request.state.user.get("is_admin", False),
+            "username": request.state.user.get("username", ""),
+            "workspace_name_prefix": _with_prefix(""),
+            "workspaces_url": urlsplit(make_external_url(request, "/workspaces")).path,
+            "environments_url": urlsplit(make_external_url(request, "/environments")).path,
+            "compositions_url": urlsplit(make_external_url(request, "/compositions")).path,
+            "workspaces": [workspace.model_dump(mode="json") for workspace in workspaces],
+        }
+        return templates.TemplateResponse(
+            request=request,
+            name="ui.html",
+            context={
+                "base_path": request.url.path,
+                "workspace_data": "",
+                "endpoints_data": "",
+                "overview_data": _to_b64_json(overview),
+                "frontend_url": config.FRONTEND_URL,
+            },
+            headers={"Cache-Control": "no-store"},
         )
-        rows = "".join(
-            "<li>"
-            f"<a class='workspace-link' href='{html.escape(workspace.url, quote=True)}"
-            "?resolve_connections=*"
-            + ("&amp;resolve_oauth2=*" if UserPermission.VIEW_OAUTH2_CREDENTIALS in _workspace_permissions(request, workspace.name) else "")
-            + "'>"
-            f"<span>{html.escape(workspace.name)}</span>{open_icon}"
-            "</a>"
-            + (
-                "<ul class='sessions'>"
-                + "".join(
-                    "<li>"
-                    f"<a href='{html.escape(session.url, quote=True)}'>"
-                    f"<span>Datalab ({html.escape(session.name)})</span>{open_icon}"
-                    "</a>"
-                    "</li>"
-                    for session in workspace.sessions
-                )
-                + "</ul>"
-                if workspace.sessions
-                else ""
-            )
-            + "</li>"
-            for workspace in workspaces
-        )
-        if not rows:
-            rows = "<li class='empty'>No workspaces available.</li>"
 
-        document = (
-            "<!doctype html><html lang='en'><meta charset='utf-8'>"
-            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-            "<title>Workspaces</title>"
-            "<style>"
-            "body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;"
-            "background:#f7f7f5;color:#202124;}"
-            "main{max-width:760px;margin:0 auto;padding:48px 24px;}"
-            "h1{font-size:28px;line-height:1.2;margin:0 0 24px;}"
-            "ul.workspaces{list-style:none;margin:0;padding:0;border:1px solid #d7d9d6;border-radius:8px;background:#fff;overflow:hidden;}"
-            "ul.workspaces>li+li{border-top:1px solid #e6e8e5;}"
-            "a{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;"
-            "color:#174ea6;text-decoration:none;font-weight:500;}"
-            "a:hover{background:#f1f5fb;text-decoration:underline;}"
-            ".workspace-link{color:#174ea6;}"
-            ".sessions{list-style:none;margin:0 0 8px 28px;padding:0 16px 0 0;}"
-            ".sessions a{padding:8px 18px;color:#3c4043;font-size:14px;font-weight:450;}"
-            ".open-icon{width:20px;height:20px;flex:0 0 20px;fill:currentColor;}"
-            ".empty{padding:16px 18px;color:#5f6368;}"
-            "</style><main><h1>Workspaces</h1><ul class='workspaces'>"
-            f"{rows}"
-            "</ul></main></html>"
-        )
-        return HTMLResponse(document, headers={"Cache-Control": "no-store"})
-
-    return JSONResponse([workspace.model_dump(mode="json") for workspace in workspaces], status_code=HTTPStatus.OK)
+    return JSONResponse(
+        [workspace.model_dump(mode="json") for workspace in workspaces],
+        status_code=HTTPStatus.OK,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get(
@@ -1706,7 +1799,11 @@ async def get_workspace(
     if "text/html" in accept_header and templates is not None and (config.UI_MODE == "ui" or request.query_params.get("devmode") == "true"):
         workspace_data = _to_b64_json(ws.model_dump(mode="json", exclude_none=True))
 
-        endpoints = []
+        endpoints = [
+            {"id": "Data" if endpoint.name == "data" else endpoint.name, "url": endpoint.url}
+            for endpoint in ws.datalab.endpoints
+            if endpoint.ready and endpoint.url
+        ]
         for session in ws.datalab.sessions:
             if not session.ready or not session.url:
                 continue
@@ -1720,6 +1817,7 @@ async def get_workspace(
                 "request": request,
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
+                "overview_data": "",
                 "endpoints_data": endpoints_data,
                 "frontend_url": config.FRONTEND_URL,
             },
@@ -2082,13 +2180,15 @@ async def update_workspace(request: Request, workspace_name: str, update: Worksp
     status_code=HTTPStatus.NO_CONTENT,
     tags=["Workspaces"],
     summary="Delete a workspace",
-    description="Deletes the workspace Storage and Datalab resources that exist.",
+    description="Workspace API administrators can delete the workspace Storage and Datalab resources that exist.",
     responses={
         204: {"description": "Workspace deleted."},
+        403: {"description": "Workspace API administrator role required."},
         404: {"description": "Workspace not found."},
     },
 )
-async def delete_workspace(workspace_name: str = workspace_path_type) -> Response:
+async def delete_workspace(request: Request, workspace_name: str = workspace_path_type) -> Response:
+    _require_admin(request)
     found = False
     for api_version, kind in ((API_STORAGE, KIND_STORAGE), (API_DATALAB, KIND_DATALAB)):
         api = _res_optional(api_version, kind)

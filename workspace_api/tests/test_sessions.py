@@ -1,8 +1,6 @@
 # Copyright 2026, EOX (https://eox.at) and Versioneer (https://versioneer.at)
 # SPDX-License-Identifier: Apache-2.0
 
-import base64
-import json
 from http import HTTPStatus
 from types import SimpleNamespace
 from unittest import mock
@@ -12,131 +10,61 @@ from fastapi.testclient import TestClient
 from kubernetes.client.rest import ApiException
 
 from workspace_api import config, views
-
-
-def _dev_token() -> str:
-    def enc(obj: object) -> str:
-        raw = json.dumps(obj, separators=(",", ":")).encode()
-        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
-
-    header = enc({"alg": "none", "typ": "JWT"})
-    payload = enc(
-        {
-            "aud": "workspace-api",
-            "preferred_username": "test",
-            "resource_access": {"workspace-api": {"roles": ["admin"]}},
-        }
-    )
-    return f"{header}.{payload}."
+from workspace_api.models import WorkspaceProviderSelection
+from workspace_api.tests.test_views import _dev_token
 
 
 def _auth_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {_dev_token()}"}
 
 
-@pytest.mark.parametrize("use_vcluster, environment", [("false", "datalab"), ("true", "demo")])
-def test_create_workspace_sends_started_session_object(client: TestClient, monkeypatch, use_vcluster: str, environment: str) -> None:
+@pytest.fixture
+def creation_selections(monkeypatch):
+    def resolve(selection: WorkspaceProviderSelection, provider: str) -> tuple[WorkspaceProviderSelection, dict]:
+        backend = "minio" if provider == "storage" else "educates"
+        return selection, {"metadata": {"labels": {"provider": backend}}}
+
+    monkeypatch.setattr(views, "_resolve_provider_selection", resolve)
+
+
+@pytest.mark.parametrize(
+    "mode, limit, use_vcluster, sessions",
+    [
+        ("on", "3", "false", [{"name": "default", "state": "started"}]),
+        ("on", "3", "true", [{"name": "default", "state": "started"}]),
+        ("auto", "3", "false", [{"name": "default", "state": "stopped"}]),
+        ("off", "3", "false", None),
+        ("on", "0", "false", None),
+    ],
+)
+def test_workspace_creation_applies_session_and_vcluster_settings(
+    client: TestClient, monkeypatch, creation_selections, mode, limit, use_vcluster, sessions
+) -> None:
     monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
-    monkeypatch.setattr(config, "PROVIDER_ENVIRONMENT", environment)
-    monkeypatch.setattr(config, "SESSION_MODE", "on")
+    monkeypatch.setattr(config, "SESSION_MODE", mode)
+    monkeypatch.setattr(config, "MAX_SESSIONS", limit)
     monkeypatch.setattr(config, "USE_VCLUSTER", use_vcluster)
-
     storage_api = mock.MagicMock()
     storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
     datalab_api = mock.MagicMock()
     datalab_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-
     monkeypatch.setattr(views, "_res_optional", lambda _api, kind: storage_api if kind == views.KIND_STORAGE else datalab_api)
 
     response = client.post(
         "/workspaces",
-        json={"preferred_name": "team-blue", "default_owner": "alice"},
+        json={
+            "preferred_name": "team-blue",
+            "default_owner": "alice",
+            "storage": {"composition": "storage-minio"},
+            "datalab": {"composition": "datalab-educates"},
+        },
         headers=_auth_headers(),
     )
 
     assert response.status_code == HTTPStatus.CREATED
-    created_storage = storage_api.create.call_args.args[0]
-    created = datalab_api.create.call_args.args[0]
-    assert created_storage["metadata"]["annotations"] == {"storages.pkg.internal/environment": environment}
-    assert created["metadata"]["annotations"] == {"datalabs.pkg.internal/environment": environment}
-    assert created["spec"]["sessions"] == [{"name": "default", "state": "started"}]
-    assert "registry" not in created["spec"]
-    assert "secretName" not in created["spec"]
-    assert "vcluster" not in created["spec"]
-    if use_vcluster == "true":
-        assert created["spec"]["vclusters"] == {"vc0": {}}
-    else:
-        assert "vclusters" not in created["spec"]
-
-
-def test_create_workspace_sends_stopped_default_session_in_auto_mode(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
-    monkeypatch.setattr(config, "SESSION_MODE", "auto")
-    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
-
-    storage_api = mock.MagicMock()
-    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-    datalab_api = mock.MagicMock()
-    datalab_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-
-    monkeypatch.setattr(views, "_res_optional", lambda _api, kind: storage_api if kind == views.KIND_STORAGE else datalab_api)
-
-    response = client.post(
-        "/workspaces",
-        json={"preferred_name": "team-blue", "default_owner": "alice"},
-        headers=_auth_headers(),
-    )
-
-    assert response.status_code == HTTPStatus.CREATED
-    created = datalab_api.create.call_args.args[0]
-    assert created["spec"]["sessions"] == [{"name": "default", "state": "stopped"}]
-
-
-def test_create_workspace_does_not_touch_sessions_in_off_mode(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
-    monkeypatch.setattr(config, "SESSION_MODE", "off")
-    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
-
-    storage_api = mock.MagicMock()
-    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-    datalab_api = mock.MagicMock()
-    datalab_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-
-    monkeypatch.setattr(views, "_res_optional", lambda _api, kind: storage_api if kind == views.KIND_STORAGE else datalab_api)
-
-    response = client.post(
-        "/workspaces",
-        json={"preferred_name": "team-blue", "default_owner": "alice"},
-        headers=_auth_headers(),
-    )
-
-    assert response.status_code == HTTPStatus.CREATED
-    created = datalab_api.create.call_args.args[0]
-    assert "sessions" not in created["spec"]
-
-
-def test_create_workspace_respects_zero_session_limit(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(config, "PREFIX_FOR_NAME", "")
-    monkeypatch.setattr(config, "SESSION_MODE", "on")
-    monkeypatch.setattr(config, "MAX_SESSIONS", "0")
-    monkeypatch.setattr(config, "USE_VCLUSTER", "false")
-
-    storage_api = mock.MagicMock()
-    storage_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-    datalab_api = mock.MagicMock()
-    datalab_api.get.side_effect = ApiException(status=HTTPStatus.NOT_FOUND)
-
-    monkeypatch.setattr(views, "_res_optional", lambda _api, kind: storage_api if kind == views.KIND_STORAGE else datalab_api)
-
-    response = client.post(
-        "/workspaces",
-        json={"preferred_name": "team-blue", "default_owner": "alice"},
-        headers=_auth_headers(),
-    )
-
-    assert response.status_code == HTTPStatus.CREATED
-    created = datalab_api.create.call_args.args[0]
-    assert "sessions" not in created["spec"]
+    spec = datalab_api.create.call_args.args[0]["spec"]
+    assert spec.get("sessions") == sessions
+    assert spec.get("vclusters") == ({"vc0": {}} if use_vcluster == "true" else None)
 
 
 def test_missing_session_request_does_not_create_default_session(client: TestClient, monkeypatch) -> None:
@@ -204,35 +132,21 @@ def test_list_workspace_sessions_reads_published_list(client: TestClient, monkey
     ]
 
 
-def test_create_workspace_session_appends_session(client: TestClient, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "spec, expected_patch",
+    [
+        (
+            {"sessions": [{"name": "default", "state": "started"}]},
+            [{"op": "add", "path": "/spec/sessions/-", "value": {"name": "analysis", "state": "stopped"}}],
+        ),
+        ({}, [{"op": "add", "path": "/spec/sessions", "value": [{"name": "analysis", "state": "stopped"}]}]),
+    ],
+)
+def test_create_session_preserves_existing_sessions(client: TestClient, monkeypatch, spec, expected_patch) -> None:
     monkeypatch.setattr(config, "MAX_SESSIONS", "3")
     datalab_api = mock.MagicMock()
     datalab = mock.MagicMock()
-    datalab.spec = {"sessions": [{"name": "default", "state": "started"}]}
-    datalab.status = {"sessions": []}
-    datalab_api.get.return_value = datalab
-
-    monkeypatch.setattr(views, "_res_optional", lambda *_args: datalab_api)
-
-    response = client.post(
-        "/workspaces/ws-alice/sessions",
-        json={"name": "analysis", "state": "stopped"},
-        headers=_auth_headers(),
-    )
-
-    assert response.status_code == HTTPStatus.CREATED
-    assert response.json() == {"name": "analysis", "state": "stopped", "ready": False}
-    assert datalab_api.patch.call_args.kwargs["body"] == [
-        {"op": "add", "path": "/spec/sessions/-", "value": {"name": "analysis", "state": "stopped"}}
-    ]
-    assert datalab_api.patch.call_args.kwargs["content_type"] == "application/json-patch+json"
-
-
-def test_create_workspace_session_initializes_sessions_field(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(config, "MAX_SESSIONS", "3")
-    datalab_api = mock.MagicMock()
-    datalab = mock.MagicMock()
-    datalab.spec = {}
+    datalab.spec = spec
     datalab.status = {"sessions": []}
     datalab_api.get.return_value = datalab
 
@@ -245,9 +159,9 @@ def test_create_workspace_session_initializes_sessions_field(client: TestClient,
     )
 
     assert response.status_code == HTTPStatus.CREATED
-    assert datalab_api.patch.call_args.kwargs["body"] == [
-        {"op": "add", "path": "/spec/sessions", "value": [{"name": "analysis", "state": "stopped"}]}
-    ]
+    assert response.json() == {"name": "analysis", "state": "stopped", "ready": False}
+    assert datalab_api.patch.call_args.kwargs["body"] == expected_patch
+    assert datalab_api.patch.call_args.kwargs["content_type"] == "application/json-patch+json"
 
 
 def test_create_workspace_session_rejects_session_limit(client: TestClient, monkeypatch) -> None:

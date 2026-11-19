@@ -12,7 +12,7 @@ Both flows use the existing workspace OAuth client. Client credentials stay
 on the API server. Identity provider URLs must use HTTPS. Token responses
 are not cached and do not include refresh tokens.
 
-## Simple token brokering
+## Service-account token
 
 Omit `scope` to obtain a service-account token for an M2M process:
 
@@ -24,7 +24,7 @@ curl -H 'Authorization: Bearer <user-access-token>' \
 The caller's token authorizes issuance. It is not sent as the subject of the
 client-credentials grant, and its roles are not copied to the result.
 
-The relevant request from Workspace API to the identity provider is:
+Workspace API sends this request to the identity provider:
 
 ```text
 POST /realms/workspaces/protocol/openid-connect/token
@@ -38,8 +38,7 @@ For this grant, Keycloak's configured audience mappers determine the token's
 `aud`; the `audience` parameter does not restrict it. Configure both required
 audiences as described under Provider and login requirements.
 
-An API response can look like this. All token and credential values in these
-examples are placeholders:
+Example response (token and credential values are placeholders):
 
 ```json
 {
@@ -50,7 +49,7 @@ examples are placeholders:
 }
 ```
 
-The relevant decoded access-token claims are:
+Decoded claims:
 
 ```json
 {
@@ -63,11 +62,9 @@ The relevant decoded access-token claims are:
 }
 ```
 
-Pass the returned access token to the machine process. It can use Workspace
-API to obtain service credentials. This token has no vcluster role. The API
-rejects a brokered token that contains additional authorization roles. The
-issuer sets the token lifetime; `300` is an example. JWT excerpts omit time
-claims and signatures.
+Pass the access token to the process that needs service credentials. The API
+rejects a token with roles other than `ws_api`. The issuer sets the token
+lifetime; `300` is an example. JWT excerpts omit time claims and signatures.
 
 ## Scoped user-token exchange
 
@@ -99,9 +96,8 @@ removes duplicate names. An empty `scope` is invalid; it does not select the
 client-credentials flow. Only configured, ready access profiles are accepted.
 Interactive scopes and the reserved `cluster-admin` profile are rejected.
 
-The caller must still have token-issuance permission. Global admin status
-does not bypass the exchange role checks. For this example, relevant claims
-in the caller's access token are:
+Global admin access does not bypass the exchange role checks. For this example,
+the caller's token has these claims:
 
 ```json
 {
@@ -122,8 +118,8 @@ it was issued to that workspace client (`azp`). The gateway verifies the
 incoming token's signature, issuer, and expiry before it reaches this API.
 
 Workspace API uses that original access token as `subject_token`. It
-authenticates with the existing workspace client credentials. The relevant
-form fields sent to the identity provider are shown separately for readability:
+authenticates with the existing workspace client credentials and sends these
+form fields to the identity provider:
 
 ```text
 grant_type=urn:ietf:params:oauth:grant-type:token-exchange
@@ -135,7 +131,7 @@ audience=workspace-api
 audience=ws-alice
 ```
 
-An API response can look like this:
+Example response:
 
 ```json
 {
@@ -146,7 +142,7 @@ An API response can look like this:
 }
 ```
 
-The relevant decoded access-token claims are:
+Decoded claims:
 
 ```json
 {
@@ -221,37 +217,16 @@ for the underlying grant.
 
 ## M2M access to services
 
-The machine process sends the supplied workspace token with its requests to
-Workspace API. The API returns the selected service credentials. The process
-uses those credentials to do the task:
-
-```mermaid
-sequenceDiagram
-    participant Process as Machine process
-    participant API as Workspace API
-    participant K8s as Kubernetes
-    participant Service
-    Process->>API: M2M request for credentials with workspace token
-    API->>K8s: Read published connection and its Secret
-    K8s-->>API: Connection details and credentials
-    API-->>Process: Service credentials
-    Process->>Service: Read input or write results with service credentials
-    Service-->>Process: Task data or result
-```
-
-For example, a user can pass a token to a batch job on another machine. The
-job requests S3 credentials, reads input files from a workspace bucket, and
-writes its results back. The token is used with Workspace API; the S3
-credentials are used with the bucket.
+Send the workspace token to Workspace API to get service credentials. Use the
+returned credentials with the service:
 
 ```bash
 curl -H 'Authorization: Bearer <workspace-token>' \
   https://api.example.org/workspaces/ws-alice
 ```
 
-Existing S3 clients can continue to read the primary bucket credentials from
-`storage.credentials`, with `bucketname`, `access`, `secret`, `endpoint`, and
-`region`.
+Primary S3 credentials are in `storage.credentials`, with `bucketname`,
+`access`, `secret`, `endpoint`, and `region`.
 
 The workspace response lists available connections. Use these query parameters
 to select which credentials to return. Credentials are returned only for ready

@@ -4,7 +4,6 @@
 import os
 
 PREFIX_FOR_NAME = os.environ.get("PREFIX_FOR_NAME", "")
-PROVIDER_ENVIRONMENT = os.environ.get("PROVIDER_ENVIRONMENT", "datalab")
 DISABLE_STORAGE = os.environ.get("DISABLE_STORAGE", "false")
 DISABLE_DATALAB = os.environ.get("DISABLE_DATALAB", "false")
 USE_VCLUSTER = os.environ.get("USE_VCLUSTER", "false")

@@ -490,13 +490,34 @@ class BucketAccessRequest(BaseModel):
         return _coerce_utc(v)
 
 
+ENVIRONMENT_NAME_PATTERN = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+
+
+class WorkspaceProviderSelection(BaseModel):
+    """Composition and optional configuration for one workspace provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    composition: str = Field(..., min_length=1, max_length=253, pattern=ENVIRONMENT_NAME_PATTERN)
+    environment_name: str | None = Field(None, min_length=1, max_length=63, pattern=ENVIRONMENT_NAME_PATTERN)
+
+
+class WorkspaceProviderOptions(BaseModel):
+    """Installed provider and its available compositions."""
+
+    available: bool
+    compositions: list[str] = Field(default_factory=list)
+
+
 class WorkspaceCreate(BaseModel):
     """Payload for creating a workspace."""
 
-    model_config = ConfigDict(json_schema_extra={"description": "Workspace creation request."})
+    model_config = ConfigDict(extra="forbid", json_schema_extra={"description": "Workspace creation request."})
 
     preferred_name: str = Field("", description="Preferred resource name before the configured prefix.")
     default_owner: str = Field("", description="Default owner username for the workspace.")
+    storage: WorkspaceProviderSelection | None = None
+    datalab: WorkspaceProviderSelection | None = None
 
     @field_validator("preferred_name")
     @classmethod
@@ -663,6 +684,14 @@ class VCluster(BaseModel):
     groups: list[VClusterGroup] = Field(default_factory=list)
 
 
+class Endpoint(BaseModel):
+    """Published browser endpoint for a workspace."""
+
+    name: str = Field(..., description="Endpoint name.")
+    url: str | None = Field(None, description="Published HTTP or HTTPS URL.")
+    ready: bool = Field(False, description="Whether the provider reports a usable endpoint URL.")
+
+
 class Datalab(BaseModel):
     """Datalab for a workspace."""
 
@@ -678,6 +707,7 @@ class Datalab(BaseModel):
     vclusters: list[VCluster] = Field(default_factory=list, description="Declared virtual clusters and additional access profiles.")
     sessions: list[Session] = Field(default_factory=list, description="Declared and published Datalab sessions.")
     max_sessions: int = Field(3, ge=0, description="Maximum number of sessions that can be declared.")
+    endpoints: list[Endpoint] = Field(default_factory=list, description="Published browser endpoints.")
     connections: list[Connection] = Field(default_factory=list, description="Published workspace connections.")
     oauth2: list[OAuth2Connection] = Field(default_factory=list, description="Published workspace OAuth2 clients.")
 
@@ -776,17 +806,3 @@ class WorkspaceToken(BaseModel):
             return None
         v2 = str(v).strip()
         return v2 or None
-
-
-class Endpoint(BaseModel):
-    """Published endpoint of an exposed service within a workspace."""
-
-    model_config = ConfigDict(json_schema_extra={"description": "Exposed service endpoint."})
-
-    id: str = Field(..., description="Unique identifier.")
-    url: str = Field(..., description="Public URL of the exposed service.")
-
-    @field_validator("id", "url", mode="before")
-    @classmethod
-    def _strip_required(cls, v: Any) -> str:
-        return _strip_required_string(v)

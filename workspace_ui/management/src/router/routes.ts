@@ -4,6 +4,7 @@ import HomePage from 'pages/HomePage.vue'
 
 const routes: RouteRecordRaw[] = [
   { path: '/', component: HomePage },
+  { path: '/workspaces', component: () => import('pages/WorkspacesPage.vue') },
   { path: '/home', component: HomePage },
   { path: '/management', component: ManagementPage },
   { path: '/:catchAll(.*)*', component: () => import('src/pages/ErrorNotFound.vue') }

@@ -102,12 +102,9 @@ export default defineConfig((ctx) => {
       // https: true,
       open: false, // opens browser window automatically
       proxy: {
-        // proxy all requests starting with /workspaces
-        '/workspaces': {
-          target: 'http://localhost:8181/workspaces',
-          changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/workspaces/, ''),
-        },
+        '/workspaces': { target: 'http://localhost:8181', changeOrigin: true },
+        '/compositions': { target: 'http://localhost:8181', changeOrigin: true },
+        '/environments': { target: 'http://localhost:8181', changeOrigin: true },
       },
     },
 

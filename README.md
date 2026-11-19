@@ -4,45 +4,26 @@ Share S3 data, manage databases, open browser sessions, and give automated tasks
 access to workspace services. Workspace API provides a web UI for your team
 and an HTTP API for scripts and jobs.
 
-## What you can do
-
-| Task | How Workspace API helps |
-| --- | --- |
-| Share data | Create buckets, request access to shared buckets, and retrieve S3 credentials. |
-| Use data services | Create PostgreSQL, MongoDB, and Redis stores and get their connection details. |
-| Work as a team | Add workspace members and assign user or admin roles. |
-| Run browser sessions | Create, start, stop, and open sessions from your workspace. |
-| Use Kubernetes | Create namespace access profiles and download kubeconfigs. |
-| Automate work | Give a job a workspace token to retrieve service credentials or use selected Kubernetes permissions. |
-
 ## Open your workspace
 
 Sign in to your Workspace API deployment and open `/workspaces` to choose a
-workspace.
+workspace. Workspace API administrators can also create and delete workspaces on this
+page.
 
 - **Dashboard:** find service connections, copy credentials, and download
   kubeconfigs.
 - **Management:** manage members, buckets, data services, sessions, and access
   profiles. These controls are available to workspace admins.
-- **Sessions:** open a session from workspace navigation, or use the Sessions
-  management tab to create, start, stop, and remove sessions.
-
-For example, create a bucket for a team's input data, give colleagues access,
-and use a browser session to work with it. A batch job can use the same
-workspace to read inputs and write results.
+- **Links:** open ready sessions and browser services published by the provider,
+  such as the Data browser.
 
 See the [EOEPCA Workspace quickstart](https://eoepca.readthedocs.io/projects/workspace/en/latest/getting-started/quickstart/)
 for a walkthrough with screenshots.
 
-## Provision managed services
+## Manage data services
 
-Create a service in **Management → Stores** and choose the storage your
-application needs. The platform operates the service and provides operational
-guarantees, such as backups, through its configured service policies.
-
-- **PostgreSQL:** store relational data and query it with SQL.
-- **MongoDB:** store and query document data.
-- **Redis:** cache data for applications and jobs.
+Create a PostgreSQL, MongoDB, or Redis service in **Management → Stores** and
+choose its storage size.
 
 Find connection details and credentials on the dashboard, then use the service
 from your application, browser session, or automated task.
@@ -59,8 +40,7 @@ also limit the Kubernetes permissions available to an automated task.
 ## Run automated tasks
 
 A workspace admin can request a token and pass it to a script or batch job.
-The job uses that token to retrieve the service credentials it needs. For
-example, it can get S3 credentials, read files from a bucket, and upload results.
+The job uses that token to get the service credentials it needs.
 
 Two token options are available:
 
@@ -75,14 +55,10 @@ request and response examples, and provider configuration. The running API's
 
 ## Set up Workspace API
 
-> [!NOTE]
-> Requires [provider-datalab](https://github.com/versioneer-tech/provider-datalab) `>= 0.12.0`
-> and [provider-storage](https://github.com/versioneer-tech/provider-storage) `>= 0.4.0`,
-> installed on the same Kubernetes cluster.
-
-Workspace API uses Provider Storage for buckets and Provider Datalab for
-members, data services, sessions, and virtual clusters. The UI shows the
-features enabled for your deployment.
+Install [Provider Storage](https://github.com/versioneer-tech/provider-storage)
+for buckets and [Provider Datalab](https://github.com/versioneer-tech/provider-datalab)
+for members, data services, sessions, and virtual clusters on the API's cluster.
+Either provider can be used alone. The UI shows the available features.
 
 For installation, authentication, configuration, and local development, see
 [Setup and development](docs/setup.md).
