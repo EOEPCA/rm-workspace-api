@@ -13,12 +13,12 @@ from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette_exporter import PrometheusMiddleware, handle_metrics  # type: ignore[import-not-found]
 
 from workspace_api import config
 from workspace_api.models import ROLE_TO_PERMISSIONS, UserPermission
+from workspace_api.static import UIStaticFiles
 
 app = FastAPI(title="Workspace API")
 templates = None
@@ -47,12 +47,12 @@ if config.UI_MODE == "ui":
             raise RuntimeError(message)
         else:
             templates = Jinja2Templates(directory=dist_dir)
-            app.mount("/ui", StaticFiles(directory=dist_dir, html=True))
+            app.mount("/ui", UIStaticFiles(directory=dist_dir, html=True))
     else:
         BASE_API_DIR = os.path.dirname(os.path.abspath(__file__))
         ui_luigi_dir = os.path.abspath(os.path.join(BASE_API_DIR, "..", "workspace_ui", "luigi-shell"))
         templates = Jinja2Templates(directory=ui_luigi_dir)
-        app.mount("/ui", StaticFiles(directory=ui_luigi_dir, html=True))
+        app.mount("/ui", UIStaticFiles(directory=ui_luigi_dir, html=True))
 
 
 if __name__ != "__main__":

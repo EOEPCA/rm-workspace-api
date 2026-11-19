@@ -8,28 +8,53 @@ Either provider can be used alone. The API manages their `Storage` and `Datalab`
 Kubernetes resources.
 
 Set `DISABLE_STORAGE=true` or `DISABLE_DATALAB=true` to disable a provider.
-The API hides disabled features and keeps existing cluster resources.
-It does not read CRD definitions. Creation and deletion use the
-enabled providers. Creating a workspace returns 503 when neither is available;
-reading a missing workspace returns 404.
+The API hides disabled features and keeps existing cluster resources. Install
+each provider and its backing operators before you enable its features.
 
 `GET /status` reports health and the `storage_enabled` and `datalab_enabled`
 configuration flags. A missing or disabled provider does not make the API
 unhealthy. The UI hides features whose provider or workspace resource is
-unavailable. Store types appear when enabled in configuration. Install the corresponding
-provider and backing operators before use. Missing resource APIs return errors;
-missing backing operators can prevent provider reconciliation.
+unavailable.
 
-Set `STORES` to a comma-separated list of `postgres`, `redis`, and `mongo`. The default enables all three.
-Store names are case-insensitive. An empty value disables all stores.
-An entry outside these three names stops startup with a configuration error.
-This check does not verify the installed CRDs.
+Set `STORES` to a comma-separated list of `postgres`, `redis`, and `mongo`.
+Values are case-insensitive. An empty value disables all stores. An unsupported
+value stops startup with a configuration error.
 
 New resource names use 1-30 lowercase letters, digits, or hyphens and start
 and end with a letter or digit. Bucket names also require at least three characters.
 
-If a connection Secret cannot be read or decoded, the API returns its metadata
-with a resolution error and continues with the other connections.
+### Workspace environments
+
+With `UI_MODE=ui`, `/workspaces` opens the Quasar overview in the workspace
+shell. Workspace API administrators can create and delete workspaces there.
+For each installed provider, first select a composition. Then select an optional
+configuration, or keep the default shown with the composition's name.
+The name field shows the configured prefix as fixed text. Enter the name
+after the prefix. A single available choice is read-only.
+
+Compositions must target the provider's resource type and API version.
+Configuration overrides need the label `storages.pkg.internal/name` for
+Storage or `datalabs.pkg.internal/name` for Datalab. The label value does not
+filter choices. A config can have both labels. The composition's own config
+is excluded from overrides because it is already part of the defaults.
+Override names can have up to 63 characters.
+
+Creation always sets `spec.crossplane.compositionRef.name`. A custom override
+sets `spec.environmentName` on that provider's XR. With no override, the API
+omits this field so the composition can use its defaults. Each provider can
+use a different composition and config. The API validates both selections
+before it creates either resource. See the running API's `/docs` page for
+request fields.
+
+The providers merge `default`, the composition config, the selected override,
+and a config named after the workspace, in that order. Later values replace
+earlier values; nested maps keep fields that later configs do not set. Missing
+configs are skipped. CloudFerro needs a config with its project and
+`storage.providerConfigName`; select a project override when these settings
+are absent from the composition defaults.
+
+Custom overrides need provider CRDs and compositions that support
+`spec.environmentName`.
 
 ### Browser sessions
 
@@ -41,6 +66,16 @@ Start a session and wait until it is ready before selecting **Open session**.
 Refresh the page to check progress. Management lists configured sessions that
 can be changed or deleted. Workspace navigation lists ready sessions.
 
+The **Links** section shows browser endpoints from Datalab `status.endpoints`,
+returned as `datalab.endpoints` by the API. Each link needs a `name`, a valid
+HTTP or HTTPS `url`, and `ready: true`. The `data` endpoint appears as **Data**.
+Missing, invalid, or unready entries add no links.
+
+The overview shows total requested storage as **Persistent session storage**,
+including stopped sessions. It is shown only when every session has a valid size.
+Sizes come from Datalab `status.sessions[].pvcSize`, returned as
+`datalab.sessions[].pvc_size`. A known zero size is `0`; an unknown size is omitted.
+
 ## Access
 
 An OpenID Connect gateway must verify token signatures, issuer, and expiry.
@@ -50,7 +85,7 @@ for local development.
 
 | Token role | Access |
 | --- | --- |
-| `workspace-api:admin` | All workspaces and token requests |
+| `workspace-api:admin` | All workspaces, workspace creation and deletion, environment choices, and token requests |
 | `<workspace>:ws_admin` | Workspace management, credentials, and token requests |
 | `<workspace>:ws_access` | Workspace details, sessions, and service and OAuth2 credentials |
 | `<workspace>:ws_api` | Service credentials |
@@ -62,13 +97,11 @@ The API needs these Kubernetes permissions in the namespaces it manages:
 | Storage and Datalab resources | `get`, `list`, `create`, `patch`, `delete` |
 | Referenced Secrets | `get` in each referenced namespace |
 
-Session storage comes from Datalab `status.sessions[].pvcSize`, a Kubernetes
-quantity such as `10Gi`. The API exposes it as `datalab.sessions[].pvc_size`.
-
-The overview sums these values as **Persistent session storage**. This is
-requested persistent storage, including stopped sessions that retain storage.
-The figure is shown when all session sizes are valid. The provider publishes
-`0` for a known zero size and omits the field when the size is unknown.
+The API also needs cluster-scoped `get` and `list` access to
+`environmentconfigs.apiextensions.crossplane.io` and
+`compositions.apiextensions.crossplane.io` for workspace creation and environment
+selection. Workspace roles such as `<workspace>:ws_admin` cannot create or
+delete whole workspaces.
 
 ## Development
 
@@ -80,8 +113,9 @@ uv run pre-commit install
 KUBECONFIG=/path/to/config uv run uvicorn workspace_api:app --reload --port=8181
 ```
 
-For UI development, run `npm run dev` in `workspace_ui/management`. Start the
-backend with `UI_MODE=ui` and `FRONTEND_URL=http://localhost:9000`. Open
+For UI development, run `npm ci`, then `npm run dev`, in
+`workspace_ui/management`. Start the backend with `UI_MODE=ui` and
+`FRONTEND_URL=http://localhost:9000`. Open
 `http://localhost:8181/workspaces/<workspace-name>`.
 
 For a sample UI without a backend, run `npm run shell+dev` in
@@ -93,6 +127,10 @@ with `UI_MODE=ui`. The build keeps the previous bundle until the new one is
 ready. Rebuild after UI changes. Startup fails if the required UI files are
 missing.
 
+UI entry pages and files without a content hash revalidate on each request.
+Assets with a content hash can stay cached for one year. Missing files are not
+cached.
+
 Run the backend checks from the repo root:
 
 ```bash
@@ -101,6 +139,7 @@ uv run ruff check .
 uv run ruff format --check .
 uv run mypy .
 uv run pre-commit run --all-files
+git diff --check
 ```
 
 Run the frontend checks in `workspace_ui/management`:
@@ -119,7 +158,6 @@ provider installation.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PREFIX_FOR_NAME` | Empty | Prefix for workspace resource names. |
-| `PROVIDER_ENVIRONMENT` | `datalab` | EnvironmentConfig annotation on new resources. |
 | `DISABLE_STORAGE` | `false` | Disable Storage and hide its features. |
 | `DISABLE_DATALAB` | `false` | Disable Datalab and hide its features. |
 | `USE_VCLUSTER` | `false` | Add a virtual cluster named `vc0` to new workspaces. |

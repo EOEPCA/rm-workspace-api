@@ -134,6 +134,7 @@ export interface Datalab {
   vclusters?: VCluster[]
   sessions?: WorkspaceSession[]
   max_sessions?: number
+  endpoints?: { name: string; url?: string; ready: boolean }[]
   connections?: Connection[]
   oauth2?: OAuth2Connection[]
 }
@@ -183,4 +184,35 @@ export interface WorkspaceEdit {
   add_stores: Pick<Store, 'name' | 'type' | 'storage' | 'backup_storage'>[]
   add_buckets: BucketNew[]
   patch_bucket_access_requests?: Bucket[]
+}
+
+export interface WorkspaceListItem {
+  name: string
+  url: string
+  sessions: { name: string; url: string }[]
+}
+
+export interface WorkspaceOverview {
+  is_admin: boolean
+  username: string
+  workspace_name_prefix: string
+  workspaces_url: string
+  compositions_url: string
+  environments_url: string
+  workspaces: WorkspaceListItem[]
+}
+
+export interface WorkspaceProviderChoices {
+  provider: 'storage' | 'datalab'
+  compositions: string[]
+  composition: string
+  environments: Record<string, string[]>
+  environment_name: string
+}
+
+export interface WorkspaceCreate {
+  preferred_name: string
+  default_owner: string
+  storage?: { composition: string; environment_name?: string }
+  datalab?: { composition: string; environment_name?: string }
 }

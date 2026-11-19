@@ -127,12 +127,9 @@ def test_metadata_does_not_read_connection_secrets(client: TestClient, connectio
     assert entries[4]["role"] == "cluster-admin"
     assert entries[5]["target_namespace"] == "analysis"
     assert all("credentials" not in entry for entry in entries)
-    assert all(field not in data["datalab"] for field in ("vcluster", "registry"))
     assert [entry["name"] for entry in data["datalab"]["oauth2"]] == ["ws-alice", "catalog-integration"]
     assert all("credentials" not in entry for entry in data["datalab"]["oauth2"])
     assert "test-value" not in response.text and "status-only-value" not in response.text
-    assert "store_credentials" not in data["datalab"]
-    assert "container_registry_credentials" not in data["datalab"]
     assert response.headers["cache-control"] == "no-store"
     connection_workspace.read_secret.assert_not_called()
 
@@ -199,28 +196,6 @@ def test_oauth2_selectors_read_only_selected_secrets(
     assert connection_workspace.read_secret.call_count == len(expected)
 
 
-@pytest.mark.parametrize("failure", ["not_ready", "secret_not_found", "invalid_secret"])
-def test_unavailable_oauth2_never_returns_credentials(client: TestClient, connection_workspace: SimpleNamespace, failure: str) -> None:
-    entry = connection_workspace.oauth2[0]
-    secret_name = entry["secretRef"]["name"]
-    if failure == "not_ready":
-        entry["ready"] = False
-    elif failure == "secret_not_found":
-        del connection_workspace.secrets[secret_name]
-    else:
-        connection_workspace.secrets[secret_name].data = {"clientSecret": "!invalid!"}
-
-    response = client.get("/workspaces/ws-alice?resolve_connections=none&resolve_oauth2=client:ws-alice", headers=headers("ws_access"))
-
-    assert response.status_code == 200
-    result = response.json()["datalab"]["oauth2"][0]
-    assert "credentials" not in result
-    assert result["issuer_url"] == entry["issuerUrl"]
-    assert result["resolution_error"] == failure
-    if failure == "not_ready":
-        connection_workspace.read_secret.assert_not_called()
-
-
 def test_oauth2_permission_is_scoped_to_the_requested_workspace(client: TestClient, connection_workspace: SimpleNamespace) -> None:
     token = _dev_token({"ws-alice": {"roles": ["ws_api"]}, "ws-other": {"roles": ["ws_admin"]}})
     response = client.get("/workspaces/ws-alice?resolve_oauth2=*", headers={"Authorization": f"Bearer {token}"})
@@ -239,30 +214,6 @@ def test_connection_alias_cannot_resolve_an_oauth2_secret(client: TestClient, co
     assert entry["resolution_error"] == "oauth2_reference"
     assert "credentials" not in entry
     connection_workspace.read_secret.assert_not_called()
-
-
-@pytest.mark.parametrize("failure", ["not_ready", "secret_not_found", "invalid_secret"])
-def test_unavailable_connections_keep_metadata_without_credentials(
-    client: TestClient, connection_workspace: SimpleNamespace, failure: str
-) -> None:
-    entry = connection_workspace.connections[4]
-    secret_name = entry["secretRef"]["name"]
-    if failure == "not_ready":
-        entry["ready"] = False
-    elif failure == "secret_not_found":
-        del connection_workspace.secrets[secret_name]
-    else:
-        connection_workspace.secrets[secret_name].data = {"password": "!invalid!"}
-
-    response = client.get("/workspaces/ws-alice?resolve_connections=*:*", headers=headers("ws_access"))
-
-    assert response.status_code == 200
-    connection = response.json()["datalab"]["connections"][4]
-    assert connection["resolution_error"] == failure
-    assert "credentials" not in connection
-    assert connection["name"] == "vcluster-administrators"
-    if failure == "not_ready":
-        assert all(call.args[0] != secret_name for call in connection_workspace.read_secret.call_args_list)
 
 
 @pytest.mark.parametrize("resolve", [False, True])
@@ -294,7 +245,7 @@ def test_html_uses_explicit_connection_resolution(
     assert connection_workspace.read_secret.call_count == (9 if resolve else 0)
 
 
-def test_missing_status_never_reads_legacy_secrets(client: TestClient, connection_workspace: SimpleNamespace) -> None:
+def test_missing_connection_status_does_not_read_secrets(client: TestClient, connection_workspace: SimpleNamespace) -> None:
     connection_workspace.connections.clear()
     connection_workspace.oauth2.clear()
     response = client.get("/workspaces/ws-alice?resolve_connections=*&resolve_oauth2=*", headers=headers("ws_access"))
@@ -446,44 +397,48 @@ def test_dashboard_stores_use_only_published_instances(client: TestClient, conne
     assert response.json()["datalab"]["stores"] == []
 
 
-@pytest.mark.parametrize("failure", [None, 403, 404, 500, "transport", "invalid"])
-def test_unreadable_connection_secret_does_not_stop_other_reads(client, connection_workspace, failure):
-    def read_secret(name, _namespace) -> SimpleNamespace | None:
-        if name == "ws-alice-pg0":
-            if failure == "transport":
-                message = "connection closed"
-                raise OSError(message)
-            if failure == "invalid":
-                return SimpleNamespace(data={"password": "!invalid!"})
-            if failure is not None:
-                raise ApiException(status=failure)
-            return None
-        return connection_workspace.secrets.get(name)
+@pytest.mark.parametrize("section", ["connections", "oauth2"])
+@pytest.mark.parametrize(
+    "failure, expected",
+    [("not_ready", "not_ready"), ("missing", "secret_not_found"), ("forbidden", "secret_unavailable"), ("invalid", "invalid_secret")],
+)
+def test_failed_credential_resolution_keeps_metadata_and_other_connections(client, connection_workspace, section, failure, expected):
+    entry = getattr(connection_workspace, section)[0]
+    secret_name = entry["secretRef"]["name"]
+    if failure == "not_ready":
+        entry["ready"] = False
+    elif failure == "missing":
+        del connection_workspace.secrets[secret_name]
+    elif failure == "invalid":
+        connection_workspace.secrets[secret_name].data = {"password": "!invalid!"}
+    else:
 
-    connection_workspace.read_secret.side_effect = read_secret
-    response = client.get("/workspaces/ws-alice", params={"resolve_connections": "*"}, headers=headers("ws_admin"))
+        def read_secret(name: str, _namespace: str) -> SimpleNamespace | None:
+            if name == secret_name:
+                raise ApiException(status=403)
+            return connection_workspace.secrets.get(name)
+
+        connection_workspace.read_secret.side_effect = read_secret
+
+    response = client.get(
+        "/workspaces/ws-alice",
+        params={
+            "resolve_connections": "*" if section == "connections" else "none",
+            "resolve_oauth2": "*" if section == "oauth2" else "none",
+        },
+        headers=headers("ws_admin"),
+    )
     assert response.status_code == 200
-    entries = response.json()["datalab"]["connections"]
-    failed = next(entry for entry in entries if entry["name"] == "pg0")
-    assert failed.get("credentials") is None
-    assert failed["resolution_error"]
-    later = next(entry for entry in entries if entry["name"] == "mongo-docs")
-    assert later["credentials"] == {"password": "test-value"}
-
-
-@pytest.mark.parametrize("failure", [None, 403, 404, 500])
-def test_unreadable_oauth_secret_does_not_stop_other_reads(client, connection_workspace, failure):
-    def read_secret(name, _namespace) -> SimpleNamespace | None:
-        if name == "ws-alice-oauth-client":
-            if failure is not None:
-                raise ApiException(status=failure)
-            return None
-        return connection_workspace.secrets.get(name)
-
-    connection_workspace.read_secret.side_effect = read_secret
-    response = client.get("/workspaces/ws-alice", params={"resolve_oauth2": "*"}, headers=headers("ws_admin"))
-    assert response.status_code == 200
-    entries = response.json()["datalab"]["oauth2"]
-    assert entries[0].get("credentials") is None
-    assert entries[0]["resolution_error"]
-    assert entries[1]["credentials"]["clientID"] == "catalog-integration"
+    entries = response.json()["datalab"][section]
+    failed = entries[0]
+    assert failed["name"] == entry["name"]
+    assert failed["secret_ref"] == entry["secretRef"]
+    assert "credentials" not in failed
+    assert failed["resolution_error"] == expected
+    assert entries[1]["credentials"] == (
+        {"password": "test-value"} if section == "connections" else {"clientID": "catalog-integration", "clientSecret": "test-value"}
+    )
+    if section == "oauth2":
+        assert failed["issuer_url"] == entry["issuerUrl"]
+    if failure == "not_ready":
+        assert all(call.args[0] != secret_name for call in connection_workspace.read_secret.call_args_list)

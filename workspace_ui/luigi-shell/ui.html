@@ -18,6 +18,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@luigi-project/core@latest/luigi.js"></script>
     <script>
       const workspaceData = '{{ workspace_data | safe }}';
+      const overviewData = '{{ overview_data | default("") | safe }}';
       const endpointsData = '{{ endpoints_data | safe }}';
       const frontendUrl = '{{ frontend_url | safe }}';
 
@@ -33,6 +34,18 @@
       }
 
       async function initialize() {
+        const overview = decodeData(overviewData);
+        if (overview) {
+          configureShell(overview.username, 'Workspaces', [{
+            pathSegment: 'workspaces',
+            label: 'All workspaces',
+            hideSideNav: true,
+            icon: 'list',
+            viewUrl: frontendUrl + '#/workspaces',
+            context: { workspaceOverview: overview }
+          }], ['allow-top-navigation-by-user-activation']);
+          return;
+        }
         let workspace = decodeData(workspaceData);
         if (!workspace?.name || !workspace?.user) {
           document.body.textContent = 'Workspace data is missing. Reload the page to try again.';
@@ -64,7 +77,15 @@
         const endpoints = decodeData(endpointsData);
         const user = workspace.user;
         const canManageWorkspace = user.permissions.some(permission => permission.startsWith('MANAGE_'));
-        const children = [];
+        const workspaceListUrl = new URL(apiUrl);
+        workspaceListUrl.pathname = workspaceListUrl.pathname.replace(/\/workspaces\/[^/]+\/?$/, '/workspaces');
+        workspaceListUrl.search = '';
+        workspaceListUrl.hash = '';
+        const children = [{
+          label: 'All workspaces',
+          icon: 'list',
+          externalLink: { url: workspaceListUrl.href, sameWindow: true }
+        }];
         if (canManageWorkspace) {
           children.push(
                   {
@@ -85,41 +106,37 @@
           }
         });
 
-        const luigiConfig = {
+        configureShell(user.name, `Workspace: ${workspace.name}`, [{
+          pathSegment: 'home',
+          label: workspace.name,
+          icon: 'home',
+          viewUrl: frontendUrl + '/',
+          children: children,
+          context: { workspace: workspace }
+        }]);
+      }
+
+      function configureShell(username, title, nodes, extraSandboxRules = []) {
+        Luigi.setConfig({
           navigation: {
             profile: {
-              staticUserInfoFn: () => ({
-                name: user.name,
-              })
+              staticUserInfoFn: () => ({ name: username })
             },
-            nodes: () => [
-              {
-                pathSegment: 'home',
-                label: workspace.name,
-                icon: 'home',
-                viewUrl: frontendUrl + '/',
-                children: children,
-                context: {
-                  workspace: workspace
-                }
-              }
-            ]
+            nodes: () => nodes
           },
           routing: {
             useHashRouting: true
           },
           settings: {
-            customSandboxRules: ['allow-downloads'],
+            customSandboxRules: ['allow-downloads', ...extraSandboxRules],
             header: {
-              title: `Workspace: ${workspace.name} /  User: ${user.name}`,
+              title: `${title} /  User: ${username}`,
               logo: '/ui/logo.svg'
             },
             hideNavigation: false,
             responsiveNavigation: 'semiCollapsible'
           }
-        };
-
-        Luigi.setConfig(luigiConfig);
+        });
       }
       initialize();
     </script>

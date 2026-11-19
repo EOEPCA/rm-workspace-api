@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import {computed, ref} from 'vue'
 import type {Bucket, BucketUI, WorkspaceEditUI} from 'src/models/models'
-import {useLuigiWorkspace} from 'src/composables/useLuigi'
+import {useLuigiContext} from 'src/composables/useLuigi'
 import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
 import BucketRequestsTab from 'src/components/BucketRequestsTab.vue'
@@ -138,7 +138,7 @@ const displayMessage = computed(() =>
 )
 
 const managementLoading = ref(false)
-const {loading: contextLoading} = useLuigiWorkspace({
+const {loading: contextLoading} = useLuigiContext({
   onReady: async (ctx) => {
     managementLoading.value = true
     try {

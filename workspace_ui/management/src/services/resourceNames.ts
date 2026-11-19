@@ -3,3 +3,9 @@ export function resourceNameError(value: string): string {
     ? ''
     : 'Use 1-30 lowercase letters, digits, or hyphens; start and end with a letter or digit.'
 }
+
+export function workspaceNameError(value: string, prefix: string): string {
+  if (!value) return prefix ? 'Enter a workspace name after the prefix.' : 'Enter a workspace name.'
+  if ((prefix + value).length > 30) return 'Use up to 30 characters, including the prefix.'
+  return resourceNameError(value) || resourceNameError(prefix + value)
+}

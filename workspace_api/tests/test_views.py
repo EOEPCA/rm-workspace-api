@@ -134,7 +134,12 @@ def test_list_workspaces_returns_names_from_both_providers(client: TestClient, m
     ]
 
 
-def test_list_workspaces_returns_html_for_browser(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def _overview_data(document: str) -> dict:
+    encoded = document.split("const overviewData = '", 1)[1].split("';", 1)[0]
+    return json.loads(base64.b64decode(encoded))
+
+
+def test_list_workspaces_returns_html_for_browser(client: TestClient, monkeypatch: pytest.MonkeyPatch, ui_templates) -> None:
     storage_api = mock.MagicMock()
     storage_api.get.return_value = _storage_list("ws-alice")
     datalab_api = mock.MagicMock()
@@ -159,10 +164,15 @@ def test_list_workspaces_returns_html_for_browser(client: TestClient, monkeypatc
 
     assert response.status_code == HTTPStatus.OK
     assert response.headers["content-type"].startswith("text/html")
-    assert "<h1>Workspaces</h1>" in response.text
-    assert "href='http://testserver/workspaces/ws-alice?resolve_connections=*&amp;resolve_oauth2=*'" in response.text
-    assert "href='https://published.example.org/workspace'" in response.text
-    assert "analysis" not in response.text
+    assert response.headers["cache-control"] == "no-store"
+    overview = _overview_data(response.text)
+    assert overview["workspaces"] == [
+        {
+            "name": "ws-alice",
+            "url": "http://testserver/workspaces/ws-alice",
+            "sessions": [{"name": "default", "url": "https://published.example.org/workspace"}],
+        }
+    ]
 
 
 def test_list_workspaces_ws_api_role_lists_workspace_without_sessions(
