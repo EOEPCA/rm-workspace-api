@@ -28,7 +28,7 @@ and end with a letter or digit. Bucket names also require at least three charact
 With `UI_MODE=ui`, `/workspaces` opens the Quasar overview in the workspace
 shell. Workspace API administrators can create and delete workspaces there.
 For each installed provider, first select a composition. Then select an optional
-configuration override, or keep **Use composition defaults**.
+configuration, or keep the default shown with the composition's name.
 The name field shows the configured prefix as fixed text. Enter the name
 after the prefix. A single available choice is read-only.
 

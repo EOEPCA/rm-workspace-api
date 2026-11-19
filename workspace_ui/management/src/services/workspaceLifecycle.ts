@@ -4,13 +4,13 @@ import type { WorkspaceCreate, WorkspaceOverview, WorkspaceProviderChoices } fro
 export async function loadWorkspaceProviders(overview: WorkspaceOverview): Promise<WorkspaceProviderChoices[]> {
   const providers = await Promise.all((['storage', 'datalab'] as const).map(async provider => {
     const { data } = await axios.get<{ available: boolean; compositions: string[] }>(overview.compositions_url, {
-      params: { provider }, headers: { Accept: 'application/json' },
+      params: { provider }, headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
     })
     if (!data.available) return null
     if (!data.compositions.length) throw new Error(`No ${provider} compositions are available.`)
     const environments = await Promise.all(data.compositions.map(async composition => {
       const response = await axios.get<string[]>(overview.environments_url, {
-        params: { provider, composition }, headers: { Accept: 'application/json' },
+        params: { provider, composition }, headers: { Accept: 'application/json', 'Cache-Control': 'no-cache' },
       })
       return [composition, response.data.filter(name => name !== composition)] as const
     }))

@@ -311,6 +311,12 @@ def _composition_matches(composition: dict[str, Any], provider: WorkspaceProvide
     return target == {"apiVersion": api_version, "kind": kind}
 
 
+def _environment_matches(environment: Any, provider: WorkspaceProvider) -> bool:
+    data = environment.to_dict() if hasattr(environment, "to_dict") else environment
+    labels = (data.get("metadata") or {}).get("labels") or {}
+    return PROVIDER_ENVIRONMENT_LABELS[provider] in labels
+
+
 def _provider_composition(name: str, provider: WorkspaceProvider) -> dict[str, Any]:
     composition = _configuration_get(_configuration_api(API_COMPOSITION, KIND_COMPOSITION), name, KIND_COMPOSITION)
     if not _composition_matches(composition, provider):
@@ -332,8 +338,7 @@ def _resolve_provider_selection(
         environment = _configuration_get(
             _configuration_api(API_ENVIRONMENT, KIND_ENVIRONMENT), selection.environment_name, KIND_ENVIRONMENT
         )
-        labels = (environment.get("metadata") or {}).get("labels") or {}
-        if PROVIDER_ENVIRONMENT_LABELS[provider] not in labels:
+        if not _environment_matches(environment, provider):
             raise HTTPException(
                 status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
                 detail=f"EnvironmentConfig is not labeled for {provider}",
@@ -364,8 +369,9 @@ def _provider_create_body(
     tags=["Workspaces"],
     summary="List provider compositions",
 )
-async def list_compositions(request: Request, provider: WorkspaceProvider) -> WorkspaceProviderOptions:
+async def list_compositions(request: Request, response: Response, provider: WorkspaceProvider) -> WorkspaceProviderOptions:
     _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
     if _res_optional(*PROVIDER_RESOURCES[provider]) is None:
         return WorkspaceProviderOptions(available=False)
     resources = _configuration_list(API_COMPOSITION, KIND_COMPOSITION)
@@ -382,13 +388,16 @@ async def list_compositions(request: Request, provider: WorkspaceProvider) -> Wo
     tags=["Workspaces"],
     summary="List configuration overrides for a provider composition",
 )
-async def list_environments(request: Request, provider: WorkspaceProvider, composition: str) -> list[str]:
+async def list_environments(request: Request, response: Response, provider: WorkspaceProvider, composition: str) -> list[str]:
     _require_admin(request)
+    response.headers["Cache-Control"] = "no-store"
     if _res_optional(*PROVIDER_RESOURCES[provider]) is None:
         return []
     _provider_composition(composition, provider)
     resources = _configuration_list(API_ENVIRONMENT, KIND_ENVIRONMENT, label_selector=PROVIDER_ENVIRONMENT_LABELS[provider])
-    return sorted(name for item in resources if (name := _resource_name(item)) and name != composition)
+    return sorted(
+        name for item in resources if _environment_matches(item, provider) and (name := _resource_name(item)) and name != composition
+    )
 
 
 def _resource_name(obj: Any) -> str | None:

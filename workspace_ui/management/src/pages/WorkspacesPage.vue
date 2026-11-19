@@ -73,14 +73,11 @@
                             :options="provider.compositions" :disable="busy"
                             @update:model-value="provider.environment_name = ''" />
                   <q-input v-else :model-value="provider.composition" label="Composition" outlined readonly
-                           bg-color="grey-2" hint="Only option" />
+                           bg-color="grey-2" />
                   <q-select v-if="overrideNames(provider).length"
-                            v-model="provider.environment_name" label="Configuration override" outlined
+                            v-model="provider.environment_name" label="Configuration" outlined
                             :options="overrideOptions(provider)" emit-value map-options :disable="busy" />
-                  <q-input v-else
-                           :model-value="provider.composition ? 'Use composition defaults' : 'Select a composition first'"
-                           label="Configuration override" outlined readonly bg-color="grey-2"
-                           :hint="provider.composition ? 'No overrides available' : ''" />
+                  <q-input v-else :model-value="provider.composition" label="Configuration" outlined readonly bg-color="grey-2" />
                 </q-card-section>
               </q-card>
               <q-banner v-if="createError" class="bg-red-1 text-negative" rounded role="alert">{{ createError }}</q-banner>
@@ -147,7 +144,7 @@ const canCreate = computed(() => overview.value?.is_admin && !busy.value && !nam
 function requiredOwner(value: string) { return !!value.trim() || 'Enter an owner username.' }
 function overrideNames(provider: WorkspaceProviderChoices) { return provider.environments[provider.composition] ?? [] }
 function overrideOptions(provider: WorkspaceProviderChoices) {
-  return [{ label: 'Use composition defaults', value: '' }, ...overrideNames(provider).map(value => ({ label: value, value }))]
+  return [{ label: provider.composition, value: '' }, ...overrideNames(provider).map(value => ({ label: value, value }))]
 }
 
 async function openCreate() {

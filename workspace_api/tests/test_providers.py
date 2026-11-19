@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from kubernetes.client.rest import ApiException
 from kubernetes.dynamic.exceptions import ResourceNotFoundError
+from kubernetes.dynamic.resource import ResourceInstance
 
 from workspace_api import config, views
 from workspace_api.models import StoreType
@@ -23,7 +24,7 @@ def _environment_resources() -> SimpleNamespace:
         for name, labels in (
             ("storage-minio", {"storages.pkg.internal/name": "minio"}),
             ("storage-project", {"storages.pkg.internal/name": ""}),
-            ("datalab-educates", {"datalabs.pkg.internal/name": "educates"}),
+            ("datalab-educates", {"datalabs.pkg.internal/name": "datalab-educates"}),
             ("datalab-project", {"datalabs.pkg.internal/name": ""}),
             ("shared-project", {"storages.pkg.internal/name": "", "datalabs.pkg.internal/name": ""}),
             ("unlabeled", {}),
@@ -264,10 +265,14 @@ def test_selection_errors_create_no_workspace_resources(client: TestClient, prov
 def test_override_choices_use_each_provider_label_and_exclude_composition_defaults(
     client: TestClient, providers, provider: str, composition: str, expected: list[str]
 ) -> None:
-    providers("missing", "missing")
+    setup = providers("missing", "missing")
+    setup.environment_api.get.side_effect = lambda **_: SimpleNamespace(
+        items=[ResourceInstance(None, {"kind": views.KIND_ENVIRONMENT, **item}) for item in setup.environments.values()]
+    )
     response = client.get("/environments", params={"provider": provider, "composition": composition}, headers=headers())
     assert response.status_code == 200
     assert response.json() == expected
+    assert response.headers["cache-control"] == "no-store"
     assert "private-test-value" not in response.text
 
 
@@ -297,6 +302,7 @@ def test_composition_discovery_uses_provider_resource_type(client: TestClient, p
         response = client.get("/compositions", params={"provider": provider}, headers=headers())
         assert response.status_code == 200
         assert response.json() == {"available": True, "compositions": expected}
+        assert response.headers["cache-control"] == "no-store"
 
 
 def test_environment_listing_reports_missing_cluster_permissions(client: TestClient, providers) -> None:
