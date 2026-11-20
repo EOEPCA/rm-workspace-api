@@ -1821,9 +1821,9 @@ async def get_workspace(
         endpoints_data = _to_b64_json(endpoints)
 
         return templates.TemplateResponse(
-            "ui.html",
-            {
-                "request": request,
+            request=request,
+            name="ui.html",
+            context={
                 "base_path": request.url.path,
                 "workspace_data": workspace_data,
                 "overview_data": "",

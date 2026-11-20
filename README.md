@@ -60,8 +60,34 @@ for buckets and [Provider Datalab](https://github.com/versioneer-tech/provider-d
 for members, data services, sessions, and virtual clusters on the API's cluster.
 Either provider can be used alone. The UI shows the available features.
 
-For installation, authentication, configuration, and local development, see
-[Setup and development](docs/setup.md).
+For installation, authentication, and configuration, see [Setup](docs/setup.md).
+
+## Development
+
+Use the Python and uv versions in the [Dockerfile](Dockerfile), plus Docker and
+rsync. Run from the repo root:
+
+```bash
+uv sync --locked --extra dev --extra prod
+uv run --no-sync pre-commit install
+workspace_ui/build_dist.sh
+UI_MODE=ui KUBECONFIG=/path/to/config uv run --no-sync uvicorn workspace_api:app --reload --port 8181
+```
+
+Add `--no-cache` to the UI build command to rebuild without Docker's build cache.
+Run checks with:
+
+```bash
+uv run --no-sync pre-commit run --all-files
+docker build --pull --target api-test .
+docker build --pull --target ui-test .
+```
+
+GitHub CI runs pytest and Node.js tests, ESLint, Ruff, mypy, markdownlint, Hadolint,
+Gitleaks, Trivy vulnerability scans and SBOM generation, and pre-commit file checks
+on PRs, pushes to `main`, release tags, and daily. Local Git hooks also use Commitizen.
+Dependabot opens update PRs daily for Docker images and weekly for Python, npm,
+and GitHub Actions.
 
 ## License
 

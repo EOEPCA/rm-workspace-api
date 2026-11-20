@@ -1,50 +1,344 @@
-name: main
+name: Container security
 
 on:
+  pull_request:
   push:
+    branches: [main]
     tags:
-      - "[0-9]+\\.[0-9]+\\.[0-9]+" # 1.2.3
-      - "[0-9]+\\.[0-9]+\\.[0-9]+-alpha\\.[0-9]+" # 1.2.3-alpha.1
-      - "[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[0-9]+" # 1.2.3-beta.1
-      - "[0-9]+\\.[0-9]+\\.[0-9]+-rc\\.[0-9]+" # 1.2.3-rc.1
+      - "[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      image_ref:
+        description: "Published image to scan; defaults to the latest stable release"
+        required: false
+        type: string
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
-  build-and-push:
+  tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read check tool versions from the Dockerfile
+        id: toolchain
+        run: |
+          python_version="$(sed -nE 's/^FROM python:([0-9]+\.[0-9]+\.[0-9]+)-[^ ]+ AS api-base$/\1/p' Dockerfile)"
+          uv_version="$(sed -nE 's|^COPY --from=ghcr.io/astral-sh/uv:([^@]+)@.*|\1|p' Dockerfile)"
+          [[ "$python_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$uv_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "python=$python_version" >> "$GITHUB_OUTPUT"
+          echo "uv=$uv_version" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ steps.toolchain.outputs.uv }}
+          python-version: ${{ steps.toolchain.outputs.python }}
+
+      - name: Cache file check tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.python }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      - name: Check repository files
+        env:
+          KUBECONFIG: ${{ runner.temp }}/no-cluster-config
+          PRE_COMMIT_HOME: ${{ runner.temp }}/pre-commit
+        run: |
+          uv sync --locked --extra dev --extra prod
+          uv run --no-sync pre-commit run --all-files
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Test the backend with the build toolchain
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: api-test
+          pull: true
+          no-cache-filters: api-test
+          cache-from: type=gha,scope=api-tests
+          cache-to: type=gha,mode=max,scope=api-tests
+
+      - name: Test the frontend with the build toolchain
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: ui-test
+          pull: true
+          no-cache-filters: ui-test
+          cache-from: type=gha,scope=ui-tests
+          cache-to: type=gha,mode=max,scope=ui-tests
+
+  build-and-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      image_id: ${{ steps.image.outputs.id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - id: meta
-        shell: bash
+      - name: Set the package version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REVISION: ${{ github.sha }}
         run: |
-          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          REPO="$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')"
-          IMAGE="ghcr.io/${OWNER}/${REPO}"
-          RAW_TAG="${GITHUB_REF_NAME}"
-          V_TAG="v${RAW_TAG#v}"
-          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
-          echo "tag=${V_TAG}" >> "$GITHUB_OUTPUT"
+          if [[ "$REF_TYPE" == tag ]]; then
+            version="$REF_NAME"
+          else
+            version="0.0.0.dev0+${REVISION:0:12}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/login-action@v3
+      - name: Build the candidate image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          pull: true
+          no-cache-filters: runtime-base
+          cache-from: type=gha,scope=runtime
+          cache-to: type=gha,mode=max,scope=runtime
+          tags: test-workspace-api:ci
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Scan all installed packages
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: test-workspace-api:ci
+          scanners: vuln
+          format: json
+          output: image-scan.json
+          list-all-pkgs: true
+          exit-code: "0"
+          ignore-unfixed: false
+          timeout: 10m
+
+      - name: Write the software bill of materials
+        run: trivy convert --format cyclonedx --output image-sbom.json image-scan.json
+
+      - name: Collect dependency lockfiles
+        run: |
+          mkdir -p "$RUNNER_TEMP/dependency-inputs/frontend"
+          cp workspace_ui/management/package.json workspace_ui/management/package-lock.json "$RUNNER_TEMP/dependency-inputs/frontend/"
+          mkdir -p "$RUNNER_TEMP/build-inputs/python"
+          cp pyproject.toml uv.lock "$RUNNER_TEMP/build-inputs/python/"
+          cp -r "$RUNNER_TEMP/dependency-inputs/frontend" "$RUNNER_TEMP/build-inputs/"
+
+      - name: Scan frontend production dependencies
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ runner.temp }}/dependency-inputs
+          scanners: vuln
+          format: json
+          output: dependency-scan.json
+          list-all-pkgs: true
+          exit-code: "0"
+          ignore-unfixed: false
+          skip-setup-trivy: true
+          timeout: 10m
+
+      - name: Write the dependency package inventory
+        run: trivy convert --format cyclonedx --output dependency-sbom.json dependency-scan.json
+
+      - name: Report build tool vulnerabilities
+        run: |
+          trivy fs --scanners vuln --include-dev-deps --format json --output build-tool-scan.json "$RUNNER_TEMP/build-inputs"
+          trivy convert --scanners vuln --format table --severity HIGH,CRITICAL build-tool-scan.json
+
+      - name: Keep the scan and package inventory
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-image-reports
+          path: |
+            image-scan.json
+            image-sbom.json
+            dependency-scan.json
+            dependency-sbom.json
+            build-tool-scan.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Reject critical vulnerabilities and unsupported OS releases
+        run: |
+          trivy convert --scanners vuln --format table --severity CRITICAL --exit-code 1 --exit-on-eol 1 image-scan.json
+          trivy convert --scanners vuln --format table --severity CRITICAL --exit-code 1 dependency-scan.json
+
+      - name: Reject high vulnerabilities with available fixes
+        run: |
+          trivy image --image-src docker --scanners vuln --severity HIGH --ignore-unfixed --exit-code 1 test-workspace-api:ci
+          trivy fs --scanners vuln --severity HIGH --ignore-unfixed --exit-code 1 "$RUNNER_TEMP/dependency-inputs"
+
+      - name: Export the checked release image
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        id: image
+        run: |
+          echo "id=$(docker image inspect --format '{{.Id}}' test-workspace-api:ci)" >> "$GITHUB_OUTPUT"
+          docker save --output "$RUNNER_TEMP/workspace-api.tar" test-workspace-api:ci
+
+      - name: Keep the checked release image
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checked-release-image
+          path: ${{ runner.temp }}/workspace-api.tar
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [tests, build-and-scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: checked-release-image
+          path: ${{ runner.temp }}
+
+      - name: Load and verify the checked image
+        env:
+          EXPECTED_IMAGE_ID: ${{ needs.build-and-scan.outputs.image_id }}
+        run: |
+          docker load --input "$RUNNER_TEMP/workspace-api.tar"
+          test "$(docker image inspect --format '{{.Id}}' test-workspace-api:ci)" = "$EXPECTED_IMAGE_ID"
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@v5
+      - name: Publish the checked image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          image="ghcr.io/${REPOSITORY,,}:v${RELEASE_TAG}"
+          docker tag test-workspace-api:ci "$image"
+          docker push "$image"
+
+  scan-published-image:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-          labels: |
-            org.opencontainers.image.source=${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.meta.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select the published image
+        id: release
+        env:
+          REQUESTED_IMAGE: ${{ inputs.image_ref }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="$REQUESTED_IMAGE"
+          repository="ghcr.io/${REPOSITORY,,}"
+          if [ -z "$image" ]; then
+            tag="$(git tag --list --sort=-version:refname | sed -nE '/^[0-9]+\.[0-9]+\.[0-9]+$/ { p; q; }')"
+            test -n "$tag"
+            image="${repository}:v${tag}"
+          fi
+          case "$image" in
+            "$repository":*)
+              reference="${image#"$repository":}"
+              [[ "$reference" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}$ ]]
+              ;;
+            "$repository"@sha256:*)
+              digest="${image#"$repository"@sha256:}"
+              [[ "$digest" =~ ^[a-f0-9]{64}$ ]]
+              ;;
+            *) exit 1 ;;
+          esac
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Scan the published image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.release.outputs.image }}
+          scanners: vuln
+          format: json
+          output: published-image-scan.json
+          list-all-pkgs: true
+          exit-code: "0"
+          ignore-unfixed: false
+          timeout: 10m
+
+      - name: Read the shipped frontend inventory
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          docker pull --quiet "$RELEASE_IMAGE"
+          container="$(docker create "$RELEASE_IMAGE")"
+          trap 'docker rm "$container" > /dev/null' EXIT
+          mkdir -p "$RUNNER_TEMP/published-frontend"
+          if ! docker cp "$container:/usr/share/workspace-api/frontend/." "$RUNNER_TEMP/published-frontend/"; then
+            revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$RELEASE_IMAGE")"
+            [[ "$revision" =~ ^[a-f0-9]{40}$ ]]
+            git show "${revision}:workspace_ui/management/package.json" > "$RUNNER_TEMP/published-frontend/package.json"
+            git show "${revision}:workspace_ui/management/package-lock.json" > "$RUNNER_TEMP/published-frontend/package-lock.json"
+          fi
+
+      - name: Scan the shipped frontend dependencies
+        run: |
+          trivy fs --scanners vuln --format json --output published-frontend-scan.json "$RUNNER_TEMP/published-frontend"
+
+      - name: Keep the published image report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-image-report
+          path: |
+            published-image-scan.json
+            published-frontend-scan.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Reject critical vulnerabilities and unsupported OS releases
+        run: |
+          trivy convert --scanners vuln --format table --severity CRITICAL --exit-code 1 --exit-on-eol 1 published-image-scan.json
+          trivy convert --scanners vuln --format table --severity CRITICAL --exit-code 1 published-frontend-scan.json
+
+      - name: Reject high vulnerabilities with available fixes
+        env:
+          RELEASE_IMAGE: ${{ steps.release.outputs.image }}
+        run: |
+          trivy image --image-src docker --scanners vuln --severity HIGH --ignore-unfixed --exit-code 1 "$RELEASE_IMAGE"
+          trivy fs --scanners vuln --severity HIGH --ignore-unfixed --exit-code 1 "$RUNNER_TEMP/published-frontend"

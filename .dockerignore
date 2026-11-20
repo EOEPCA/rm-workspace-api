@@ -1,15 +1,22 @@
 # Python
-__pycache__/
-.mypy_cache/
-.pytest_cache/
-.ruff_cache/
-.venv/
+**/__pycache__/
+**/.mypy_cache/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.venv/
+**/.git/
+**/.codex/
+**/.idea/
+**/.vscode/
+**/.env
+**/.env.*
+**/.npmrc
 
 # Node / Quasar
-node_modules/
-.quasar/
-dist/
-!dist/.gitkeep
+**/node_modules/
+**/.quasar/
+**/dist/
+**/.tmp-dist.*/
 quasar.config.*.temporary.compiled*
 
 # OS junk files

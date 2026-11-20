@@ -1,4 +1,4 @@
-# Setup and development
+# Setup
 
 ## Workspaces and providers
 
@@ -103,56 +103,6 @@ The API also needs cluster-scoped `get` and `list` access to
 selection. Workspace roles such as `<workspace>:ws_admin` cannot create or
 delete whole workspaces.
 
-## Development
-
-Use Python 3.12, `uv`, and `npm`. Run backend commands from the repo root.
-
-```bash
-uv sync --extra dev
-uv run pre-commit install
-KUBECONFIG=/path/to/config uv run uvicorn workspace_api:app --reload --port=8181
-```
-
-For UI development, run `npm ci`, then `npm run dev`, in
-`workspace_ui/management`. Start the backend with `UI_MODE=ui` and
-`FRONTEND_URL=http://localhost:9000`. Open
-`http://localhost:8181/workspaces/<workspace-name>`.
-
-For a sample UI without a backend, run `npm run shell+dev` in
-`workspace_ui/management` and open `http://localhost:8181`. Changes need a
-backend; the sample data is in `workspace_ui/luigi-shell/standalone/config/app-config.js`.
-
-To serve built assets, run `workspace_ui/build_dist.sh`, then start the backend
-with `UI_MODE=ui`. The build keeps the previous bundle until the new one is
-ready. Rebuild after UI changes. Startup fails if the required UI files are
-missing.
-
-UI entry pages and files without a content hash revalidate on each request.
-Assets with a content hash can stay cached for one year. Missing files are not
-cached.
-
-Run the backend checks from the repo root:
-
-```bash
-uv run pytest workspace_api/tests
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy .
-uv run pre-commit run --all-files
-git diff --check
-```
-
-Run the frontend checks in `workspace_ui/management`:
-
-```bash
-npm test
-npm run lint
-npm run build
-```
-
-Backend tests mock Kubernetes. Use an isolated test cluster to check a live
-provider installation.
-
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -176,8 +126,44 @@ provider installation.
 The image includes the backend and built UI:
 
 ```bash
-docker build . -t workspace-api
+docker buildx build --pull --no-cache-filter runtime-base --load -t workspace-api .
 ```
 
 Run it with a mounted kubeconfig or a Kubernetes ServiceAccount. Set
 `UI_MODE=ui` to serve the UI, and expose port 8181.
+
+Pass the release tag with `--build-arg VERSION=<tag>` to set the installed Python
+package version and image label. Without this argument, the version is
+`0.0.0+local`. CI uses the release tag, or a development version with the commit
+ID for other builds.
+
+Dependency installation has separate cache layers from application source.
+CI uses these layers and reruns the test stages. It also bypasses the
+`runtime-base` cache so OS package updates run for each candidate image.
+
+### Container security checks
+
+The runtime uses a slim base image. Build tools stay in the builder stages.
+Python packages come from `uv.lock`; frontend packages come from
+`workspace_ui/management/package-lock.json`. Keep these files in each dependency
+update. The build fails if the Python lockfile does not match `pyproject.toml`.
+
+Dependabot opens update PRs for base images, Python and frontend packages, and
+GitHub Actions. Base images use a version and digest. Review and merge digest
+updates to receive new base image packages. Keep the Python builder and runtime
+on the same Python version and Debian release.
+
+The **Container security** workflow runs tests, builds the image, and scans the
+image and frontend production dependencies. It blocks all critical findings,
+high findings with an available fix, and an unsupported runtime OS. Frontend
+build tool findings are reported separately and do not block publication.
+Other findings stay in the JSON reports. Each run keeps scan reports and
+CycloneDX package inventories as workflow artifacts. Make `tests` and
+`build-and-scan` required PR checks in the repository rules.
+
+Release tags publish the same image that passed the checks. A daily run also
+scans the image and shipped frontend inventory for the latest stable release
+tag. To check another deployed image, run the workflow manually with its GHCR
+tag or digest in `image_ref`.
+Check failed scheduled runs and review findings that have no fix. An image
+update needs a new release and deployment; a scan does not update running pods.
