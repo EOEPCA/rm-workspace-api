@@ -51,7 +51,7 @@ Bug-Tracker = "https://github.com/EOEPCA/rm-workspace-api/issues"
 
 [project.optional-dependencies]
 dev = [
-  "mypy>=1.17,<2",
+  "mypy>=1.17,<3",
   "ruff>=0.12,<0.13",
   "pre-commit>=4.3,<5",
   "types-Markdown>=3.8.0.20250,<3.9",
