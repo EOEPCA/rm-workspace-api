@@ -531,7 +531,7 @@ function addBucket() {
       requests: 0,
       grants: 0,
       isNew: true
-    } as BucketUI)
+    })
     newBucketsCount.value++
   }
 

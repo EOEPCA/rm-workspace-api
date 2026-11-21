@@ -1,5 +1,5 @@
 import { onMounted, onUnmounted, ref } from 'vue'
-import LuigiClient from '@luigi-project/client'
+import * as LuigiClient from '@luigi-project/client'
 import type { Workspace, WorkspaceOverview } from 'src/models/models'
 
 type InitContext = { workspace: Workspace | undefined; workspaceOverview: WorkspaceOverview | undefined }

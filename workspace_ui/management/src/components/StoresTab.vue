@@ -280,8 +280,7 @@ function clearNameError(rowId: RowId) {
 }
 
 function clearAllNameErrors() {
-  for (const k of Object.keys(rowErrors)) {
-    const id = k as unknown as RowId
+  for (const id of Object.keys(rowErrors)) {
     clearNameError(id)
   }
 }

@@ -11,25 +11,25 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 
-class MembershipRole(str, enum.Enum):
+class MembershipRole(enum.StrEnum):
     OWNER = "owner"
     ADMIN = "admin"
     USER = "user"
 
 
-class BucketPermission(str, enum.Enum):
+class BucketPermission(enum.StrEnum):
     READ_WRITE = "ReadWrite"
     READ_ONLY = "ReadOnly"
     WRITE_ONLY = "WriteOnly"
     NONE = "None"
 
 
-class BucketLifecycleRuleMode(str, enum.Enum):
+class BucketLifecycleRuleMode(enum.StrEnum):
     NOTIFY = "Notify"
     DELETE = "Delete"
 
 
-class UserPermission(str, enum.Enum):
+class UserPermission(enum.StrEnum):
     VIEW_CONNECTION_CREDENTIALS = "VIEW_CONNECTION_CREDENTIALS"
     VIEW_OAUTH2_CREDENTIALS = "VIEW_OAUTH2_CREDENTIALS"
     VIEW_MEMBERS = "VIEW_MEMBERS"
@@ -45,13 +45,13 @@ class UserPermission(str, enum.Enum):
     MANAGE_VCLUSTERS = "MANAGE_VCLUSTERS"
 
 
-class StoreType(str, enum.Enum):
+class StoreType(enum.StrEnum):
     DATABASE = "database"
     CACHE = "cache"
     DOCUMENT = "document"
 
 
-class SessionState(str, enum.Enum):
+class SessionState(enum.StrEnum):
     STARTED = "started"
     STOPPED = "stopped"
 
@@ -114,7 +114,7 @@ class UserContext(BaseModel):
         return v2
 
 
-class WorkspaceStatus(str, enum.Enum):
+class WorkspaceStatus(enum.StrEnum):
     PROVISIONING = "provisioning"
     READY = "ready"
     UNKNOWN = "unknown"

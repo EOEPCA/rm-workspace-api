@@ -27,7 +27,7 @@ repos:
         always_run: true
 
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v3.16.0
+    rev: v4.19.4
     hooks:
       - id: commitizen
       - id: commitizen-branch
@@ -36,7 +36,8 @@ repos:
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.39.0
     hooks:
-      - id: markdownlint
+      - id: markdownlint-docker
+        entry: ghcr.io/igorshubovych/markdownlint-cli:v0.39.0@sha256:d994ac260316939ec7e2fb63b07ff6266754aa9ab64976d1e63948fb89f81772
         args: [--disable, MD013, MD024, --]
 
   - repo: https://github.com/hadolint/hadolint

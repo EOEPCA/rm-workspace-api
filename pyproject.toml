@@ -51,8 +51,8 @@ Bug-Tracker = "https://github.com/EOEPCA/rm-workspace-api/issues"
 
 [project.optional-dependencies]
 dev = [
-  "mypy>=1.17,<3",
-  "ruff>=0.12,<0.13",
+  "mypy>=2.4.1,<3",
+  "ruff>=0.17.5,<0.18",
   "pre-commit>=4.3,<5",
   "types-Markdown>=3.8.0.20250,<3.9",
   "types-PyYAML>=6.0.12.20250822,<7",
@@ -89,7 +89,7 @@ show_error_codes = true
 pretty = true
 
 [tool.ruff]
-required-version = ">=0.12.0,<0.13"
+required-version = ">=0.17.5,<0.18"
 target-version = "py312"
 line-length = 140
 
