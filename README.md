@@ -1,4 +1,10 @@
-# Workspace API
+<!-- markdownlint-disable-next-line MD033 -->
+# <img src="images/versioneer-logo.png" height="48" alt="Versioneer logo" /> Workspace API & UI
+
+[![CI & Trivy](https://img.shields.io/github/actions/workflow/status/EOEPCA/rm-workspace-api/tag.yaml?branch=main&event=push&label=CI%20%26%20Trivy)](https://github.com/EOEPCA/rm-workspace-api/actions/workflows/tag.yaml?query=branch%3Amain+event%3Apush)
+[![Image version](https://img.shields.io/github/v/tag/EOEPCA/rm-workspace-api?sort=semver&label=image)](https://github.com/EOEPCA/rm-workspace-api/pkgs/container/rm-workspace-api)
+[![Dependabot configured](https://img.shields.io/badge/Dependabot-configured-0366d6?logo=dependabot)](.github/dependabot.yml)
+[![License](https://img.shields.io/github/license/EOEPCA/rm-workspace-api)](LICENSE)
 
 Share S3 data, manage databases, open browser sessions, and give automated tasks
 access to workspace services. Workspace API provides a web UI for your team
