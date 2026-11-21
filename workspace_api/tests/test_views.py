@@ -721,7 +721,7 @@ def test_workspace_exchange_stops_when_signing_keys_are_unavailable(
     client: TestClient, workspace_exchange: SimpleNamespace, requests_mock, failure: str
 ) -> None:
     exchange = workspace_exchange
-    responses = {
+    responses: dict[str, dict[str, object]] = {
         "redirect": {"status_code": 302, "headers": {"Location": "https://other.example.org/certs"}},
         "unavailable": {"status_code": 503},
         "invalid_json": {"text": "not JSON"},

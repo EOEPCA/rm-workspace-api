@@ -89,7 +89,7 @@
 
 <script setup lang="ts">
 import {computed, ref} from 'vue'
-import type {Bucket, BucketUI, WorkspaceEditUI} from 'src/models/models'
+import type {Bucket, WorkspaceEditUI} from 'src/models/models'
 import {useLuigiContext} from 'src/composables/useLuigi'
 import MembersTab from 'src/components/MembersTab.vue'
 import BucketsTab from 'src/components/BucketsTab.vue'
@@ -157,7 +157,7 @@ const {loading: contextLoading} = useLuigiContext({
                 lifecycle_rules: (b.lifecycle_rules ?? []).map(rule => ({...rule, id: crypto.randomUUID()})),
                 requests: 0,
                 grants: 0
-              } as BucketUI)),
+              })),
             linked_buckets: ws.storage?.bucket_access_requests ?? [],
             storage_available: ws.storage?.available ?? false,
             datalab_available: ws.datalab?.available ?? false,
