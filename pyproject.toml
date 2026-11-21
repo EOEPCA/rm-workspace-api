@@ -64,7 +64,7 @@ dev = [
   "requests-mock>=1.12.1,<2"
 ]
 prod = [
-  "gunicorn>=22.0.0,<23"
+  "gunicorn>=22.0.0,<28"
 ]
 
 [tool.hatch.build.targets.wheel]
